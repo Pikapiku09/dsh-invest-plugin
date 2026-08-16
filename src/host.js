@@ -12,6 +12,7 @@ return {
     const CACHE_DIR = 'E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/cache'
     const TRADE_CACHE = CACHE_DIR + '/last-trade-date.json'
     const REPORTS_DIR = 'E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/reports'
+    const MAX_CHARTS = 6
     const z2 = (n) => (n < 10 ? '0' : '') + n
     const localYmd = () => { const d = new Date(); return '' + d.getFullYear() + z2(d.getMonth() + 1) + z2(d.getDate()) }
 
@@ -86,14 +87,14 @@ return {
 
     const tool = harness.defineTool({
       name: 'invest_run',
-      description: '运行多角色投研流水线。mode 取值：选股/消息/深度分析/总判断/all。question 为用户投研问题；context 可选，传入上一轮分析结论或追问背景（记忆与追问）。数据用 Tushare 实时获取。',
-      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' } }, required: ['mode', 'question'] },
+      description: '运行多角色投研流水线。mode 取值：选股/消息/深度分析/总判断/all。question 为用户投研问题（可含多只股票）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）。数据用 Tushare 实时获取。',
+      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' } }, required: ['mode', 'question'] },
       output: {
         schema: { type: 'object', additionalProperties: true },
         render: (args, value) => {
           const lines = []
           const outputs = Array.isArray(value.outputs) ? value.outputs : []
-          const charts = Array.isArray(value.charts) ? value.charts : []
+          const charts = Array.isArray(value.charts) ? value.charts.slice(0, MAX_CHARTS) : []
           const reports = Array.isArray(value.reports) ? value.reports : []
           lines.push('invest_run 模式=' + String(value.mode || '') + ' ｜ 阶段数=' + outputs.length + (charts.length ? ' ｜ 图表=' + charts.length + ' 张' : '') + (reports.length ? ' ｜ 报告已归档' : ''))
           for (const o of outputs) {
@@ -118,7 +119,7 @@ return {
         },
         presentationMeta: (args, value) => ({
           mode: String(value.mode || ''),
-          charts: (Array.isArray(value.charts) ? value.charts : []).map((p) => ({ path: String(p) })),
+          charts: (Array.isArray(value.charts) ? value.charts.slice(0, MAX_CHARTS) : []).map((p) => ({ path: String(p) })),
           stages: (Array.isArray(value.outputs) ? value.outputs : []).map((o) => ({ stage: o.stage, ok: o.ok === true, elapsedMs: o.elapsedMs })),
         }),
       },

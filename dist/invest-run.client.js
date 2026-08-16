@@ -1,8 +1,8 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.client 函数体
-// 生成时间：2026-08-16T11:51:55.610Z
+// 生成时间：2026-08-16T12:05:15.252Z
 
-// DSH 动态插件 Client 半部（invest_run 专属工具卡片：阶段进度 + SVG 图表内联渲染）
+// DSH 动态插件 Client 半部（invest_run 专属工具卡片：进度 + SVG 图表内联渲染 + Markdown 表格渲染 + 图表点击放大）
 // 由 tools/build.js 复制为 dist/invest-run.client.js
 // 依赖：ctx（Cordis）、React、host、styles、timer（Client 内建/服务）
 
@@ -22,16 +22,57 @@ return {
       '.invr-badge.ok{color:var(--dsw-alias-state-success-primary, #2f9e44)}',
       '.invr-badge.fail{color:var(--dsw-alias-state-error-primary, #e03131)}',
       '.invr-charts{display:flex;flex-direction:column;gap:8px;margin-top:8px}',
-      '.invr-chart{width:100%;border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3));border-radius:8px;background:#ffffff}',
+      '.invr-chart{width:100%;border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3));border-radius:8px;background:#ffffff;cursor:zoom-in}',
       '.invr-charterr{color:var(--dsw-alias-state-error-primary, #e03131);font-size:12px}',
-      '.invr-body{white-space:pre-wrap;max-height:340px;overflow:auto;margin-top:8px;padding:8px;border-radius:8px;background:var(--dsw-alias-bg-base, transparent);border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.2));font-family:inherit}',
+      '.invr-zoom{position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:9999;padding:24px;cursor:zoom-out}',
+      '.invr-zoomimg{max-width:94vw;max-height:90vh;background:#ffffff;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,.4)}',
+      '.invr-table{border-collapse:collapse;width:100%;margin:6px 0;font-size:12px}',
+      '.invr-table th,.invr-table td{border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25));padding:3px 8px;text-align:left}',
+      '.invr-table th{background:var(--dsw-alias-bg-hover, rgba(128,128,128,.12));font-weight:600}',
+      '.invr-text{white-space:pre-wrap;margin:6px 0}',
     ].join('\n')))
     const fmt = (ms) => (ms === undefined || ms === null || ms === '') ? '' : (ms / 1000).toFixed(1) + 's'
+    const isSepRow = (cells) => cells.length > 0 && cells.every((c) => /^:?-{2,}:?$/.test(c))
+    // 把 Markdown 文本拆成 text/table 块（| 开头的连续行视为表格）
+    function splitBlocks(text) {
+      const lines = String(text).split('\n')
+      const blocks = []
+      let curText = []
+      let curTable = []
+      const flushText = () => { if (curText.length) { blocks.push({ kind: 'text', text: curText.join('\n') }); curText = [] } }
+      const flushTable = () => { if (curTable.length) { blocks.push({ kind: 'table', rows: curTable }); curTable = [] } }
+      for (const line of lines) {
+        const t = line.trim()
+        if (t.length > 2 && t.charAt(0) === '|' && t.charAt(t.length - 1) === '|') {
+          const cells = t.slice(1, -1).split('|').map((c) => c.trim())
+          if (isSepRow(cells)) continue
+          flushText()
+          curTable.push(cells)
+        } else {
+          flushTable()
+          curText.push(line)
+        }
+      }
+      flushText()
+      flushTable()
+      return blocks
+    }
+    function TableView(props) {
+      const rows = props.rows
+      const header = rows[0]
+      const body = rows.slice(1)
+      const ths = header.map((c, i) => React.createElement('th', { key: i }, c))
+      const trs = body.map((r, i) => React.createElement('tr', { key: i }, r.map((c, j) => React.createElement('td', { key: j }, c))))
+      return React.createElement('table', { className: 'invr-table' },
+        React.createElement('thead', null, React.createElement('tr', null, ths)),
+        React.createElement('tbody', null, trs))
+    }
     function Card(props) {
       const block = props.block
       const [open, setOpen] = React.useState(false)
       const [charts, setCharts] = React.useState([])
       const [prog, setProg] = React.useState(null)
+      const [zoomIdx, setZoomIdx] = React.useState(-1)
       const isDone = block !== undefined && block !== null && block.kind === 'tool-result'
       React.useEffect(() => {
         if (!isDone) return
@@ -72,9 +113,12 @@ return {
           s.stage + (s.ok ? ' · ' + fmt(s.elapsedMs) : ' · 失败')))
       }
       const chartNodes = charts.map((c, i) => React.createElement('div', { key: i },
-        c.svg !== null ? React.createElement('img', { className: 'invr-chart', alt: c.path, src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(c.svg) })
+        c.svg !== null ? React.createElement('img', { className: 'invr-chart', alt: c.path, src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(c.svg), onClick: () => setZoomIdx(i) })
           : c.err !== null ? React.createElement('div', { className: 'invr-charterr' }, '图表加载失败：' + c.err)
             : React.createElement('div', { className: 'invr-hint' }, '图表加载中…')))
+      const bodyBlocks = bodyText ? splitBlocks(bodyText).map((b, i) => b.kind === 'table'
+        ? React.createElement(TableView, { key: i, rows: b.rows })
+        : React.createElement('div', { key: i, className: 'invr-text' }, b.text)) : []
       if (!isDone) {
         let runMode = ''
         try {
@@ -100,7 +144,9 @@ return {
         badges.length ? React.createElement('div', { className: 'invr-badges' }, badges) : null,
         open ? React.createElement('div', null,
           charts.length ? React.createElement('div', { className: 'invr-charts' }, chartNodes) : null,
-          bodyText ? React.createElement('div', { className: 'invr-body' }, bodyText) : null) : null)
+          bodyBlocks.length ? bodyBlocks : null) : null,
+        zoomIdx >= 0 && charts[zoomIdx] && charts[zoomIdx].svg !== null ? React.createElement('div', { className: 'invr-zoom', onClick: () => setZoomIdx(-1) },
+          React.createElement('img', { className: 'invr-zoomimg', src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(charts[zoomIdx].svg), alt: charts[zoomIdx].path })) : null)
     }
     slots.inject('tool.call.toolview', () => slots.register(
       { name: 'tool.call.toolview', key: 'invest_run' },
