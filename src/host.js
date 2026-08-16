@@ -16,18 +16,19 @@ return {
     const z2 = (n) => (n < 10 ? '0' : '') + n
     const localYmd = () => { const d = new Date(); return '' + d.getFullYear() + z2(d.getMonth() + 1) + z2(d.getDate()) }
 
-    // 从子代理 result 提取纯文本（剥离 reasoning）
-    const extractText = (raw) => {
+    // 从子代理 result 提取纯文本与推理过程
+    const extractBoth = (raw) => {
       let s = raw
       if (typeof raw !== 'string') s = JSON.stringify(raw)
       try {
         const obj = JSON.parse(s)
         if (obj && Array.isArray(obj.output)) {
-          const parts = obj.output.filter(b => b && b.type === 'text' && b.text).map(b => b.text)
-          if (parts.length) return parts.join('\n')
+          const texts = obj.output.filter(b => b && b.type === 'text' && b.text).map(b => b.text)
+          const reasons = obj.output.filter(b => b && b.type === 'reasoning' && b.text).map(b => b.text)
+          if (texts.length) return { text: texts.join('\n'), reasoning: reasons.join('\n') }
         }
       } catch (e) { /* ignore */ }
-      return s
+      return { text: s, reasoning: '' }
     }
 
     // 从文本中收集完整绝对路径的 SVG 图表
@@ -102,8 +103,7 @@ return {
             lines.push('=== ' + o.stage + (o.ok ? ' ｜ 耗时 ' + (o.elapsedMs / 1000).toFixed(1) + 's' : ' ｜ 失败') + ' ===')
             if (o.error) lines.push('错误：' + o.error)
             if (o.ok && typeof o.text === 'string') {
-              const t = o.text
-              lines.push(t.length > 4000 ? t.slice(0, 4000) + '\n…（其余省略）' : t)
+              lines.push(o.text)
             }
           }
           if (charts.length) {
@@ -120,7 +120,7 @@ return {
         presentationMeta: (args, value) => ({
           mode: String(value.mode || ''),
           charts: (Array.isArray(value.charts) ? value.charts.slice(0, MAX_CHARTS) : []).map((p) => ({ path: String(p) })),
-          stages: (Array.isArray(value.outputs) ? value.outputs : []).map((o) => ({ stage: o.stage, ok: o.ok === true, elapsedMs: o.elapsedMs })),
+          stages: (Array.isArray(value.outputs) ? value.outputs : []).map((o) => ({ stage: o.stage, ok: o.ok === true, elapsedMs: o.elapsedMs, reasoning: typeof o.reasoning === 'string' ? o.reasoning : '' })),
         }),
       },
       async execute(args, exec) {
@@ -171,10 +171,10 @@ return {
                 persona: s.persona,
               })
               const result = await run.result
-              const outText = extractText(result)
-              const full = String(outText)
+              const both = extractBoth(result)
+              const full = String(both.text)
               collectCharts(full).forEach(c => allCharts.add(c))
-              return { stage: s.name, ok: true, elapsedMs: Date.now() - t0, text: full.slice(0, 9000) }
+              return { stage: s.name, ok: true, elapsedMs: Date.now() - t0, text: full.slice(0, 9000), reasoning: String(both.reasoning).slice(0, 4000) }
             } catch (e) {
               lastErr = String(e).slice(0, 600)
               // 失败分类：权限/频率类错误重试无意义，直接失败；其余（网络/超时/模型）重试
@@ -222,6 +222,12 @@ return {
               lines.push('## ' + o.stage + (o.ok ? '（耗时 ' + (o.elapsedMs / 1000).toFixed(1) + 's' + (o.retried ? '，含重试' : '') + '）' : '（失败）'))
               lines.push('')
               lines.push(o.ok ? o.text : ('错误：' + o.error))
+              if (o.ok && o.reasoning) {
+                lines.push('')
+                lines.push('### 推理过程')
+                lines.push('')
+                lines.push(o.reasoning)
+              }
             }
             if (allCharts.size) {
               lines.push('')

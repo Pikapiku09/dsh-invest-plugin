@@ -1,4 +1,4 @@
-// DSH 动态插件 Client 半部（invest_run 专属工具卡片：进度 + SVG 图表内联渲染 + Markdown 表格渲染 + 图表点击放大）
+// DSH 动态插件 Client 半部（invest_run 专属工具卡片：分阶段标签页 + 推理过程折叠 + 图表渲染/放大 + Markdown 表格）
 // 由 tools/build.js 复制为 dist/invest-run.client.js
 // 依赖：ctx（Cordis）、React、host、styles、timer（Client 内建/服务）
 
@@ -13,10 +13,12 @@ return {
       '.invr-head{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}',
       '.invr-title{font-weight:600;color:var(--dsw-alias-label-primary, inherit)}',
       '.invr-hint{color:var(--dsw-alias-label-secondary, rgba(128,128,128,.9));font-size:12px}',
-      '.invr-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}',
-      '.invr-badge{background:var(--dsw-alias-bg-hover, rgba(128,128,128,.14));border-radius:6px;padding:1px 8px;font-size:12px;color:var(--dsw-alias-label-secondary, rgba(128,128,128,.9))}',
-      '.invr-badge.ok{color:var(--dsw-alias-state-success-primary, #2f9e44)}',
-      '.invr-badge.fail{color:var(--dsw-alias-state-error-primary, #e03131)}',
+      '.invr-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}',
+      '.invr-tab{background:var(--dsw-alias-bg-hover, rgba(128,128,128,.14));border:1px solid transparent;border-radius:6px;padding:2px 10px;font-size:12px;color:var(--dsw-alias-label-secondary, rgba(128,128,128,.9));cursor:pointer;user-select:none}',
+      '.invr-tab:hover{border-color:var(--dsw-alias-border-l1, rgba(128,128,128,.4))}',
+      '.invr-tab.active{background:var(--dsw-alias-bg-active, rgba(128,128,128,.24));color:var(--dsw-alias-label-primary, inherit);font-weight:600}',
+      '.invr-tab.ok{color:var(--dsw-alias-state-success-primary, #2f9e44)}',
+      '.invr-tab.fail{color:var(--dsw-alias-state-error-primary, #e03131)}',
       '.invr-charts{display:flex;flex-direction:column;gap:8px;margin-top:8px}',
       '.invr-chart{width:100%;border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3));border-radius:8px;background:#ffffff;cursor:zoom-in}',
       '.invr-charterr{color:var(--dsw-alias-state-error-primary, #e03131);font-size:12px}',
@@ -26,6 +28,9 @@ return {
       '.invr-table th,.invr-table td{border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25));padding:3px 8px;text-align:left}',
       '.invr-table th{background:var(--dsw-alias-bg-hover, rgba(128,128,128,.12));font-weight:600}',
       '.invr-text{white-space:pre-wrap;margin:6px 0}',
+      '.invr-reason{margin-top:8px;border:1px dashed var(--dsw-alias-border-l1, rgba(128,128,128,.35));border-radius:8px;padding:6px 10px;background:var(--dsw-alias-bg-base, transparent)}',
+      '.invr-reason summary{cursor:pointer;color:var(--dsw-alias-label-secondary, rgba(128,128,128,.9));font-size:12px;user-select:none}',
+      '.invr-stagehead{font-weight:600;margin:8px 0 2px;color:var(--dsw-alias-label-primary, inherit)}',
     ].join('\n')))
     const fmt = (ms) => (ms === undefined || ms === null || ms === '') ? '' : (ms / 1000).toFixed(1) + 's'
     const isSepRow = (cells) => cells.length > 0 && cells.every((c) => /^:?-{2,}:?$/.test(c))
@@ -63,12 +68,26 @@ return {
         React.createElement('thead', null, React.createElement('tr', null, ths)),
         React.createElement('tbody', null, trs))
     }
+    function StageBody(props) {
+      const text = props.text
+      const reasoning = props.reasoning
+      const blocks = text ? splitBlocks(text).map((b, i) => b.kind === 'table'
+        ? React.createElement(TableView, { key: i, rows: b.rows })
+        : React.createElement('div', { key: i, className: 'invr-text' }, b.text)) : []
+      const reasonNode = (reasoning && reasoning.trim())
+        ? React.createElement('details', { className: 'invr-reason' },
+            React.createElement('summary', null, '💭 推理过程（思考内容，' + String(reasoning.length) + ' 字符）'),
+            React.createElement('div', { className: 'invr-text' }, reasoning))
+        : null
+      return React.createElement('div', null, blocks, reasonNode)
+    }
     function Card(props) {
       const block = props.block
       const [open, setOpen] = React.useState(false)
       const [charts, setCharts] = React.useState([])
       const [prog, setProg] = React.useState(null)
       const [zoomIdx, setZoomIdx] = React.useState(-1)
+      const [stageIdx, setStageIdx] = React.useState(0)
       const isDone = block !== undefined && block !== null && block.kind === 'tool-result'
       React.useEffect(() => {
         if (!isDone) return
@@ -103,18 +122,34 @@ return {
       const stages = (meta && Array.isArray(meta.stages)) ? meta.stages : []
       const modeText = meta && typeof meta.mode === 'string' ? meta.mode : ''
       const bodyText = isDone && Array.isArray(block.content) && block.content[0] && block.content[0].type === 'text' ? block.content[0].text : ''
-      const badges = []
-      for (const s of stages) {
-        badges.push(React.createElement('span', { key: s.stage, className: 'invr-badge ' + (s.ok ? 'ok' : 'fail') },
-          s.stage + (s.ok ? ' · ' + fmt(s.elapsedMs) : ' · 失败')))
+      // 从 render 文本按 === 阶段名 ｜ 耗时 xxs === 分界切分各阶段完整报告
+      const sections = []
+      {
+        const re = /=== ([^=\n]+?) ｜ [^=]*? ===\n/g
+        let m
+        let lastIdx = -1
+        let lastKey = null
+        const raw = bodyText
+        while ((m = re.exec(raw)) !== null) {
+          if (lastKey !== null) sections.push({ key: lastKey, text: raw.slice(lastIdx, m.index) })
+          lastKey = m[1]
+          lastIdx = m.index + m[0].length
+        }
+        if (lastKey !== null) sections.push({ key: lastKey, text: raw.slice(lastIdx) })
       }
       const chartNodes = charts.map((c, i) => React.createElement('div', { key: i },
         c.svg !== null ? React.createElement('img', { className: 'invr-chart', alt: c.path, src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(c.svg), onClick: () => setZoomIdx(i) })
           : c.err !== null ? React.createElement('div', { className: 'invr-charterr' }, '图表加载失败：' + c.err)
             : React.createElement('div', { className: 'invr-hint' }, '图表加载中…')))
-      const bodyBlocks = bodyText ? splitBlocks(bodyText).map((b, i) => b.kind === 'table'
-        ? React.createElement(TableView, { key: i, rows: b.rows })
-        : React.createElement('div', { key: i, className: 'invr-text' }, b.text)) : []
+      const safeIdx = sections.length > 0 ? Math.min(Math.max(stageIdx, 0), sections.length - 1) : 0
+      const tabs = sections.map((s, i) => {
+        const st = stages[i]
+        const cls = 'invr-tab ' + (i === safeIdx ? 'active' : '') + (st ? (st.ok ? ' ok' : ' fail') : '')
+        return React.createElement('span', { key: i, className: cls, onClick: () => setStageIdx(i) },
+          (i + 1) + '. ' + s.key + (st ? ' · ' + fmt(st.elapsedMs) : ''))
+      })
+      const curSection = sections[safeIdx]
+      const curReasoning = stages[safeIdx] && typeof stages[safeIdx].reasoning === 'string' ? stages[safeIdx].reasoning : ''
       if (!isDone) {
         let runMode = ''
         try {
@@ -122,7 +157,7 @@ return {
           if (a && typeof a.mode === 'string') runMode = a.mode
         } catch (e) { /* ignore */ }
         const doneList = (prog && Array.isArray(prog.done)) ? prog.done : []
-        const doneBadges = doneList.map((d, i) => React.createElement('span', { key: 'd' + i, className: 'invr-badge ok' },
+        const doneBadges = doneList.map((d, i) => React.createElement('span', { key: 'd' + i, className: 'invr-tab ok' },
           d.stage + ' · ' + fmt(d.ms)))
         const line = (prog && typeof prog.total === 'number' && prog.total > 0)
           ? '进行中 ' + prog.index + '/' + prog.total + '：' + prog.stage
@@ -131,16 +166,18 @@ return {
           React.createElement('div', { className: 'invr-head' },
             React.createElement('span', { className: 'invr-title' }, 'invest_run 投研流水线' + (runMode ? ' · ' + runMode : '')),
             React.createElement('span', { className: 'invr-hint' }, line)),
-          doneBadges.length ? React.createElement('div', { className: 'invr-badges' }, doneBadges) : null)
+          doneBadges.length ? React.createElement('div', { className: 'invr-tabs' }, doneBadges) : null)
       }
       return React.createElement('div', { className: 'invr-card' },
         React.createElement('div', { className: 'invr-head', onClick: () => setOpen((o) => !o) },
-          React.createElement('span', { className: 'invr-title' }, '投研流水线 · ' + modeText),
+          React.createElement('span', { className: 'invr-title' }, '投研流水线 · ' + modeText + '（' + sections.length + ' 个阶段，点击标签查看每个 Agent 输出）'),
           React.createElement('span', { className: 'invr-hint' }, open ? '收起' : '展开')),
-        badges.length ? React.createElement('div', { className: 'invr-badges' }, badges) : null,
+        tabs.length ? React.createElement('div', { className: 'invr-tabs' }, tabs) : null,
         open ? React.createElement('div', null,
           charts.length ? React.createElement('div', { className: 'invr-charts' }, chartNodes) : null,
-          bodyBlocks.length ? bodyBlocks : null) : null,
+          curSection ? React.createElement('div', null,
+            React.createElement('div', { className: 'invr-stagehead' }, '【' + curSection.key + '】完整报告'),
+            React.createElement(StageBody, { text: curSection.text, reasoning: curReasoning })) : null) : null,
         zoomIdx >= 0 && charts[zoomIdx] && charts[zoomIdx].svg !== null ? React.createElement('div', { className: 'invr-zoom', onClick: () => setZoomIdx(-1) },
           React.createElement('img', { className: 'invr-zoomimg', src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(charts[zoomIdx].svg), alt: charts[zoomIdx].path })) : null)
     }

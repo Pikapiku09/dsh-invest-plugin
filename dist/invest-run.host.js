@@ -1,6 +1,6 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.host 函数体
-// 生成时间：2026-08-16T12:05:15.252Z
+// 生成时间：2026-08-16T13:02:29.227Z
 
 const PROMPTS = {
   "DATA_BASE": "# 数据获取（使用 pwsh 工具，重要）\n- Tushare token 文件：E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/tushare.token（用 pwsh 执行 Get-Content 读取并去除换行）\n- 取数方式：用 pwsh 工具执行 node -e 后接双引号包裹的 JS；JS 内用单引号字符串；结构为：fetch 发送 POST 到 https://api.tushare.pro，请求体 JSON.stringify({api_name:接口名, token:令牌, params:{参数}})，然后 r.text() 后 console.log 输出\n- 接口速查：trade_cal(交易日历) / index_daily(指数，ts_code=000001.SH) / daily(日线，ts_code 形如 600519.SH，start_date/end_date 为 YYYYMMDD) / limit_list_d(涨跌停列表) / moneyflow(资金流，ts_code) / sw_daily(申万行业) / weekly(周线) / income(利润表) / fina_indicator(财务指标) / daily_basic(每日指标PE/PB) / news(新闻) / major_news(重大新闻) / express(业绩快报) / forecast(业绩预告)\n- 日期锚定铁律：禁止用模型自身时间概念判断今天/上周/最近；先用 index_daily(ts_code=000001.SH, end_date=当年年末) 取返回记录中最大 trade_date 作为真实最新交易日；trade_cal 含未来日期，只能用于判断某日是否开市；所有行情查询 end_date 用真实最新交易日，start_date 往前推 60-120 自然日\n- 数据覆盖铁律：分析对象必须实际取到真实行情后才能给出具体价格；取数失败或接口无权限时如实标注，严禁编造数字；接口报错信息要贴出来\n- 行情缓存：取数前先用 pwsh 检查缓存文件 E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/cache/quotes/<接口>_<ts_code>_<end_date>.json 是否存在（<end_date> 填本次要查的日期；目录不存在视为未命中）；存在则 Get-Content 读取其内容直接使用，跳过该接口请求。每次取数成功后用 pwsh 把接口响应原文写入该路径（目录不存在先 New-Item -ItemType Directory -Force），供本流水线后续阶段与本日其他运行复用；缓存命中时在报告中标注[缓存命中]\n- 图表：如需图表，用 pwsh 工具写 SVG 文件到 E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/charts/ 目录（柱状图/折线图/饼图手写 SVG 即可，注意转义）。重要：报告正文提及每张图表时必须写出完整绝对路径（以 E:/ 开头，如 E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/charts/601318_price_15d.svg），禁止只写文件名，否则图表无法在界面展示\n- 效率纪律：① 取数脚本必须合并请求——一个 node -e 脚本内连续 fetch 多个接口（用 Promise.all 或顺序 await）一次性输出全部结果，严禁每个接口单独跑一次 pwsh；② 调用上限：行情类(daily/daily_basic/moneyflow/weekly)每只股票各最多 1 次，指数与情绪(index_daily/limit_list_d/sw_daily)各最多 1 次，财务类(income/fina_indicator)合计 1 次；③ 输出精炼：最终 text 输出控制在 2500 字以内，reasoning 里不要重复粘贴已取到的数据，直接进入分析结论",
@@ -28,18 +28,19 @@ return {
     const z2 = (n) => (n < 10 ? '0' : '') + n
     const localYmd = () => { const d = new Date(); return '' + d.getFullYear() + z2(d.getMonth() + 1) + z2(d.getDate()) }
 
-    // 从子代理 result 提取纯文本（剥离 reasoning）
-    const extractText = (raw) => {
+    // 从子代理 result 提取纯文本与推理过程
+    const extractBoth = (raw) => {
       let s = raw
       if (typeof raw !== 'string') s = JSON.stringify(raw)
       try {
         const obj = JSON.parse(s)
         if (obj && Array.isArray(obj.output)) {
-          const parts = obj.output.filter(b => b && b.type === 'text' && b.text).map(b => b.text)
-          if (parts.length) return parts.join('\n')
+          const texts = obj.output.filter(b => b && b.type === 'text' && b.text).map(b => b.text)
+          const reasons = obj.output.filter(b => b && b.type === 'reasoning' && b.text).map(b => b.text)
+          if (texts.length) return { text: texts.join('\n'), reasoning: reasons.join('\n') }
         }
       } catch (e) { /* ignore */ }
-      return s
+      return { text: s, reasoning: '' }
     }
 
     // 从文本中收集完整绝对路径的 SVG 图表
@@ -114,8 +115,7 @@ return {
             lines.push('=== ' + o.stage + (o.ok ? ' ｜ 耗时 ' + (o.elapsedMs / 1000).toFixed(1) + 's' : ' ｜ 失败') + ' ===')
             if (o.error) lines.push('错误：' + o.error)
             if (o.ok && typeof o.text === 'string') {
-              const t = o.text
-              lines.push(t.length > 4000 ? t.slice(0, 4000) + '\n…（其余省略）' : t)
+              lines.push(o.text)
             }
           }
           if (charts.length) {
@@ -132,7 +132,7 @@ return {
         presentationMeta: (args, value) => ({
           mode: String(value.mode || ''),
           charts: (Array.isArray(value.charts) ? value.charts.slice(0, MAX_CHARTS) : []).map((p) => ({ path: String(p) })),
-          stages: (Array.isArray(value.outputs) ? value.outputs : []).map((o) => ({ stage: o.stage, ok: o.ok === true, elapsedMs: o.elapsedMs })),
+          stages: (Array.isArray(value.outputs) ? value.outputs : []).map((o) => ({ stage: o.stage, ok: o.ok === true, elapsedMs: o.elapsedMs, reasoning: typeof o.reasoning === 'string' ? o.reasoning : '' })),
         }),
       },
       async execute(args, exec) {
@@ -183,10 +183,10 @@ return {
                 persona: s.persona,
               })
               const result = await run.result
-              const outText = extractText(result)
-              const full = String(outText)
+              const both = extractBoth(result)
+              const full = String(both.text)
               collectCharts(full).forEach(c => allCharts.add(c))
-              return { stage: s.name, ok: true, elapsedMs: Date.now() - t0, text: full.slice(0, 9000) }
+              return { stage: s.name, ok: true, elapsedMs: Date.now() - t0, text: full.slice(0, 9000), reasoning: String(both.reasoning).slice(0, 4000) }
             } catch (e) {
               lastErr = String(e).slice(0, 600)
               // 失败分类：权限/频率类错误重试无意义，直接失败；其余（网络/超时/模型）重试
@@ -234,6 +234,12 @@ return {
               lines.push('## ' + o.stage + (o.ok ? '（耗时 ' + (o.elapsedMs / 1000).toFixed(1) + 's' + (o.retried ? '，含重试' : '') + '）' : '（失败）'))
               lines.push('')
               lines.push(o.ok ? o.text : ('错误：' + o.error))
+              if (o.ok && o.reasoning) {
+                lines.push('')
+                lines.push('### 推理过程')
+                lines.push('')
+                lines.push(o.reasoning)
+              }
             }
             if (allCharts.size) {
               lines.push('')
