@@ -88,22 +88,25 @@ return {
 
     const tool = harness.defineTool({
       name: 'invest_run',
-      description: '运行多角色投研流水线。mode 取值：选股/消息/深度分析/总判断/all。question 为用户投研问题（可含多只股票）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）。数据用 Tushare 实时获取。',
-      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' } }, required: ['mode', 'question'] },
+      description: '运行多角色投研流水线。mode 取值：选股/消息/深度分析/总判断/all。question 为用户投研问题（可含多只股票）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。数据用 Tushare 实时获取。',
+      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' }, detail: { type: 'string', description: '可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理' } }, required: ['mode', 'question'] },
       output: {
         schema: { type: 'object', additionalProperties: true },
         render: (args, value) => {
+          const detail = args && args.detail === 'full' ? 'full' : 'summary'
+          const LIMIT = detail === 'full' ? 9000 : 2500
           const lines = []
           const outputs = Array.isArray(value.outputs) ? value.outputs : []
           const charts = Array.isArray(value.charts) ? value.charts.slice(0, MAX_CHARTS) : []
           const reports = Array.isArray(value.reports) ? value.reports : []
-          lines.push('invest_run 模式=' + String(value.mode || '') + ' ｜ 阶段数=' + outputs.length + (charts.length ? ' ｜ 图表=' + charts.length + ' 张' : '') + (reports.length ? ' ｜ 报告已归档' : ''))
+          lines.push('invest_run 模式=' + String(value.mode || '') + ' ｜ 阶段数=' + outputs.length + (charts.length ? ' ｜ 图表=' + charts.length + ' 张' : '') + (reports.length ? ' ｜ 报告已归档' : '') + ' ｜ detail=' + detail)
           for (const o of outputs) {
             lines.push('')
             lines.push('=== ' + o.stage + (o.ok ? ' ｜ 耗时 ' + (o.elapsedMs / 1000).toFixed(1) + 's' : ' ｜ 失败') + ' ===')
             if (o.error) lines.push('错误：' + o.error)
             if (o.ok && typeof o.text === 'string') {
-              lines.push(o.text)
+              const t = o.text
+              lines.push(t.length > LIMIT ? t.slice(0, LIMIT) + (detail === 'summary' ? '\n…（完整报告见 GUI 卡片或归档文件）' : '') : t)
             }
           }
           if (charts.length) {
@@ -120,7 +123,7 @@ return {
         presentationMeta: (args, value) => ({
           mode: String(value.mode || ''),
           charts: (Array.isArray(value.charts) ? value.charts.slice(0, MAX_CHARTS) : []).map((p) => ({ path: String(p) })),
-          stages: (Array.isArray(value.outputs) ? value.outputs : []).map((o) => ({ stage: o.stage, ok: o.ok === true, elapsedMs: o.elapsedMs, reasoning: typeof o.reasoning === 'string' ? o.reasoning : '' })),
+          stages: (Array.isArray(value.outputs) ? value.outputs : []).map((o) => ({ stage: o.stage, ok: o.ok === true, elapsedMs: o.elapsedMs, text: typeof o.text === 'string' ? o.text : '', reasoning: typeof o.reasoning === 'string' ? o.reasoning : '' })),
         }),
       },
       async execute(args, exec) {

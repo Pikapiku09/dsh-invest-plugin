@@ -149,6 +149,9 @@ return {
           (i + 1) + '. ' + s.key + (st ? ' · ' + fmt(st.elapsedMs) : ''))
       })
       const curSection = sections[safeIdx]
+      // 优先使用 meta 携带的完整报告文本（tool-private，不进模型 token）；旧调用回退到 render 文本
+      const metaText = stages[safeIdx] && typeof stages[safeIdx].text === 'string' && stages[safeIdx].text ? stages[safeIdx].text : ''
+      const curText = metaText || (curSection ? curSection.text : '')
       const curReasoning = stages[safeIdx] && typeof stages[safeIdx].reasoning === 'string' ? stages[safeIdx].reasoning : ''
       if (!isDone) {
         let runMode = ''
@@ -177,7 +180,7 @@ return {
           charts.length ? React.createElement('div', { className: 'invr-charts' }, chartNodes) : null,
           curSection ? React.createElement('div', null,
             React.createElement('div', { className: 'invr-stagehead' }, '【' + curSection.key + '】完整报告'),
-            React.createElement(StageBody, { text: curSection.text, reasoning: curReasoning })) : null) : null,
+            React.createElement(StageBody, { text: curText, reasoning: curReasoning })) : null) : null,
         zoomIdx >= 0 && charts[zoomIdx] && charts[zoomIdx].svg !== null ? React.createElement('div', { className: 'invr-zoom', onClick: () => setZoomIdx(-1) },
           React.createElement('img', { className: 'invr-zoomimg', src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(charts[zoomIdx].svg), alt: charts[zoomIdx].path })) : null)
     }
