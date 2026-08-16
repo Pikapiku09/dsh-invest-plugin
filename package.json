@@ -1,0 +1,30 @@
+{
+  "name": "dsh-invest-plugin",
+  "version": "0.7.1",
+  "description": "DSH 动态 Cordis 插件：多角色 A 股投研流水线（选股/消息/深度/总判断 4 角色子代理 + Tushare 实时数据 + SVG 图表卡片）",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "build": "node tools/build.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "tushare",
+    "stock",
+    "invest",
+    "multi-agent"
+  ],
+  "files": [
+    "dist",
+    "src",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
+}
