@@ -11,6 +11,7 @@ return {
     const progressStore = {}
     const CACHE_DIR = 'E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/cache'
     const TRADE_CACHE = CACHE_DIR + '/last-trade-date.json'
+    const REPORTS_DIR = 'E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/reports'
     const z2 = (n) => (n < 10 ? '0' : '') + n
     const localYmd = () => { const d = new Date(); return '' + d.getFullYear() + z2(d.getMonth() + 1) + z2(d.getDate()) }
 
@@ -85,15 +86,16 @@ return {
 
     const tool = harness.defineTool({
       name: 'invest_run',
-      description: '运行多角色投研流水线。mode 取值：选股/消息/深度分析/总判断/all。根据用户问题按角色分析，数据用 Tushare 实时获取。',
-      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题' } }, required: ['mode', 'question'] },
+      description: '运行多角色投研流水线。mode 取值：选股/消息/深度分析/总判断/all。question 为用户投研问题；context 可选，传入上一轮分析结论或追问背景（记忆与追问）。数据用 Tushare 实时获取。',
+      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' } }, required: ['mode', 'question'] },
       output: {
         schema: { type: 'object', additionalProperties: true },
         render: (args, value) => {
           const lines = []
           const outputs = Array.isArray(value.outputs) ? value.outputs : []
           const charts = Array.isArray(value.charts) ? value.charts : []
-          lines.push('invest_run 模式=' + String(value.mode || '') + ' ｜ 阶段数=' + outputs.length + (charts.length ? ' ｜ 图表=' + charts.length + ' 张' : ''))
+          const reports = Array.isArray(value.reports) ? value.reports : []
+          lines.push('invest_run 模式=' + String(value.mode || '') + ' ｜ 阶段数=' + outputs.length + (charts.length ? ' ｜ 图表=' + charts.length + ' 张' : '') + (reports.length ? ' ｜ 报告已归档' : ''))
           for (const o of outputs) {
             lines.push('')
             lines.push('=== ' + o.stage + (o.ok ? ' ｜ 耗时 ' + (o.elapsedMs / 1000).toFixed(1) + 's' : ' ｜ 失败') + ' ===')
@@ -107,6 +109,11 @@ return {
             lines.push('')
             lines.push('图表文件：' + charts.join(' , '))
           }
+          if (reports.length) {
+            lines.push('')
+            lines.push('报告归档：' + reports.join(' , '))
+          }
+          if (value.reportError) lines.push('归档错误：' + value.reportError)
           return text(lines.join('\n'))
         },
         presentationMeta: (args, value) => ({
@@ -118,20 +125,22 @@ return {
       async execute(args, exec) {
         const mode = args.mode
         const question = args.question
+        const context = typeof args.context === 'string' && args.context.trim() ? args.context.trim().slice(0, 4000) : ''
         const callId = String(exec.callId || '')
         const subs = ctx.get('subagents')
         if (subs === undefined) return { error: 'subagents not mounted' }
         const R = (name, persona) => ({ name, persona })
-        let stages = []
+        // 分组编排：A 组（选股+消息并行）→ B 组（深度）→ C 组（总判断）
+        let groups = []
         switch (mode) {
-          case '选股': stages = [R('选股分析师', P_SELECT)]; break
-          case '消息': stages = [R('市场重点消息获取师', P_NEWS)]; break
-          case '深度分析': stages = [R('选股分析师', P_SELECT), R('股票深度分析师', P_DEEP)]; break
-          case '总判断': stages = [R('选股分析师', P_SELECT), R('市场重点消息获取师', P_NEWS), R('股票深度分析师', P_DEEP), R('总判断师', P_FINAL)]; break
-          default: stages = [R('选股分析师', P_SELECT), R('市场重点消息获取师', P_NEWS), R('股票深度分析师', P_DEEP), R('总判断师', P_FINAL)]
+          case '选股': groups = [[R('选股分析师', P_SELECT)]]; break
+          case '消息': groups = [[R('市场重点消息获取师', P_NEWS)]]; break
+          case '深度分析': groups = [[R('选股分析师', P_SELECT)], [R('股票深度分析师', P_DEEP)]]; break
+          case '总判断': groups = [[R('选股分析师', P_SELECT), R('市场重点消息获取师', P_NEWS)], [R('股票深度分析师', P_DEEP)], [R('总判断师', P_FINAL)]]; break
+          default: groups = [[R('选股分析师', P_SELECT), R('市场重点消息获取师', P_NEWS)], [R('股票深度分析师', P_DEEP)], [R('总判断师', P_FINAL)]]
         }
         const setProgress = (p) => { progressStore[callId] = Object.assign({ updatedAt: Date.now() }, p) }
-        setProgress({ stage: '', index: 0, total: stages.length, status: 'init', done: [] })
+        setProgress({ stage: '', index: 0, total: groups.length, status: 'init', done: [] })
         const anchor = await readTradeCache()
         const anchorLine = anchor
           ? '【已缓存锚定】真实最新交易日 = ' + anchor + '（由流水线缓存提供，跳过 index_daily 锚定步骤，直接按此日期取数）'
@@ -139,18 +148,17 @@ return {
         const history = []
         const outputs = []
         const allCharts = new Set()
-        for (let si = 0; si < stages.length; si++) {
-          const s = stages[si]
+        const runStage = async (s) => {
           const t0 = Date.now()
-          setProgress({ stage: s.name, index: si + 1, total: stages.length, status: 'running', done: outputs.filter(o => o.ok).map(o => ({ stage: o.stage, ms: o.elapsedMs })) })
-          const parts = ['用户问题：' + question, anchorLine]
+          const parts = ['用户问题：' + question]
+          if (context) parts.push('【对话上下文（记忆）】' + context + '\n请结合上述上下文继续分析，保持口径一致。')
+          parts.push(anchorLine)
           for (const h of history) {
             parts.push('【' + h.stage + ' 产出（请基于其继续，勿重复取数已覆盖内容）】\n' + h.text)
           }
           parts.push('请按你的角色职责完成分析并输出完整结果。')
           const basePrompt = parts.join('\n\n')
           let lastErr = ''
-          let outText = ''
           for (let attempt = 1; attempt <= 2; attempt++) {
             try {
               const promptText = lastErr ? basePrompt + '\n\n【上次执行失败，错误信息】' + lastErr + '\n请修正后重试。' : basePrompt
@@ -162,26 +170,76 @@ return {
                 persona: s.persona,
               })
               const result = await run.result
-              outText = extractText(result)
-              break
+              const outText = extractText(result)
+              const full = String(outText)
+              collectCharts(full).forEach(c => allCharts.add(c))
+              return { stage: s.name, ok: true, elapsedMs: Date.now() - t0, text: full.slice(0, 9000) }
             } catch (e) {
               lastErr = String(e).slice(0, 600)
-              if (attempt === 2) {
-                outputs.push({ stage: s.name, ok: false, error: lastErr, elapsedMs: Date.now() - t0 })
+              // 失败分类：权限/频率类错误重试无意义，直接失败；其余（网络/超时/模型）重试
+              const nonRetryable = /40203|无权限|权限不足|超限|频率|quota|forbidden|unauthorized|unauthenticated/i.test(lastErr)
+              if (nonRetryable || attempt === 2) {
+                return { stage: s.name, ok: false, error: lastErr, elapsedMs: Date.now() - t0, retried: attempt > 1 }
               }
             }
           }
-          if (outText) {
-            const full = String(outText)
-            collectCharts(full).forEach(c => allCharts.add(c))
-            const slim = full.slice(0, 9000)
-            outputs.push({ stage: s.name, ok: true, elapsedMs: Date.now() - t0, text: slim })
-            history.push({ stage: s.name, text: slim })
-          }
-          setProgress({ stage: s.name, index: si + 1, total: stages.length, status: 'done', elapsedMs: Date.now() - t0, done: outputs.filter(o => o.ok).map(o => ({ stage: o.stage, ms: o.elapsedMs })) })
+          return { stage: s.name, ok: false, error: '未知失败', elapsedMs: Date.now() - t0 }
         }
-        setProgress({ stage: '', index: stages.length, total: stages.length, status: 'final', done: outputs.filter(o => o.ok).map(o => ({ stage: o.stage, ms: o.elapsedMs })) })
-        return { mode, stages: outputs.map(o => o.stage), charts: Array.from(allCharts), outputs }
+        for (let gi = 0; gi < groups.length; gi++) {
+          const g = groups[gi]
+          const groupLabel = g.map(x => x.name).join(' + ')
+          setProgress({ stage: groupLabel, index: gi + 1, total: groups.length, status: 'running', done: outputs.filter(o => o.ok).map(o => ({ stage: o.stage, ms: o.elapsedMs })) })
+          const results = await Promise.all(g.map(s => runStage(s)))
+          for (const r of results) {
+            outputs.push(r)
+            if (r.ok) history.push({ stage: r.stage, text: r.text })
+          }
+          setProgress({ stage: groupLabel, index: gi + 1, total: groups.length, status: 'done', elapsedMs: results.reduce((a, r) => Math.max(a, r.elapsedMs || 0), 0), done: outputs.filter(o => o.ok).map(o => ({ stage: o.stage, ms: o.elapsedMs })) })
+        }
+        setProgress({ stage: '', index: groups.length, total: groups.length, status: 'final', done: outputs.filter(o => o.ok).map(o => ({ stage: o.stage, ms: o.elapsedMs })) })
+        // 报告归档（显式携带会话 sandboxPolicy，否则 workspace-write 默认根不含工作区）
+        const reports = []
+        let reportError = ''
+        const fs = ctx.get('fs')
+        const sp = ctx.get('sandboxPolicy')
+        const policy = (sp !== undefined && exec.agent !== undefined) ? sp.resolve({ session: exec.agent.session }) : undefined
+        if (fs !== undefined) {
+          try {
+            const d = new Date()
+            const stamp = localYmd() + '_' + z2(d.getHours()) + z2(d.getMinutes())
+            const qkey = String(question).replace(/[^\w\u4e00-\u9fa5]+/g, '_').slice(0, 16) || 'query'
+            const reportPath = REPORTS_DIR + '/' + stamp + '_' + qkey + '.md'
+            const lines = []
+            lines.push('# 投研流水线报告')
+            lines.push('')
+            lines.push('- 模式：' + mode)
+            lines.push('- 时间：' + stamp)
+            lines.push('- 问题：' + question)
+            if (context) { lines.push('- 上下文：' + context.slice(0, 200).replace(/\n/g, ' ')) }
+            for (const o of outputs) {
+              lines.push('')
+              lines.push('## ' + o.stage + (o.ok ? '（耗时 ' + (o.elapsedMs / 1000).toFixed(1) + 's' + (o.retried ? '，含重试' : '') + '）' : '（失败）'))
+              lines.push('')
+              lines.push(o.ok ? o.text : ('错误：' + o.error))
+            }
+            if (allCharts.size) {
+              lines.push('')
+              lines.push('## 图表')
+              for (const c of Array.from(allCharts)) lines.push('- ' + c)
+            }
+            lines.push('')
+            lines.push('---')
+            lines.push('仅供参考，不构成投资建议。')
+            const target = await fs.resolve(reportPath)
+            await fs.writeText(target, lines.join('\n'), undefined, undefined, policy)
+            reports.push(reportPath)
+          } catch (e) {
+            reportError = String(e).slice(0, 300)
+          }
+        } else {
+          reportError = 'fs unavailable'
+        }
+        return { mode, stages: outputs.map(o => o.stage), charts: Array.from(allCharts), reports, reportError, outputs }
       },
     })
     harness.registerTool(ctx, tool)
