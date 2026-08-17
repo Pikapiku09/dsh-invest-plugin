@@ -89,7 +89,7 @@ return {
 
     const tool = harness.defineTool({
       name: 'invest_run',
-      description: '运行多角色投研流水线。mode 取值：选股/消息/深度分析/总判断/all。question 为用户投研问题（可含多只股票）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。数据用 Tushare 实时获取。',
+      description: '运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）。question 为用户投研问题（可含多只股票）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。数据用 Tushare 实时获取。',
       parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' }, detail: { type: 'string', description: '可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理' } }, required: ['mode', 'question'] },
       output: {
         schema: { type: 'object', additionalProperties: true },
@@ -138,6 +138,7 @@ return {
         // 分组编排：A 组（选股+消息并行）→ B 组（深度）→ C 组（总判断）
         let groups = []
         switch (mode) {
+          case '个股': groups = [[R('股票深度分析师', P_DEEP)]]; break
           case '选股': groups = [[R('选股分析师', P_SELECT)]]; break
           case '消息': groups = [[R('市场重点消息获取师', P_NEWS)]]; break
           case '深度分析': groups = [[R('选股分析师', P_SELECT)], [R('股票深度分析师', P_DEEP)]]; break

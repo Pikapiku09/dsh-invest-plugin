@@ -1,6 +1,6 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.host 函数体
-// 生成时间：2026-08-17T04:52:36.735Z
+// 生成时间：2026-08-17T06:02:03.991Z
 
 const PROMPTS = {
   "DATA_BASE": "# 数据获取（使用 pwsh 工具，重要）\n- Tushare token 文件：E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/tushare.token（用 pwsh 执行 Get-Content 读取并去除换行）\n- 取数方式：用 pwsh 工具执行 node -e 后接双引号包裹的 JS；JS 内用单引号字符串；结构为：fetch 发送 POST 到 https://api.tushare.pro，请求体 JSON.stringify({api_name:接口名, token:令牌, params:{参数}})，然后 r.text() 后 console.log 输出\n- 接口速查：trade_cal(交易日历) / index_daily(指数，ts_code=000001.SH) / daily(日线，ts_code 形如 600519.SH，start_date/end_date 为 YYYYMMDD) / limit_list_d(涨跌停列表) / moneyflow(资金流，ts_code) / sw_daily(申万行业) / weekly(周线) / income(利润表) / fina_indicator(财务指标) / daily_basic(每日指标PE/PB) / news(新闻) / major_news(重大新闻) / express(业绩快报) / forecast(业绩预告)\n- 日期锚定铁律：禁止用模型自身时间概念判断今天/上周/最近；先用 index_daily(ts_code=000001.SH, end_date=当年年末) 取返回记录中最大 trade_date 作为真实最新交易日；trade_cal 含未来日期，只能用于判断某日是否开市；所有行情查询 end_date 用真实最新交易日，start_date 往前推 60-120 自然日\n- 数据覆盖铁律：分析对象必须实际取到真实行情后才能给出具体价格；取数失败或接口无权限时如实标注，严禁编造数字；接口报错信息要贴出来\n- 行情缓存：取数前先用 pwsh 检查缓存文件 E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/cache/quotes/<接口>_<ts_code>_<end_date>.json 是否存在（<end_date> 填本次要查的日期；目录不存在视为未命中）；存在则 Get-Content 读取其内容直接使用，跳过该接口请求。每次取数成功后用 pwsh 把接口响应原文写入该路径（目录不存在先 New-Item -ItemType Directory -Force），供本流水线后续阶段与本日其他运行复用；缓存命中时在报告中标注[缓存命中]\n- 图表：如需图表，用 pwsh 工具写 SVG 文件到 E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/charts/ 目录（柱状图/折线图/饼图手写 SVG 即可，注意转义）。重要：报告正文提及每张图表时必须写出完整绝对路径（以 E:/ 开头，如 E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/charts/601318_price_15d.svg），禁止只写文件名，否则图表无法在界面展示\n- 效率纪律：① 取数脚本必须合并请求——一个 node -e 脚本内连续 fetch 多个接口（用 Promise.all 或顺序 await）一次性输出全部结果，严禁每个接口单独跑一次 pwsh；② 调用上限：行情类(daily/daily_basic/moneyflow/weekly)每只股票各最多 1 次，指数与情绪(index_daily/limit_list_d/sw_daily)各最多 1 次，财务类(income/fina_indicator)合计 1 次；③ 输出精炼：最终 text 输出控制在 2500 字以内，reasoning 里不要重复粘贴已取到的数据，直接进入分析结论",
@@ -101,7 +101,7 @@ return {
 
     const tool = harness.defineTool({
       name: 'invest_run',
-      description: '运行多角色投研流水线。mode 取值：选股/消息/深度分析/总判断/all。question 为用户投研问题（可含多只股票）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。数据用 Tushare 实时获取。',
+      description: '运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）。question 为用户投研问题（可含多只股票）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。数据用 Tushare 实时获取。',
       parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' }, detail: { type: 'string', description: '可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理' } }, required: ['mode', 'question'] },
       output: {
         schema: { type: 'object', additionalProperties: true },
@@ -150,6 +150,7 @@ return {
         // 分组编排：A 组（选股+消息并行）→ B 组（深度）→ C 组（总判断）
         let groups = []
         switch (mode) {
+          case '个股': groups = [[R('股票深度分析师', P_DEEP)]]; break
           case '选股': groups = [[R('选股分析师', P_SELECT)]]; break
           case '消息': groups = [[R('市场重点消息获取师', P_NEWS)]]; break
           case '深度分析': groups = [[R('选股分析师', P_SELECT)], [R('股票深度分析师', P_DEEP)]]; break

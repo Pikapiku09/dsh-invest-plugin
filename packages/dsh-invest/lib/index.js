@@ -10,7 +10,7 @@ const name = "invest"
 const inject = ["webServer", "tools", "systemPrompt"]
 
 /** Model-facing announcement: plugin presence, capabilities, and limits. */
-const INVEST_GUIDANCE = "本机已安装 dsh-invest 插件（A 股多角色投研流水线）：invest_run 工具由 4 个角色子代理接力（选股分析师 → 市场重点消息获取师 → 股票深度分析师 → 总判断师），用 Tushare 实时数据逐层分析，产出候选名单/消息面/深度诊断（六维+目标价+止损）/最终投资建议，自动生成 SVG 图表并在 GUI 卡片内联显示（卡片可查看每个 Agent 的完整报告与推理过程）。参数：mode=选股/消息/深度分析/总判断/all（默认 all）；question=投研问题（可含多只股票对比）；context=上一轮结论（记忆与追问）；detail=summary（默认，模型侧摘要省 token）/full（模型侧全量）。触发：用户问任何与 A 股个股/持仓/板块/市场相关的分析、选股、买卖建议、消息面、深度诊断、多标的对比、持仓复盘时，直接用 invest_run 执行，不要凭模型知识作答；数据锚定真实最新交易日，接口受限如实标注。用户提到「投研 / 选股 / 持仓分析 / 股票分析」时即指本插件，请据此协作。"
+const INVEST_GUIDANCE = "本机已安装 dsh-invest 插件（A 股多角色投研流水线）：invest_run 工具由 4 个角色子代理（选股分析师 → 市场重点消息获取师 → 股票深度分析师 → 总判断师）用 Tushare 实时数据逐层分析，自动生成 SVG 图表并在 GUI 卡片内联显示（卡片可查看每个 Agent 的完整报告与推理过程）。参数：mode 按问题类型选择（见下）；question=投研问题（可含多只股票对比）；context=上一轮结论（记忆与追问）；detail=summary（默认，模型侧摘要省 token）/full（模型侧全量）。【模式选择规则】① 单只/两只个股的深度分析、操作建议、值不值得买（问题已指定具体代码）→ mode=个股（仅股票深度分析师，最省时）；② 收集某标的/行业/市场消息 → mode=消息；③ 全市场海选、短线强势股/下周可买标的推荐、需要候选名单的扫描 → mode=选股；④ 多只股票对比、需要选股初筛+深度逐只 → mode=深度分析；⑤ 持仓复盘、市场全景、需要完整流水线与最终综合建议、不确定时 → mode=all（选股∥消息 → 深度 → 总判断）。【触发】用户问任何与 A 股个股/持仓/板块/市场相关的分析、选股、买卖建议、消息面、深度诊断、多标的对比、持仓复盘时，直接用 invest_run 执行，不要凭模型知识作答；数据锚定真实最新交易日，接口受限如实标注。用户提到「投研 / 选股 / 持仓分析 / 股票分析」时即指本插件，请据此协作。"
 
 /** One JSON response. */
 function writeJson(res, status, body) {
@@ -147,7 +147,7 @@ function apply(ctx) {
 
   const tool = defineTool({
     name: "invest_run",
-    description: "运行多角色投研流水线。mode 取值：选股/消息/深度分析/总判断/all。question 为用户投研问题（可含多只股票）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。数据用 Tushare 实时获取。",
+    description: "运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）。question 为用户投研问题（可含多只股票）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。数据用 Tushare 实时获取。",
     parameters: { type: "object", properties: { mode: { type: "string", description: "运行模式" }, question: { type: "string", description: "用户投研问题（可含多只股票）" }, context: { type: "string", description: "可选：上一轮分析结论/追问背景，让本轮分析有记忆" }, detail: { type: "string", description: "可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理" } }, required: ["mode", "question"] },
     output: {
       schema: { type: "object", additionalProperties: true },
@@ -195,6 +195,7 @@ function apply(ctx) {
       const R = (persona) => ({ persona })
       let groups = []
       switch (mode) {
+        case "个股": groups = [[R(P_DEEP)]]; break
         case "选股": groups = [[R(P_SELECT)]]; break
         case "消息": groups = [[R(P_NEWS)]]; break
         case "深度分析": groups = [[R(P_SELECT)], [R(P_DEEP)]]; break
