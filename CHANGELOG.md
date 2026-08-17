@@ -2,6 +2,29 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.12.1（2026-08-17）
+
+- **统一对外输出**：每轮分析自动生成 `invest-outputs\<时间戳>_<问题>\`（`报告.md` + `图表\` SVG 副本），历史报告与图片集中可查
+- 工作区目录整理：部署脚本归 `deploy/`、调试产物归 `archive/`、文档归 `docs/`（配合 DSH 工作区整理）
+
+## v0.12.0（2026-08-17）
+
+- **常规插件化**：新增 `packages/dsh-invest` 常规 Cordis 插件包（profile bundle 挂载）
+  - 安装：`dsh plugin --profile web add link:<本包路径>`，一次安装**所有会话共享**
+  - Host：`invest_run` 工具 + `systemPrompt.section` agent 指引（新会话自动知道何时调用）+ `/api/dsh-invest/*` 路由
+  - Client：GUI 工具卡片（fetch 走路由，替代动态插件的 host.call）
+- **detail 开关**：`summary`（默认，模型侧 2500 字摘要，省 ~70% token）/ `full`（模型侧全量）——GUI 卡片始终显示完整报告
+- 完整报告与推理过程经 presentationMeta（tool-private）传递，不占模型 token
+
+## v0.11.0（2026-08-16）
+
+- render 输出紧凑摘要（每阶段 2500 字），完整报告改走 meta 通道（省 token，卡片体验不变）
+
+## v0.10.0（2026-08-16）
+
+- **每个 Agent 输出完整可见**：卡片分阶段标签页（完整报告不截断）+ 💭 推理过程折叠区
+- 推理过程（reasoning）提取后经 meta 通道展示并写入归档文件
+
 ## v0.9.0（2026-08-16）
 
 - **多标的批量**：问题含多只股票时选股师逐一取数分析、深度师逐只输出 + 对比结论（实测长江电力 vs 中国平安）
