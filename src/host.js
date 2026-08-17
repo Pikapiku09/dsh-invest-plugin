@@ -12,6 +12,7 @@ return {
     const CACHE_DIR = 'E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/cache'
     const TRADE_CACHE = CACHE_DIR + '/last-trade-date.json'
     const REPORTS_DIR = 'E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/reports'
+    const OUTPUT_ROOT = 'E:/Dsh_WorkSapce/Dify_Agents/invest-outputs'
     const MAX_CHARTS = 6
     const z2 = (n) => (n < 10 ? '0' : '') + n
     const localYmd = () => { const d = new Date(); return '' + d.getFullYear() + z2(d.getMonth() + 1) + z2(d.getDate()) }
@@ -248,6 +249,62 @@ return {
           }
         } else {
           reportError = 'fs unavailable'
+        }
+        // 对外统一输出：invest-outputs/<时间戳>_<问题关键词>/（报告.md + 图表/ 副本）
+        if (fs !== undefined) {
+          try {
+            const d = new Date()
+            const stamp = localYmd() + '_' + z2(d.getHours()) + z2(d.getMinutes())
+            const qkey = String(question).replace(/[^\w\u4e00-\u9fa5]+/g, '_').slice(0, 16) || 'query'
+            const outDir = OUTPUT_ROOT + '/' + stamp + '_' + qkey
+            const outLines = []
+            outLines.push('# 投研流水线报告')
+            outLines.push('')
+            outLines.push('- 模式：' + mode)
+            outLines.push('- 时间：' + stamp)
+            outLines.push('- 问题：' + question)
+            if (context) { outLines.push('- 上下文：' + context.slice(0, 200).replace(/\n/g, ' ')) }
+            for (const o of outputs) {
+              outLines.push('')
+              outLines.push('## ' + o.stage + (o.ok ? '（耗时 ' + (o.elapsedMs / 1000).toFixed(1) + 's' + (o.retried ? '，含重试' : '') + '）' : '（失败）'))
+              outLines.push('')
+              outLines.push(o.ok ? o.text : ('错误：' + o.error))
+              if (o.ok && o.reasoning) {
+                outLines.push('')
+                outLines.push('### 推理过程')
+                outLines.push('')
+                outLines.push(o.reasoning)
+              }
+            }
+            outLines.push('')
+            outLines.push('## 图表')
+            if (allCharts.size) {
+              for (const c of Array.from(allCharts)) outLines.push('- ' + c)
+            } else {
+              outLines.push('（本轮无图表）')
+            }
+            outLines.push('')
+            outLines.push('---')
+            outLines.push('仅供参考，不构成投资建议。')
+            const outReport = outDir + '/报告.md'
+            const outTarget = await fs.resolve(outReport)
+            await fs.writeText(outTarget, outLines.join('\n'), undefined, undefined, policy)
+            // 复制本轮 SVG 图表到 图表/ 子目录（同名 basename）
+            const chartNames = []
+            for (const c of Array.from(allCharts)) {
+              try {
+                const src = await fs.resolve(c)
+                const svg = await fs.readText(src)
+                const base = String(c).split('/').pop()
+                const dst = await fs.resolve(outDir + '/图表/' + base)
+                await fs.writeText(dst, svg, undefined, undefined, policy)
+                chartNames.push(base)
+              } catch (e) { /* 单张图表复制失败不阻断 */ }
+            }
+            reports.push(outReport + (chartNames.length ? '（图表 ' + chartNames.length + ' 张）' : ''))
+          } catch (e) {
+            reportError = String(e).slice(0, 300)
+          }
         }
         return { mode, stages: outputs.map(o => o.stage), charts: Array.from(allCharts), reports, reportError, outputs }
       },

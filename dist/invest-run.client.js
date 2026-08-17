@@ -1,6 +1,6 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.client 函数体
-// 生成时间：2026-08-16T16:33:56.271Z
+// 生成时间：2026-08-17T04:52:36.735Z
 
 // DSH 动态插件 Client 半部（invest_run 专属工具卡片：分阶段标签页 + 推理过程折叠 + 图表渲染/放大 + Markdown 表格）
 // 由 tools/build.js 复制为 dist/invest-run.client.js
