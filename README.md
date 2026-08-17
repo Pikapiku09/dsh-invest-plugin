@@ -1,6 +1,6 @@
 # dsh-invest-plugin
 
-DSH（DeepSeek Harness）**多角色 A 股投研流水线插件**：`invest_run` 工具由 4 个角色子代理接力完成投研分析，每个角色通过自己的 `pwsh` 工具调用 Tushare Pro API 实时取数，产出逐层传递，最终给出综合投资建议。GUI 聊天区显示专属工具卡片：阶段进度实时可见、每个 Agent 的完整报告与推理过程可展开、SVG 图表内联渲染并可点击放大。
+DSH（DeepSeek Harness）**多角色 A 股投研chatflow插件**：`invest_run` 工具由 4 个角色子代理接力完成投研分析，每个角色通过自己的 `pwsh` 工具调用 Tushare Pro API 实时取数，产出逐层传递，最终给出综合投资建议。GUI 聊天区显示专属工具卡片：阶段进度实时可见、每个 Agent 的完整报告与推理过程可展开、SVG 图表内联渲染并可点击放大。
 
 ```
 用户提问
