@@ -26,5 +26,8 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
-  ]
+  ],
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1"
+  }
 }

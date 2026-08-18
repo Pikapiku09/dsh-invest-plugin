@@ -59,16 +59,20 @@ dsh-invest-plugin/
 # 1. 进入插件仓库
 cd E:\Dsh_WorkSapce\Dify_Agents\dsh-invest-plugin
 
-# 2. 安装到 web profile（pnpm link 方式，后续改代码即时生效）
+# 2. 链接 peer 依赖（重要！link 安装的包真实路径在 profile 树外，
+#    Node 无法自动找到 @deepseek-ai/* 依赖，必须先执行本脚本）
+powershell -ExecutionPolicy Bypass -File scripts\link-deps.ps1
+
+# 3. 安装到 web profile（pnpm link 方式，后续改代码即时生效）
 dsh plugin --profile web add "link:E:\Dsh_WorkSapce\Dify_Agents\dsh-invest-plugin\packages\dsh-invest"
 
-# 3. 确认 bundles 已包含 dsh-invest（pnpm add 会自动追加）
+# 4. 确认 bundles 已包含 dsh-invest（pnpm add 会自动追加）
 #    检查 C:\Users\<你>\.dsh\profiles\web\package.json → dsh.profile.bundles 应有 "dsh-invest"
 
-# 4. 验证组合树中出现 invest 行
+# 5. 验证组合树中出现 invest 行
 dsh --profile web --dump-config   # 应看到：- id: invest / name: dsh-invest
 
-# 5. 重启 DSH（dsh web）
+# 6. 重启 DSH（dsh web）
 ```
 
 重启后即可使用：新会话里直接提问投研问题，Agent 会自动调用 `invest_run`。
