@@ -63,17 +63,26 @@ cd E:\Dsh_WorkSapce\Dify_Agents\dsh-invest-plugin
 #    Node 无法自动找到 @deepseek-ai/* 依赖，必须先执行本脚本）
 powershell -ExecutionPolicy Bypass -File scripts\link-deps.ps1
 
-# 3. 安装到 web profile（pnpm link 方式，后续改代码即时生效）
-dsh plugin --profile web add "link:E:\Dsh_WorkSapce\Dify_Agents\dsh-invest-plugin\packages\dsh-invest"
+# 3. 在 profile 的 node_modules 建立包链接（若不存在）
+#    检查 C:\Users\<你>\.dsh\profiles\web\node_modules\dsh-invest 是否存在；
+#    不存在则执行：
+#    New-Item -ItemType Junction -Path C:\Users\<你>\.dsh\profiles\web\node_modules\dsh-invest `
+#      -Target E:\Dsh_WorkSapce\Dify_Agents\dsh-invest-plugin\packages\dsh-invest
 
-# 4. 确认 bundles 已包含 dsh-invest（pnpm add 会自动追加）
-#    检查 C:\Users\<你>\.dsh\profiles\web\package.json → dsh.profile.bundles 应有 "dsh-invest"
+# 4. 在 profile 用户层 patch 挂载插件行（独立于 bundles，永久生效）
+#    编辑 C:\Users\<你>\.dsh\profiles\web\cordis.patch.yml，追加：
+#    - insert:
+#        - id: invest
+#          name: 'dsh-invest'
 
 # 5. 验证组合树中出现 invest 行
 dsh --profile web --dump-config   # 应看到：- id: invest / name: dsh-invest
 
 # 6. 重启 DSH（dsh web）
 ```
+
+> 为什么不推荐 `dsh plugin add`：pnpm 对 `link:` 依赖的自动追加（dependencies/bundles）可能被
+> 后续 pnpm 操作覆盖丢失；用户层 `cordis.patch.yml` 在每次启动的 bundle 层之后应用，最稳定。
 
 重启后即可使用：新会话里直接提问投研问题，Agent 会自动调用 `invest_run`。
 **卸载**：`dsh plugin --profile web remove dsh-invest` 后重启。
