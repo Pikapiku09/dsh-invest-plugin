@@ -1,23 +1,27 @@
 # dsh-invest-plugin
 
-DSH（DeepSeek Harness）**多角色 A 股投研chatflow插件**：`invest_run` 工具由 4 个角色子代理接力完成投研分析，每个角色通过自己的 `pwsh` 工具调用 Tushare Pro API 实时取数，产出逐层传递，最终给出综合投资建议。GUI 聊天区显示专属工具卡片：阶段进度实时可见、每个 Agent 的完整报告与推理过程可展开、SVG 图表内联渲染并可点击放大。
+DSH（DeepSeek Harness）**多角色 A 股投研流水线插件**：`invest_run` 工具由 4 个角色子代理接力完成投研分析，每个角色通过自己的 `pwsh` 工具调用 Tushare Pro API 实时取数，产出逐层传递，最终给出综合投资建议。GUI 聊天区显示专属工具卡片：阶段进度实时可见、每个 Agent 的完整报告与推理过程可展开、SVG 图表内联渲染并可点击放大。
 
 ```
 用户提问
   └─ invest_run 工具
        ├─ ① 选股分析师       （全市场扫描 / 指定个股 / 多标的对比 → 候选名单+交易计划）
        ├─ ② 市场重点消息获取师 （消息面收集 + 可信度核验）
-       ├─ ③ 股票深度分析师     （六维诊断 + L1-L4 目标价 + 分级止损）
+       ├─ ③ 股票深度分析师     （六维诊断 + L1-L4 目标价 + 分级止损 + 九转序列 + MACD 背离）
        └─ ④ 总判断师          （综合三份上游 → 最终投资决策建议）
 ```
 
-**当前版本：v0.12.1**
+**当前版本：v0.13.0**
 
 ---
 
 ## 功能特性
 
-- 5 种运行模式：`选股` / `消息` / `深度分析` / `总判断` / `all`（默认，选股∥消息并行执行）
+- 6 种运行模式：`个股`（单股深度分析，最常用）/ `选股` / `消息` / `深度分析` / `总判断` / `all`（选股∥消息并行执行）
+- **模式自动路由**：Agent 按问题类型自动选择——单股分析→`个股`；全市场海选/短线推荐→`选股`；消息收集→`消息`；多标的对比→`深度分析`；持仓复盘/完整决策→`all`
+- **九转序列（TD Sequential）**：深度师计算序列计数（1-9，9 为衰竭点）并标注在 K 线图上
+- **MACD 顶/底背离**：检测并标注背离点（价格创新高而指标走低 / 价格创新低而指标抬高），纳入评分与风险提示
+- **图表强制规范**：标题/图例/坐标必备；走势图标注目标止盈价（L1/L2）、止损价、支撑位、阻力位；每轮至少生成走势图 + 九转序列图 + MACD 背离图
 - **全上游传递**：总判断师可见选股 + 消息 + 深度三份完整产出（各阶段输出与推理过程可在 GUI 卡片分阶段查看）
 - **detail 开关**：`summary`（默认，模型侧摘要、省 ~70% token）/ `full`（模型侧全量）——GUI 卡片始终显示完整报告
 - **context 记忆追问**：传入上一轮结论，支持"接着上次的分析继续/对比"式对话
@@ -32,13 +36,17 @@ DSH（DeepSeek Harness）**多角色 A 股投研chatflow插件**：`invest_run` 
 
 ```
 dsh-invest-plugin/
-├── packages/dsh-invest/   # ★ 常规 Cordis 插件包（推荐安装方式，profile bundle 挂载）
+├── packages/dsh-invest/   # ★ 常规 Cordis 插件包（推荐安装方式，profile 挂载）
 │   ├── package.json       #    dsh.bundle.patch 声明 + dsh.client 声明
 │   ├── cordis.patch.yml   #    插件行：- id: invest, name: dsh-invest
 │   └── lib/
 │       ├── index.js       #    Host 半部：invest_run 工具 + /api/dsh-invest 路由 + agent 指引
 │       ├── client.js      #    Client 半部：GUI 工具卡片（分阶段标签/推理/图表）
 │       └── prompts.js     #    4 角色 System Prompt（纯数据，可改）
+├── scripts/               # 运维脚本
+│   ├── link-deps.ps1      #    一键链接 peer 依赖（安装必需）
+│   ├── disable-plugin.ps1 #    应急禁用（崩溃时 30 秒恢复工作台）
+│   └── enable-plugin.ps1  #    重新启用
 ├── src/                   # 动态插件形态源码（与 packages 同源）
 │   ├── prompts.js / host.js / client.js
 ├── dist/                  # 动态插件形态产物（build 生成，可粘贴 cordis_define）
@@ -63,11 +71,12 @@ cd E:\Dsh_WorkSapce\Dify_Agents\dsh-invest-plugin
 #    Node 无法自动找到 @deepseek-ai/* 依赖，必须先执行本脚本）
 powershell -ExecutionPolicy Bypass -File scripts\link-deps.ps1
 
-# 3. 在 profile 的 node_modules 建立包链接（若不存在）
-#    检查 C:\Users\<你>\.dsh\profiles\web\node_modules\dsh-invest 是否存在；
-#    不存在则执行：
-#    New-Item -ItemType Junction -Path C:\Users\<你>\.dsh\profiles\web\node_modules\dsh-invest `
-#      -Target E:\Dsh_WorkSapce\Dify_Agents\dsh-invest-plugin\packages\dsh-invest
+# 3. 把 dsh-invest 写入 profile 的 dependencies（关键！防止 pnpm 把链接当孤儿清理）
+#    编辑 C:\Users\<你>\.dsh\profiles\web\package.json，在 dependencies 加入：
+#    "dsh-invest": "link:E:\Dsh_WorkSapce\Dify_Agents\dsh-invest-plugin\packages\dsh-invest"
+#    然后在 profile 目录执行 pnpm install（lockfile 会记录该链接，pnpm 从此受管维护）
+cd C:\Users\<你>\.dsh\profiles\web
+pnpm install
 
 # 4. 在 profile 用户层 patch 挂载插件行（独立于 bundles，永久生效）
 #    编辑 C:\Users\<你>\.dsh\profiles\web\cordis.patch.yml，追加：
@@ -82,7 +91,7 @@ dsh --profile web --dump-config   # 应看到：- id: invest / name: dsh-invest
 ```
 
 > 为什么不推荐 `dsh plugin add`：pnpm 对 `link:` 依赖的自动追加（dependencies/bundles）可能被
-> 后续 pnpm 操作覆盖丢失；用户层 `cordis.patch.yml` 在每次启动的 bundle 层之后应用，最稳定。
+> 后续 pnpm 操作覆盖丢失；正确姿势是手动写入 dependencies + 用户层 `cordis.patch.yml` 双保险。
 
 重启后即可使用：新会话里直接提问投研问题，Agent 会自动调用 `invest_run`。
 **卸载**：`dsh plugin --profile web remove dsh-invest` 后重启。
@@ -122,7 +131,7 @@ dsh --profile web --dump-config   # 应看到：- id: invest / name: dsh-invest
 Agent 自动调用 `invest_run(mode="个股", question="请对长江电力(600900.SH)做深度分析，给出操作建议")` ——
 仅运行「股票深度分析师」一个角色（约 2-4 分钟，不需要选股/消息/总判断），之后你得到：
 
-1. **聊天区工具卡片**：深度师完整报告（蜡烛图检查/六维诊断/财务估值/L1-L4 目标价/分级止损/多空理由）+ 💭 推理过程折叠区 + 图表可点击放大
+1. **聊天区工具卡片**：深度师完整报告（蜡烛图检查/六维诊断/财务估值/L1-L4 目标价/分级止损/**九转序列与 MACD 背离**/多空理由）+ 💭 推理过程折叠区 + 图表可点击放大
 2. **深度分析结论**：如 *"长江电力 2026Q1 净利 +30.5% 业绩加速、PE_TTM 19.05 处历史中位偏上；缩量企稳未确认，评级 B+ 中性偏多；27.5-27.8 分批低吸、止损 27.0、第一目标 29.6；8 月底中报为方向验证点"*
 3. **统一归档**：`invest-outputs\<时间戳>_请对长江电力...\`（`报告.md` + `图表\`）
 
@@ -158,7 +167,7 @@ Agent 自动调用 `invest_run(mode="选股", ...)`（全市场海选）或 `mod
 
 ## 版本
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.12.1**。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.13.0**（GitHub tag: `v0.13.0`）。
 
 ## 免责声明
 
