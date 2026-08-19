@@ -1,4 +1,4 @@
-# dsh-invest 一键禁用（应急回退）：把 profile 用户层 patch 恢复为空数组，
+﻿# dsh-invest 一键禁用（应急回退）：把 profile 用户层 patch 恢复为空数组，
 # 插件行不再挂载 → DSH 可正常启动。数据（缓存/报告/输出）不受影响。
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\disable-plugin.ps1
 $ErrorActionPreference = 'Stop'

@@ -1,4 +1,4 @@
-# dsh-invest 一键启用（恢复挂载）：把插件行写回 profile 用户层 patch。
+﻿# dsh-invest 一键启用（恢复挂载）：把插件行写回 profile 用户层 patch。
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\enable-plugin.ps1
 $ErrorActionPreference = 'Stop'
 $patch = Join-Path $env:USERPROFILE '.dsh\profiles\web\cordis.patch.yml'
