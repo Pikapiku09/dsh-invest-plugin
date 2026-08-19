@@ -197,15 +197,15 @@ function apply(ctx) {
       const callId = String(exec.callId || "")
       const subs = ctx.get("subagents")
       if (subs === void 0) return { error: "subagents not mounted" }
-      const R = (persona) => ({ persona })
+      const R = (name, persona) => ({ name, persona })
       let groups = []
       switch (mode) {
-        case "个股": groups = [[R(P_DEEP)]]; break
-        case "选股": groups = [[R(P_SELECT)]]; break
-        case "消息": groups = [[R(P_NEWS)]]; break
-        case "深度分析": groups = [[R(P_SELECT)], [R(P_DEEP)]]; break
-        case "总判断": groups = [[R(P_SELECT), R(P_NEWS)], [R(P_DEEP)], [R(P_FINAL)]]; break
-        default: groups = [[R(P_SELECT), R(P_NEWS)], [R(P_DEEP)], [R(P_FINAL)]]
+        case "个股": groups = [[R("股票深度分析师", P_DEEP)]]; break
+        case "选股": groups = [[R("选股分析师", P_SELECT)]]; break
+        case "消息": groups = [[R("市场重点消息获取师", P_NEWS)]]; break
+        case "深度分析": groups = [[R("选股分析师", P_SELECT)], [R("股票深度分析师", P_DEEP)]]; break
+        case "总判断": groups = [[R("选股分析师", P_SELECT), R("市场重点消息获取师", P_NEWS)], [R("股票深度分析师", P_DEEP)], [R("总判断师", P_FINAL)]]; break
+        default: groups = [[R("选股分析师", P_SELECT), R("市场重点消息获取师", P_NEWS)], [R("股票深度分析师", P_DEEP)], [R("总判断师", P_FINAL)]]
       }
       const setProgress = (p) => { progressStore[callId] = Object.assign({ updatedAt: Date.now() }, p) }
       setProgress({ stage: "", index: 0, total: groups.length, status: "init", done: [] })
