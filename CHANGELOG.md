@@ -7,6 +7,10 @@
 - **修复：阶段子代理无法启动（tools.restrict() 校验失败）**——`toolFilter.deny` 中移除本运行时不存在的工具名（`subagent_report`/`subagent_control`/`cordis_*`），仅保留实际存在的工具，流水线全角色恢复正常
 - **新增：开仓强制Checklist 闸门**——「选股分析师（候选硬约束：单票≤25%+止损位）/ 股票深度分析师 / 总判断师」三个角色在给出任何"建议买入/加仓"结论前，必须输出完整 Checklist（仓位/板块/止损/止盈/频率/追高/基本面/心理 8 项）并过闸，任一栏"拒绝"则结论强制为"拒绝买入"；账户类数据只能来自用户提供，严禁编造
 - **文档入库**：`docs/` 新增《开仓前强制Checklist》《交易铁律》《月度复盘模板》三份个人交易纪律文档（与闸门同源）
+- **修复：行情缓存 key 碰撞**——缓存文件命名由 `<接口>_<ts_code>_<end_date>.json` 改为 `<接口>_<ts_code>_<end_date>_<start_date或na>.json`，避免同一标的同日不同查询区间（如 60 日 vs 120 日）互相覆盖、下游误用错误区间数据
+- **修复：报告/输出目录覆盖**——`reports/` 与 `invest-outputs/` 时间戳加秒 + 4 位随机后缀，同一分钟内多次运行不再互相覆盖
+- **修复：progressStore 内存泄漏**——execute 主体包 `try/finally`，流水线结束（无论成败）即清理进度条目
+- **安全加固**：`.gitignore` 忽略 `*.token` / `.dsh-invest/` / `invest-outputs/`（防 Tushare token 与运行时数据入库）
 
 ## v0.13.0（2026-08-17）
 

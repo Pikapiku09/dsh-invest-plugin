@@ -1,3 +1,20 @@
+# 依赖
 node_modules/
+
+# 日志与系统文件
 *.log
 .DS_Store
+
+# 敏感信息：Tushare token（任意位置、任意命名）
+*.token
+*.token.txt
+*.secret
+
+# 运行时数据目录（缓存 / 报告 / 图表 / 输出）
+.dsh-invest/
+invest-outputs/
+
+# 本地临时与 IDE
+*.tmp
+.idea/
+.vscode/

@@ -132,6 +132,7 @@ return {
         const question = args.question
         const context = typeof args.context === 'string' && args.context.trim() ? args.context.trim().slice(0, 4000) : ''
         const callId = String(exec.callId || '')
+        try {
         const subs = ctx.get('subagents')
         if (subs === undefined) return { error: 'subagents not mounted' }
         const R = (name, persona) => ({ name, persona })
@@ -247,7 +248,7 @@ return {
         if (fs !== undefined) {
           try {
             const d = new Date()
-            const stamp = localYmd() + '_' + z2(d.getHours()) + z2(d.getMinutes())
+            const stamp = localYmd() + '_' + z2(d.getHours()) + z2(d.getMinutes()) + z2(d.getSeconds()) + '_' + Math.random().toString(36).slice(2, 6)
             const qkey = String(question).replace(/[^\w\u4e00-\u9fa5]+/g, '_').slice(0, 16) || 'query'
             const reportPath = REPORTS_DIR + '/' + stamp + '_' + qkey + '.md'
             const lines = []
@@ -290,7 +291,7 @@ return {
         if (fs !== undefined) {
           try {
             const d = new Date()
-            const stamp = localYmd() + '_' + z2(d.getHours()) + z2(d.getMinutes())
+            const stamp = localYmd() + '_' + z2(d.getHours()) + z2(d.getMinutes()) + z2(d.getSeconds()) + '_' + Math.random().toString(36).slice(2, 6)
             const qkey = String(question).replace(/[^\w\u4e00-\u9fa5]+/g, '_').slice(0, 16) || 'query'
             const outDir = OUTPUT_ROOT + '/' + stamp + '_' + qkey
             const outLines = []
@@ -343,6 +344,10 @@ return {
           }
         }
         return { mode, stages: outputs.map(o => o.stage), charts: Array.from(allCharts), reports, reportError, outputs }
+        } finally {
+          // 防内存泄漏：流水线结束（无论成败）即清理进度条目
+          if (callId) delete progressStore[callId]
+        }
       },
     })
     harness.registerTool(ctx, tool)
