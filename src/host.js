@@ -205,10 +205,8 @@ return {
                 // 禁止阶段子代理递归：移除子代理/流水线/cordis 类工具
                 toolFilter: {
                   deny: [
-                    'invest_run', 'subagent', 'subagent_fork', 'subagent_report', 'subagent_control',
+                    'invest_run', 'subagent', 'subagent_fork',
                     'send_message', 'interrupt_agent', 'list_agents', 'ralph', 'workflow',
-                    'cordis_define', 'cordis_run', 'cordis_stop', 'cordis_undefine',
-                    'cordis_inspect_list', 'cordis_inspect_query', 'cordis_inspect_self',
                   ],
                 },
               })

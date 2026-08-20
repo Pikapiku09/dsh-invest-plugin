@@ -270,10 +270,8 @@ function apply(ctx) {
               // 子代理只能用自己的 pwsh/read 等取数工具，不能再 spawn 子代理或调用 invest_run
               toolFilter: {
                 deny: [
-                  "invest_run", "subagent", "subagent_fork", "subagent_report", "subagent_control",
+                  "invest_run", "subagent", "subagent_fork",
                   "send_message", "interrupt_agent", "list_agents", "ralph", "workflow",
-                  "cordis_define", "cordis_run", "cordis_stop", "cordis_undefine",
-                  "cordis_inspect_list", "cordis_inspect_query", "cordis_inspect_self",
                 ],
               },
             })
