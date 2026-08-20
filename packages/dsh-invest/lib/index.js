@@ -236,6 +236,16 @@ function apply(ctx) {
               parent: exec.agent,
               signal: exec.signal,
               persona: s.persona,
+              // 关键：禁止阶段子代理递归——移除所有子代理/流水线/cordis 类工具，
+              // 子代理只能用自己的 pwsh/read 等取数工具，不能再 spawn 子代理或调用 invest_run
+              toolFilter: {
+                deny: [
+                  "invest_run", "subagent", "subagent_fork", "subagent_report", "subagent_control",
+                  "send_message", "interrupt_agent", "list_agents", "ralph", "workflow",
+                  "cordis_define", "cordis_run", "cordis_stop", "cordis_undefine",
+                  "cordis_inspect_list", "cordis_inspect_query", "cordis_inspect_self",
+                ],
+              },
             })
             const result = await run.result
             const both = extractBoth(result)
