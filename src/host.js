@@ -89,14 +89,8 @@ return {
 
     const tool = harness.defineTool({
       name: 'invest_run',
-      description: '运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）。question 为用户投研问题（可含多只股票）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。数据用 Tushare 实时获取。',
-      parameters: {     type: { type: "object" },         // ✅ 包装成 schema 对象
-    properties: {
-      mode: { type: { type: "string" }, description: "运行模式" },
-      question: { type: { type: "string" }, description: "用户投研问题（可含多只股票）" },
-      context: { type: { type: "string" }, description: "可选：上一轮分析结论/追问背景，让本轮分析有记忆" },
-      detail: { type: { type: "string" }, description: "可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理" }
-    },required: ['mode', 'question'] },
+      description: '运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）。question 为用户投研问题（可含多只股票）；roles 可选：自定义角色组合（如 [\'深度\',\'总判断\']，省略则按 mode 默认）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。数据用 Tushare 实时获取。',
+      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, roles: { type: 'array', items: { type: 'string' }, description: '可选：自定义角色组合，取值 [\'选股\',\'消息\',\'深度\',\'总判断\'] 的子集；省略则按 mode 默认角色' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' }, detail: { type: 'string', description: '可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理' } }, required: ['mode', 'question'] },
       output: {
         schema: { type: { type: "object" }, additionalProperties: true }, 
         render: (args, value) => {
@@ -141,16 +135,41 @@ return {
         const subs = ctx.get('subagents')
         if (subs === undefined) return { error: 'subagents not mounted' }
         const R = (name, persona) => ({ name, persona })
-        // 分组编排：A 组（选股+消息并行）→ B 组（深度）→ C 组（总判断）
-        let groups = []
-        switch (mode) {
-          case '个股': groups = [[R('股票深度分析师', P_DEEP)]]; break
-          case '选股': groups = [[R('选股分析师', P_SELECT)]]; break
-          case '消息': groups = [[R('市场重点消息获取师', P_NEWS)]]; break
-          case '深度分析': groups = [[R('选股分析师', P_SELECT)], [R('股票深度分析师', P_DEEP)]]; break
-          case '总判断': groups = [[R('选股分析师', P_SELECT), R('市场重点消息获取师', P_NEWS)], [R('股票深度分析师', P_DEEP)], [R('总判断师', P_FINAL)]]; break
-          default: groups = [[R('选股分析师', P_SELECT), R('市场重点消息获取师', P_NEWS)], [R('股票深度分析师', P_DEEP)], [R('总判断师', P_FINAL)]]
+        // 角色定义：简码 → { 显示名, persona }
+        const ROLE_MAP = {
+          '选股': R('选股分析师', P_SELECT),
+          '消息': R('市场重点消息获取师', P_NEWS),
+          '深度': R('股票深度分析师', P_DEEP),
+          '总判断': R('总判断师', P_FINAL),
         }
+        // 默认角色组合（按 mode）
+        const DEFAULT_ROLES = {
+          '个股': ['深度'],
+          '选股': ['选股'],
+          '消息': ['消息'],
+          '深度分析': ['选股', '深度'],
+          '总判断': ['选股', '消息', '深度', '总判断'],
+        }
+        // 由角色简码数组构建分组：①选股∥②消息 并行 → ③深度 → ④总判断（缺失跳过）
+        const buildGroups = (roleCodes) => {
+          const has = (c) => roleCodes.includes(c)
+          const groups = []
+          const a = []
+          if (has('选股')) a.push(ROLE_MAP['选股'])
+          if (has('消息')) a.push(ROLE_MAP['消息'])
+          if (a.length) groups.push(a)
+          if (has('深度')) groups.push([ROLE_MAP['深度']])
+          if (has('总判断')) groups.push([ROLE_MAP['总判断']])
+          return groups
+        }
+        let roleCodes
+        if (Array.isArray(args.roles) && args.roles.length) {
+          roleCodes = args.roles.filter((r) => ROLE_MAP[r])
+          if (!roleCodes.length) return { error: '无效的角色列表：' + JSON.stringify(args.roles) + '，可选：选股/消息/深度/总判断' }
+        } else {
+          roleCodes = DEFAULT_ROLES[mode] || DEFAULT_ROLES['总判断']
+        }
+        const groups = buildGroups(roleCodes)
         const setProgress = (p) => { progressStore[callId] = Object.assign({ updatedAt: Date.now() }, p) }
         setProgress({ stage: '', index: 0, total: groups.length, status: 'init', done: [] })
         const anchor = await readTradeCache()
