@@ -2,6 +2,10 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.14.2（2026-08-20）
+
+- **消息师 web_search 增强**：P_NEWS 新增指令——实时新闻优先走 `web_search` 工具（本机已装 modsearch/Firecrawl Keyless 引擎链，自带引用卡片），可多次搜索关键词交叉验证，补齐 Tushare `news` 接口 40203 无权限时的实时消息缺口；每条消息标注来源 URL 与日期时间、无法核实标注 `[未核实]`；消息面搜索用 web_search，行情/财务数据仍走 pwsh+Tushare 不变
+
 ## v0.14.1（2026-08-20）
 
 - **client fetch 超时**：图表/进度请求加 `AbortController` 10s 超时，图表超时显示「图表加载超时」而非无限等待（常规形态浏览器 fetch；动态形态 `host.call` 走 Cordis RPC 自身机制，不变）

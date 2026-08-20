@@ -11,7 +11,7 @@ DSH（DeepSeek Harness）**多角色 A 股投研流水线插件**：`invest_run`
        └─ ④ 总判断师          （综合三份上游 → 最终投资决策建议）
 ```
 
-**当前版本：v0.14.1**
+**当前版本：v0.14.2**
 
 ---
 
@@ -167,7 +167,7 @@ Agent 自动调用 `invest_run(mode="选股", ...)`（全市场海选）或 `mod
 
 ## 版本
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.14.1**（GitHub tag: `v0.14.1`）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.14.2**（GitHub tag: `v0.14.2`）。
 
 ## 免责声明
 
