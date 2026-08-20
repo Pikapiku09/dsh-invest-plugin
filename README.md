@@ -109,10 +109,10 @@ dsh --profile web --dump-config   # 应看到：- id: invest / name: dsh-invest
 
 | 配置项 | 位置 | 说明 |
 |---|---|---|
-| Tushare token | `E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/tushare.token` | 明文单行；在 [tushare.pro](https://tushare.pro) 个人中心获取后覆写即可 |
-| 图表工作区 | `E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/charts/` | 子代理生成的 SVG 图表（内部工作区） |
-| 行情缓存 | `E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/cache/` | 交易日锚点 + 行情响应缓存（当日有效） |
-| **对外统一输出** | **`E:/Dsh_WorkSapce/Dify_Agents/invest-outputs/`** | **每轮分析一个子目录 `<时间戳>_<问题>\`，含 `报告.md` + `图表\` 副本** |
+| Tushare token | `.dsh-invest/tushare.token` | 明文单行；在 [tushare.pro](https://tushare.pro) 个人中心获取后覆写即可 |
+| 图表工作区 | `.dsh-invest/charts/` | 子代理生成的 SVG 图表（内部工作区） |
+| 行情缓存 | `.dsh-invest/cache/` | 交易日锚点 + 行情响应缓存（当日有效） |
+| **对外统一输出** | **`invest-outputs/`** | **每轮分析一个子目录 `<时间戳>_<问题>\`，含 `报告.md` + `图表\` 副本** |
 
 > 路径写死在 `packages/dsh-invest/lib/index.js` 顶部常量中；迁移到其他机器时全局替换
 > `E:/Dsh_WorkSapce/Dify_Agents` 为你自己的目录即可（token、缓存、输出均在其下）。
