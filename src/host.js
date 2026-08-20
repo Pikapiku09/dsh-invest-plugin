@@ -1,6 +1,7 @@
 // DSH 动态插件 Host 半部（invest_run 工具 + 流水线编排）
-// 由 tools/build.js 与 src/prompts.js 合并生成 dist/invest-run.host.js（完整函数体）
-// 依赖：ctx（Cordis 受限上下文）、harness（DSH Host 内建）、PROMPTS（build 注入的提示词数据）
+// 由 tools/build.js 与 src/prompts.js、src/lib/pure.js 合并生成 dist/invest-run.host.js（完整函数体）
+// 依赖：ctx（Cordis 受限上下文）、harness（DSH Host 内建）、PROMPTS（build 注入的提示词数据）、
+//        pure.js 顶层函数（z2/localYmd/extractBoth/collectCharts/buildGroups，build 内联）
 
 const { P_SELECT, P_NEWS, P_DEEP, P_FINAL } = PROMPTS
 
@@ -9,37 +10,16 @@ return {
   apply(ctx) {
     const text = (s) => [{ type: 'text', text: String(s) }]
     const progressStore = {}
-    const CACHE_DIR = 'E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/cache'
+    // 工作区基目录：默认 E:/Dsh_WorkSapce/Dify_Agents，可用 DSH_INVEST_BASE_DIR 覆盖
+    const BASE_DIR = (typeof process !== 'undefined' && process.env && process.env.DSH_INVEST_BASE_DIR) || 'E:/Dsh_WorkSapce/Dify_Agents'
+    const CACHE_DIR = BASE_DIR + '/.dsh-invest/cache'
     const TRADE_CACHE = CACHE_DIR + '/last-trade-date.json'
-    const REPORTS_DIR = 'E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/reports'
-    const OUTPUT_ROOT = 'E:/Dsh_WorkSapce/Dify_Agents/invest-outputs'
+    const REPORTS_DIR = BASE_DIR + '/.dsh-invest/reports'
+    const OUTPUT_ROOT = BASE_DIR + '/invest-outputs'
+    const RUNS_LOG = BASE_DIR + '/.dsh-invest/runs.jsonl'
     const MAX_CHARTS = 6
-    const z2 = (n) => (n < 10 ? '0' : '') + n
-    const localYmd = () => { const d = new Date(); return '' + d.getFullYear() + z2(d.getMonth() + 1) + z2(d.getDate()) }
-
-    // 从子代理 result 提取纯文本与推理过程
-    const extractBoth = (raw) => {
-      let s = raw
-      if (typeof raw !== 'string') s = JSON.stringify(raw)
-      try {
-        const obj = JSON.parse(s)
-        if (obj && Array.isArray(obj.output)) {
-          const texts = obj.output.filter(b => b && b.type === 'text' && b.text).map(b => b.text)
-          const reasons = obj.output.filter(b => b && b.type === 'reasoning' && b.text).map(b => b.text)
-          if (texts.length) return { text: texts.join('\n'), reasoning: reasons.join('\n') }
-        }
-      } catch (e) { /* ignore */ }
-      return { text: s, reasoning: '' }
-    }
-
-    // 从文本中收集完整绝对路径的 SVG 图表
-    const collectCharts = (t) => {
-      const re = /E:[\\/][^\s"'<>]+?\.svg/gi
-      const set = new Set()
-      const m = String(t).match(re)
-      if (m) m.forEach(x => set.add(x.replace(/\\/g, '/')))
-      return Array.from(set)
-    }
+    // 提示词里的 {{BASE_DIR}} 占位符 → 实际基目录（token/缓存/图表路径）
+    const resolveDir = (t) => String(t).split('{{BASE_DIR}}').join(BASE_DIR)
 
     // Client→Host：按需读取图表 SVG（路径白名单）
     harness.handle('chart-content', async (args) => {
@@ -132,6 +112,14 @@ return {
         const question = args.question
         const context = typeof args.context === 'string' && args.context.trim() ? args.context.trim().slice(0, 4000) : ''
         const callId = String(exec.callId || '')
+        const runStart = Date.now()
+        let outputs = []
+        let allCharts = new Set()
+        let reports = []
+        // 沙箱策略提前解析（报告归档与运行日志共用）
+        const fs = ctx.get('fs')
+        const sp = ctx.get('sandboxPolicy')
+        const policy = (sp !== undefined && exec.agent !== undefined) ? sp.resolve({ session: exec.agent.session }) : undefined
         try {
         const subs = ctx.get('subagents')
         if (subs === undefined) return { error: 'subagents not mounted' }
@@ -151,18 +139,6 @@ return {
           '深度分析': ['选股', '深度'],
           '总判断': ['选股', '消息', '深度', '总判断'],
         }
-        // 由角色简码数组构建分组：①选股∥②消息 并行 → ③深度 → ④总判断（缺失跳过）
-        const buildGroups = (roleCodes) => {
-          const has = (c) => roleCodes.includes(c)
-          const groups = []
-          const a = []
-          if (has('选股')) a.push(ROLE_MAP['选股'])
-          if (has('消息')) a.push(ROLE_MAP['消息'])
-          if (a.length) groups.push(a)
-          if (has('深度')) groups.push([ROLE_MAP['深度']])
-          if (has('总判断')) groups.push([ROLE_MAP['总判断']])
-          return groups
-        }
         let roleCodes
         if (Array.isArray(args.roles) && args.roles.length) {
           roleCodes = args.roles.filter((r) => ROLE_MAP[r])
@@ -170,7 +146,7 @@ return {
         } else {
           roleCodes = DEFAULT_ROLES[mode] || DEFAULT_ROLES['总判断']
         }
-        const groups = buildGroups(roleCodes)
+        const groups = buildGroups(roleCodes, ROLE_MAP)
         const setProgress = (p) => { progressStore[callId] = Object.assign({ updatedAt: Date.now() }, p) }
         setProgress({ stage: '', index: 0, total: groups.length, status: 'init', done: [] })
         const anchor = await readTradeCache()
@@ -178,8 +154,6 @@ return {
           ? '【已缓存锚定】真实最新交易日 = ' + anchor + '（由流水线缓存提供，跳过 index_daily 锚定步骤，直接按此日期取数）'
           : '【交易日缓存为空】按日期锚定铁律完成 index_daily 锚定后，用 pwsh 执行 node -e 把 JSON {"date":"' + localYmd() + '","trade_date":"你的锚定结果YYYYMMDD"} 写入 ' + TRADE_CACHE + '（目录不存在先创建），供本日后续运行复用'
         const history = []
-        const outputs = []
-        const allCharts = new Set()
         const runStage = async (s) => {
           const t0 = Date.now()
           const parts = ['用户问题：' + question]
@@ -202,7 +176,7 @@ return {
                 prompt: [{ type: 'text', text: promptText }],
                 parent: exec.agent,
                 signal: exec.signal,
-                persona: s.persona,
+                persona: resolveDir(s.persona),
                 // 禁止阶段子代理递归：移除子代理/流水线/cordis 类工具
                 toolFilter: {
                   deny: [
@@ -240,11 +214,7 @@ return {
         }
         setProgress({ stage: '', index: groups.length, total: groups.length, status: 'final', done: outputs.filter(o => o.ok).map(o => ({ stage: o.stage, ms: o.elapsedMs })) })
         // 报告归档（显式携带会话 sandboxPolicy，否则 workspace-write 默认根不含工作区）
-        const reports = []
         let reportError = ''
-        const fs = ctx.get('fs')
-        const sp = ctx.get('sandboxPolicy')
-        const policy = (sp !== undefined && exec.agent !== undefined) ? sp.resolve({ session: exec.agent.session }) : undefined
         if (fs !== undefined) {
           try {
             const d = new Date()
@@ -347,6 +317,26 @@ return {
         } finally {
           // 防内存泄漏：流水线结束（无论成败）即清理进度条目
           if (callId) delete progressStore[callId]
+          // 结构化运行日志（尽力而为，失败不阻断主流程）
+          try {
+            if (fs !== undefined) {
+              const logLine = JSON.stringify({
+                ts: new Date().toISOString(),
+                mode,
+                question: String(question).slice(0, 200),
+                callId,
+                ok: outputs.length > 0 && outputs.every((o) => o.ok === true),
+                elapsedMs: Date.now() - runStart,
+                stages: outputs.map((o) => ({ stage: o.stage, ok: o.ok === true, ms: o.elapsedMs || 0 })),
+                charts: allCharts.size,
+                reports: reports.length,
+              }) + '\n'
+              const logTarget = await fs.resolve(RUNS_LOG)
+              let existing = ''
+              try { existing = await fs.readText(logTarget) } catch (e) { /* 首次不存在 */ }
+              await fs.writeText(logTarget, existing + logLine, undefined, undefined, policy)
+            }
+          } catch (e) { /* ignore */ }
         }
       },
     })

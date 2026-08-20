@@ -2,6 +2,14 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.14.0（2026-08-20）
+
+- **统一构建消灭源码重复**：新增 `src/lib/pure.js` 纯函数集合（`extractBoth`/`collectCharts`/`buildGroups`/`isLoopbackRequest`/`z2`/`localYmd`/`fmt`/`isSepRow`/`splitBlocks`），`tools/build.js` 一次构建产出四件套——`dist/`（动态形态，PROMPTS+pure 内联）+ `packages/dsh-invest/lib/prompts.js` + `packages/dsh-invest/lib/pure.js`（CJS→ESM 自动转换）；`packages/lib/index.js` 改为 import 共享模块，删除本地重复定义
+- **纯函数单元测试**：`test/pure.test.js` 覆盖 8 个纯函数 19 条用例，用 Node 内置 `node:test` 运行（`npm test`），零新增依赖（避免引入 vitest 依赖树被 pnpm supply-chain 策略拦截）
+- **结构化运行日志**：每次流水线结束（无论成败）向 `.dsh-invest/runs.jsonl` 追加一行 JSON（时间/mode/问题/阶段成败/各阶段耗时/图表数/报告数/总耗时），`try/finally` 内尽力而为不阻断主流程
+- **配置化最小化**：`DSH_INVEST_BASE_DIR` 环境变量覆盖工作区基目录（默认 `E:/Dsh_WorkSapce/Dify_Agents`）；提示词路径改用 `{{BASE_DIR}}` 占位符，Host 运行时替换，token/缓存/图表路径随基目录联动
+- **沙箱策略提前解析**：`fs`/`sandboxPolicy`/`policy` 提到 execute `try` 块外，供报告归档与运行日志共用，`outputs`/`allCharts`/`reports` 也提前以支撑 `finally` 日志
+
 ## v0.13.1（2026-08-20）
 
 - **修复：阶段子代理无法启动（tools.restrict() 校验失败）**——`toolFilter.deny` 中移除本运行时不存在的工具名（`subagent_report`/`subagent_control`/`cordis_*`），仅保留实际存在的工具，流水线全角色恢复正常
