@@ -2,6 +2,13 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.14.1（2026-08-20）
+
+- **client fetch 超时**：图表/进度请求加 `AbortController` 10s 超时，图表超时显示「图表加载超时」而非无限等待（常规形态浏览器 fetch；动态形态 `host.call` 走 Cordis RPC 自身机制，不变）
+- **分节优先 meta.stages**：卡片分节优先用 tool-private `meta.stages` 构造（阶段名/顺序/文本可信），旧调用无 meta 时回退到 render 文本 `=== 阶段名 ===` 正则切分——阶段名含特殊字符或文本被截断不再导致分节错位
+- **ROLE_MAP/DEFAULT_ROLES 提模块级**：角色定义与默认角色组合改为模块级常量（src 与 packages 同步），execute 不再每次调用重建
+- **chart 路由 startsWith 白名单**：`p.startsWith(CHARTS_DIR)` 强校验替代 `indexOf('.dsh-invest')/indexOf('charts')` 弱校验，只有 charts 目录内的 SVG 路径可被读取（动态 `chart-content` 与常规 `/api/dsh-invest/chart` 同步加固）
+
 ## v0.14.0（2026-08-20）
 
 - **统一构建消灭源码重复**：新增 `src/lib/pure.js` 纯函数集合（`extractBoth`/`collectCharts`/`buildGroups`/`isLoopbackRequest`/`z2`/`localYmd`/`fmt`/`isSepRow`/`splitBlocks`），`tools/build.js` 一次构建产出四件套——`dist/`（动态形态，PROMPTS+pure 内联）+ `packages/dsh-invest/lib/prompts.js` + `packages/dsh-invest/lib/pure.js`（CJS→ESM 自动转换）；`packages/lib/index.js` 改为 import 共享模块，删除本地重复定义

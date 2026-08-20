@@ -4,6 +4,23 @@ import { defineTool } from "@deepseek-ai/dsh-tools"
 import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL } from "./prompts.js"
 import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, z2, localYmd } from "./pure.js"
 
+const R = (name, persona) => ({ name, persona })
+// 角色定义：简码 → { 显示名, persona }（模块级常量，避免每次 execute 重建）
+const ROLE_MAP = {
+  "选股": R("选股分析师", P_SELECT),
+  "消息": R("市场重点消息获取师", P_NEWS),
+  "深度": R("股票深度分析师", P_DEEP),
+  "总判断": R("总判断师", P_FINAL),
+}
+// 默认角色组合（按 mode）
+const DEFAULT_ROLES = {
+  "个股": ["深度"],
+  "选股": ["选股"],
+  "消息": ["消息"],
+  "深度分析": ["选股", "深度"],
+  "总判断": ["选股", "消息", "深度", "总判断"],
+}
+
 /** Stable cordis plugin name. */
 const name = "invest"
 
@@ -39,6 +56,7 @@ function apply(ctx) {
   const REPORTS_DIR = BASE_DIR + "/.dsh-invest/reports"
   const OUTPUT_ROOT = BASE_DIR + "/invest-outputs"
   const RUNS_LOG = BASE_DIR + "/.dsh-invest/runs.jsonl"
+  const CHARTS_DIR = BASE_DIR + "/.dsh-invest/charts/"
   const MAX_CHARTS = 6
   // 提示词里的 {{BASE_DIR}} 占位符 → 实际基目录（token/缓存/图表路径）
   const resolveDir = (t) => String(t).split("{{BASE_DIR}}").join(BASE_DIR)
@@ -65,7 +83,7 @@ function apply(ctx) {
         if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
         const url = new URL(req.url ?? "/", "http://localhost")
         const p = queryParam(url, "path") ?? ""
-        if (!/\.svg$/i.test(p) || p.indexOf(".dsh-invest") < 0 || p.indexOf("charts") < 0) { writeJson(res, 400, { error: "denied" }); return }
+        if (!/\.svg$/i.test(p) || !p.startsWith(CHARTS_DIR)) { writeJson(res, 400, { error: "denied" }); return }
         const fs = ctx.get("fs")
         if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
         try {
@@ -164,22 +182,6 @@ function apply(ctx) {
       try {
       const subs = ctx.get("subagents")
       if (subs === void 0) return { error: "subagents not mounted" }
-      const R = (name, persona) => ({ name, persona })
-      // 角色定义：简码 → { 显示名, persona }
-      const ROLE_MAP = {
-        "选股": R("选股分析师", P_SELECT),
-        "消息": R("市场重点消息获取师", P_NEWS),
-        "深度": R("股票深度分析师", P_DEEP),
-        "总判断": R("总判断师", P_FINAL),
-      }
-      // 默认角色组合（按 mode）
-      const DEFAULT_ROLES = {
-        "个股": ["深度"],
-        "选股": ["选股"],
-        "消息": ["消息"],
-        "深度分析": ["选股", "深度"],
-        "总判断": ["选股", "消息", "深度", "总判断"],
-      }
       let roleCodes
       if (Array.isArray(args.roles) && args.roles.length) {
         roleCodes = args.roles.filter((r) => ROLE_MAP[r])

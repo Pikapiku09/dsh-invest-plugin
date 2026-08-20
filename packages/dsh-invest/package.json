@@ -1,7 +1,7 @@
 {
   "name": "dsh-invest",
   "description": "A 股多角色投研流水线常规插件：invest_run 工具（选股/消息/深度/总判断 4 角色子代理 + Tushare 实时数据 + 三级缓存 + 报告归档），GUI 工具卡片（分阶段标签 + 推理过程 + SVG 图表内联渲染）。Hot-pluggable — mounted via profile package.json bundles + dsh.bundle.patch, no dsh source changes.",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "type": "module",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

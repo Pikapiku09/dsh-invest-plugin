@@ -117,22 +117,26 @@ window.__ModuleLoader__.load({
           setCharts(paths.map((p) => ({ path: p, svg: null, err: null })));
           let dead = false;
           paths.forEach((p, i) => {
-            fetch("/api/dsh-invest/chart?path=" + encodeURIComponent(p)).then((r) => r.json()).then((res) => {
+            const ac = new AbortController();
+            const timer = setTimeout(() => ac.abort(), 10000);
+            fetch("/api/dsh-invest/chart?path=" + encodeURIComponent(p), { signal: ac.signal }).then((r) => r.json()).then((res) => {
               if (dead) return;
               setCharts((prev) => prev.map((c, j) => (j === i ? { path: p, svg: (res && typeof res.svg === "string") ? res.svg : null, err: (res && res.error) ? String(res.error) : null } : c)));
             }).catch((e) => {
               if (dead) return;
-              setCharts((prev) => prev.map((c, j) => (j === i ? { path: p, svg: null, err: String(e).slice(0, 140) } : c)));
-            });
+              setCharts((prev) => prev.map((c, j) => (j === i ? { path: p, svg: null, err: (e && e.name === "AbortError") ? "图表加载超时" : String(e).slice(0, 140) } : c)));
+            }).finally(() => clearTimeout(timer));
           });
           return () => { dead = true };
         }, [block, isDone]);
         React.useEffect(() => {
           if (isDone) return;
           const tick = () => {
-            fetch("/api/dsh-invest/progress?callId=" + encodeURIComponent(props.callId)).then((r) => r.json()).then((res) => {
+            const ac = new AbortController();
+            const timer = setTimeout(() => ac.abort(), 10000);
+            fetch("/api/dsh-invest/progress?callId=" + encodeURIComponent(props.callId), { signal: ac.signal }).then((r) => r.json()).then((res) => {
               if (res && !res.none) setProg(res);
-            }).catch(() => {});
+            }).catch(() => {}).finally(() => clearTimeout(timer));
           };
           tick();
           const stop = ctx.interval(tick, 2000);
@@ -142,8 +146,16 @@ window.__ModuleLoader__.load({
         const stages = (meta && Array.isArray(meta.stages)) ? meta.stages : [];
         const modeText = meta && typeof meta.mode === "string" ? meta.mode : "";
         const bodyText = isDone && Array.isArray(block.content) && block.content[0] && block.content[0].type === "text" ? block.content[0].text : "";
+        // 分节优先 meta.stages（阶段名/顺序/文本来自 tool-private 完整报告，可信）；
+        // 旧调用无 meta 时回退到 render 文本按 === 阶段名 === 分界切分
         const sections = [];
-        {
+        if (stages.length) {
+          for (let i = 0; i < stages.length; i++) {
+            const st = stages[i];
+            if (st && typeof st.stage === "string") sections.push({ key: st.stage, text: (typeof st.text === "string" && st.text) ? st.text : "" });
+          }
+        }
+        if (!sections.length) {
           const re = /=== ([^=\n]+?) ｜ [^=]*? ===\n/g;
           let m;
           let lastIdx = -1;

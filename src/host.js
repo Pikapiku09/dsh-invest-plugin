@@ -5,6 +5,23 @@
 
 const { P_SELECT, P_NEWS, P_DEEP, P_FINAL } = PROMPTS
 
+const R = (name, persona) => ({ name, persona })
+// 角色定义：简码 → { 显示名, persona }（模块级常量，避免每次 execute 重建）
+const ROLE_MAP = {
+  '选股': R('选股分析师', P_SELECT),
+  '消息': R('市场重点消息获取师', P_NEWS),
+  '深度': R('股票深度分析师', P_DEEP),
+  '总判断': R('总判断师', P_FINAL),
+}
+// 默认角色组合（按 mode）
+const DEFAULT_ROLES = {
+  '个股': ['深度'],
+  '选股': ['选股'],
+  '消息': ['消息'],
+  '深度分析': ['选股', '深度'],
+  '总判断': ['选股', '消息', '深度', '总判断'],
+}
+
 return {
   name: 'invest-run',
   apply(ctx) {
@@ -17,16 +34,17 @@ return {
     const REPORTS_DIR = BASE_DIR + '/.dsh-invest/reports'
     const OUTPUT_ROOT = BASE_DIR + '/invest-outputs'
     const RUNS_LOG = BASE_DIR + '/.dsh-invest/runs.jsonl'
+    const CHARTS_DIR = BASE_DIR + '/.dsh-invest/charts/'
     const MAX_CHARTS = 6
     // 提示词里的 {{BASE_DIR}} 占位符 → 实际基目录（token/缓存/图表路径）
     const resolveDir = (t) => String(t).split('{{BASE_DIR}}').join(BASE_DIR)
 
-    // Client→Host：按需读取图表 SVG（路径白名单）
+    // Client→Host：按需读取图表 SVG（路径白名单：必须位于 charts 目录内）
     harness.handle('chart-content', async (args) => {
       const fs = ctx.get('fs')
       if (fs === undefined) return { error: 'fs unavailable' }
       const p = args && typeof args.path === 'string' ? args.path : ''
-      if (!/\.svg$/i.test(p) || p.indexOf('.dsh-invest') < 0 || p.indexOf('charts') < 0) return { error: 'denied' }
+      if (!/\.svg$/i.test(p) || !p.startsWith(CHARTS_DIR)) return { error: 'denied' }
       try {
         const target = await fs.resolve(p)
         const svg = await fs.readText(target)
@@ -123,22 +141,6 @@ return {
         try {
         const subs = ctx.get('subagents')
         if (subs === undefined) return { error: 'subagents not mounted' }
-        const R = (name, persona) => ({ name, persona })
-        // 角色定义：简码 → { 显示名, persona }
-        const ROLE_MAP = {
-          '选股': R('选股分析师', P_SELECT),
-          '消息': R('市场重点消息获取师', P_NEWS),
-          '深度': R('股票深度分析师', P_DEEP),
-          '总判断': R('总判断师', P_FINAL),
-        }
-        // 默认角色组合（按 mode）
-        const DEFAULT_ROLES = {
-          '个股': ['深度'],
-          '选股': ['选股'],
-          '消息': ['消息'],
-          '深度分析': ['选股', '深度'],
-          '总判断': ['选股', '消息', '深度', '总判断'],
-        }
         let roleCodes
         if (Array.isArray(args.roles) && args.roles.length) {
           roleCodes = args.roles.filter((r) => ROLE_MAP[r])

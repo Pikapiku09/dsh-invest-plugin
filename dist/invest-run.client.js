@@ -1,6 +1,6 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.client 函数体
-// 生成时间：2026-08-20T07:36:11.410Z
+// 生成时间：2026-08-20T08:09:32.892Z
 
 // dsh-invest 纯函数集合（无副作用、无外部依赖，可独立单测）
 // 双形态共享：dist 由 tools/build.js 内联；packages/lib/pure.js 由 build.js 转换为 ESM 后 import
@@ -229,9 +229,16 @@ return {
       const stages = (meta && Array.isArray(meta.stages)) ? meta.stages : []
       const modeText = meta && typeof meta.mode === 'string' ? meta.mode : ''
       const bodyText = isDone && Array.isArray(block.content) && block.content[0] && block.content[0].type === 'text' ? block.content[0].text : ''
-      // 从 render 文本按 === 阶段名 ｜ 耗时 xxs === 分界切分各阶段完整报告
+      // 分节优先 meta.stages（阶段名/顺序/文本来自 tool-private 完整报告，可信）；
+      // 旧调用无 meta 时回退到 render 文本按 === 阶段名 === 分界切分
       const sections = []
-      {
+      if (stages.length) {
+        for (let i = 0; i < stages.length; i++) {
+          const st = stages[i]
+          if (st && typeof st.stage === 'string') sections.push({ key: st.stage, text: (typeof st.text === 'string' && st.text) ? st.text : '' })
+        }
+      }
+      if (!sections.length) {
         const re = /=== ([^=\n]+?) ｜ [^=]*? ===\n/g
         let m
         let lastIdx = -1
