@@ -248,6 +248,9 @@ function apply(ctx) {
         const parts = ["用户问题：" + question]
         if (context) parts.push("【对话上下文（记忆）】" + context + "\n请结合上述上下文继续分析，保持口径一致。")
         parts.push(anchorLine)
+        if (allCharts.size) {
+          parts.push("【上游图表（同类图表直接引用其完整绝对路径，严禁重复生成同类图）】" + Array.from(allCharts).join(" , "))
+        }
         for (const h of history) {
           parts.push("【" + h.stage + " 产出（请基于其继续，勿重复取数已覆盖内容）】\n" + h.text)
         }
