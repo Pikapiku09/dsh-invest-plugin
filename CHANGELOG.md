@@ -2,6 +2,16 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.14.3（2026-08-20）
+
+- **整合 Tushare 特色数据**（概念板块/资金流向/券商金股，均已实测打通）：
+  - DATA_BASE 新增「特色数据速查」行：`concept`（概念板块，必带 trade_date）/ `dc_index`（东财概念指数）/ `dc_member`（东财概念成分，必带 trade_date）/ `ths_index`·`ths_member`（同花顺概念）/ `moneyflow_dc`（东财个股资金流）/ `moneyflow_ind_dc`（东财板块资金流，content_type=行业/概念/地域）/ `moneyflow_ind_ths`·`moneyflow_ths`（同花顺板块/个股）/ `broker_recommend`（券商月度金股）
+  - **选股师**：新增金股池线索（`broker_recommend` 券商金股叠加筛选）与概念热度线索（`dc_index` 领涨 + `moneyflow_ind_dc` 概念资金流排名，挖掘热门题材龙头）
+  - **消息师**：主线资金量化补充升级为优先用 `moneyflow_ind_dc(content_type=概念)` + `dc_index` 识别题材主线
+  - **深度师**：资金面改用 `moneyflow_dc` 主力净流入，板块地位增加概念归属反查（`dc_member`/`ths_member`）
+  - 效率纪律调用上限同步纳入新接口（行情类个股各 1 次、指数与板块各 1 次）
+- 注：`concept_detail`/`broker_recommend_detail` 在 Tushare 不存在（40101），概念成分用 `ths_member`/`dc_member`，金股仅 `broker_recommend` 单接口（字段 month/broker/ts_code/name）
+
 ## v0.14.2（2026-08-20）
 
 - **消息师 web_search 增强**：P_NEWS 新增指令——实时新闻优先走 `web_search` 工具（本机已装 modsearch/Firecrawl Keyless 引擎链，自带引用卡片），可多次搜索关键词交叉验证，补齐 Tushare `news` 接口 40203 无权限时的实时消息缺口；每条消息标注来源 URL 与日期时间、无法核实标注 `[未核实]`；消息面搜索用 web_search，行情/财务数据仍走 pwsh+Tushare 不变
