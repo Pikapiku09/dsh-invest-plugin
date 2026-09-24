@@ -1,6 +1,6 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.client 函数体
-// 生成时间：2026-08-25T01:01:04.906Z
+// 生成时间：2026-09-24T02:30:08.397Z
 
 // dsh-invest 纯函数集合（无副作用、无外部依赖，可独立单测）
 // 双形态共享：dist 由 tools/build.js 内联；packages/lib/pure.js 由 build.js 转换为 ESM 后 import
@@ -260,7 +260,7 @@ return {
         const st = stages[i]
         const cls = 'invr-tab ' + (i === safeIdx ? 'active' : '') + (st ? (st.ok ? ' ok' : ' fail') : '')
         return React.createElement('span', { key: i, className: cls, onClick: () => setStageIdx(i) },
-          (i + 1) + '. ' + s.key + (st ? ' · ' + fmt(st.elapsedMs) : ''))
+          (i + 1) + '. ' + s.key + (st ? (st.route ? ' · ' + String(st.route).split('/').pop() : '') + ' · ' + fmt(st.elapsedMs) : ''))
       })
       const curSection = sections[safeIdx]
       // 优先使用 meta 携带的完整报告文本（tool-private，不进模型 token）；旧调用回退到 render 文本
@@ -275,7 +275,7 @@ return {
         } catch (e) { /* ignore */ }
         const doneList = (prog && Array.isArray(prog.done)) ? prog.done : []
         const doneBadges = doneList.map((d, i) => React.createElement('span', { key: 'd' + i, className: 'invr-tab ok' },
-          d.stage + ' · ' + fmt(d.ms)))
+          d.stage + (d.route ? ' · ' + String(d.route).split('/').pop() : '') + ' · ' + fmt(d.ms)))
         const line = (prog && typeof prog.total === 'number' && prog.total > 0)
           ? '进行中 ' + prog.index + '/' + prog.total + '：' + prog.stage
           : '子代理启动中…'
@@ -293,7 +293,7 @@ return {
         open ? React.createElement('div', null,
           charts.length ? React.createElement('div', { className: 'invr-charts' }, chartNodes) : null,
           curSection ? React.createElement('div', null,
-            React.createElement('div', { className: 'invr-stagehead' }, '【' + curSection.key + '】完整报告'),
+            React.createElement('div', { className: 'invr-stagehead' }, '【' + curSection.key + '】完整报告' + (stages[safeIdx] && stages[safeIdx].route ? ' · ' + String(stages[safeIdx].route).split('/').pop() : '')),
             React.createElement(StageBody, { text: curText, reasoning: curReasoning })) : null) : null,
         zoomIdx >= 0 && charts[zoomIdx] && charts[zoomIdx].svg !== null ? React.createElement('div', { className: 'invr-zoom', onClick: () => setZoomIdx(-1) },
           React.createElement('img', { className: 'invr-zoomimg', src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(charts[zoomIdx].svg), alt: charts[zoomIdx].path })) : null)
