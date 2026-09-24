@@ -2,6 +2,17 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.15.0（2026-09-17）
+
+- **异构模型路由（核心）**：4 个角色不再共用宿主会话模型。插件此前调用 `subs.start("spawn", …)` 从未传 `agentOptions`，运行时 `resolveChildAgentOptions()` 让所有阶段完整继承父会话的 provider/model/reasoningEffort——"多 Agent"实际是同一个大脑的 4 个分身。现按角色下发 `agentOptions: { provider, model, reasoningEffort }`（`spawn` 提供方声明了 `agentOptions` 能力，无需改 DSH 源码）
+- **默认路由（balanced 档）**：选股=`deepseek-official/deepseek-flash@low`、消息=`deepseek-official/deepseek-flash@low`（海选/抽取是体力活，省时省钱）、深度=`deepseek-official/deepseek-v4-pro@high`（质量关键路径）、总判断=`zai-coding-cn/glm-5.3@max` 且失败自动回退 `deepseek-official/deepseek-v4-pro@max`（异构独立第二意见）
+- **备选链与自动降级**：路由值支持 `a|b` 备选链；provider 未注册 / 模型名错 / effort 不支持时，启动前用 `ctx.get("llm").resolveCallConfig()` 逐条预检并自动切下一条；全部失败 → 该角色不传 `agentOptions`，静默继承宿主模型。运行时路由失败也会自动降级继承宿主并重试，流水线不因换模型中断
+- **四层配置**：preset ← 插件 config（`cordis.patch.yml` 的 `- id: invest` → `config`）← `.dsh-invest/routes.json` ← 环境变量（`DSH_INVEST_PRESET` / `DSH_INVEST_ROUTES`）← `invest_run` 单次参数（新增 `routes` / `preset`）。新增常规插件 `Config` 导出（schemastery）
+- **预置档**：`balanced`（默认）/ `budget`（全 flash）/ `deepseek-only`（不引入第二家厂商）/ `quality`（深度 max）/ `inherit`（全部继承宿主 = 一键回滚）
+- **可观测**：阶段对象新增 `route`/`code`；运行中进度徽章、卡片标签与阶段头显示模型短名（如 `深度 · deepseek-v4-pro@high · 12.4s`）；报告表头输出"模型路由"行与逐阶段模型；`runs.jsonl` 记录每阶段 route 与 `routes`/`routeNotes`（可直接用于"哪个模型干哪个角色最划算"的调优）
+- **新增共享模块 `src/lib/routes.js`**：路由表与纯函数（`parseRoute`/`parseRouteList`/`mergeRoutes`/`formatRoute`/`routesJson` 等），由 `tools/build.js` 内联进 dist 并同步生成 `packages/dsh-invest/lib/routes.js`（ESM），避免第三份手抄代码
+- **测试**：新增 `test/routes.test.js`（13 条用例：解析/合并/覆盖优先级/显式 inherit/端到端链路），与 `test/pure.test.js` 共 32 条全绿
+- 说明：当前生效形态为常规插件（profile `link:` 挂载），Host 半部两处同源仍需手工同步；路由表已由构建统一
 ## v0.14.3（2026-08-20）
 
 - **整合 Tushare 特色数据**（概念板块/资金流向/券商金股，均已实测打通）：

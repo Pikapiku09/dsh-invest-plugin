@@ -11,7 +11,7 @@ DSH（DeepSeek Harness）**多角色 A 股投研流水线插件**：`invest_run`
        └─ ④ 总判断师          （综合三份上游 → 最终投资决策建议）
 ```
 
-**当前版本：v0.14.3**
+**当前版本：v0.15.0**
 
 ---
 
@@ -25,6 +25,7 @@ DSH（DeepSeek Harness）**多角色 A 股投研流水线插件**：`invest_run`
 - **全上游传递**：总判断师可见选股 + 消息 + 深度三份完整产出（各阶段输出与推理过程可在 GUI 卡片分阶段查看）
 - **detail 开关**：`summary`（默认，模型侧摘要、省 ~70% token）/ `full`（模型侧全量）——GUI 卡片始终显示完整报告
 - **context 记忆追问**：传入上一轮结论，支持"接着上次的分析继续/对比"式对话
+- **异构模型路由**：4 个角色各用不同 provider/model/推理强度（默认选股∥消息=deepseek-flash@low、深度=deepseek-v4-pro@high、总判断=glm-5.3@max→备选 v4-pro@max），预检失败自动降级继承宿主，卡片/报告/runs.jsonl 全程可见
 - **失败分类重试**：网络/超时类自动重试 1 次；权限/频率类（40203 等）直接如实标注
 - **日期锚定铁律**：`index_daily` 最大 trade_date 锚定真实最新交易日（防日期/价格错位）
 - **数据覆盖铁律**：必须真实取数后才能给价格，接口受限如实标注（防编造）
@@ -41,8 +42,9 @@ dsh-invest-plugin/
 │   ├── cordis.patch.yml   #    插件行：- id: invest, name: dsh-invest
 │   └── lib/
 │       ├── index.js       #    Host 半部：invest_run 工具 + /api/dsh-invest 路由 + agent 指引
-│       ├── client.js      #    Client 半部：GUI 工具卡片（分阶段标签/推理/图表）
-│       └── prompts.js     #    4 角色 System Prompt（纯数据，可改）
+│       ├── client.js      #    Client 半部：GUI 工具卡片（分阶段标签/推理/图表/模型徽章）
+│       ├── prompts.js     #    4 角色 System Prompt（纯数据，可改）
+│       └── routes.js      #    角色模型路由表（由 src/lib/routes.js 构建生成）
 ├── scripts/               # 运维脚本
 │   ├── link-deps.ps1      #    一键链接 peer 依赖（安装必需）
 │   ├── disable-plugin.ps1 #    应急禁用（崩溃时 30 秒恢复工作台）
@@ -117,6 +119,38 @@ dsh --profile web --dump-config   # 应看到：- id: invest / name: dsh-invest
 > 路径写死在 `packages/dsh-invest/lib/index.js` 顶部常量中；迁移到其他机器时全局替换
 > `E:/Dsh_WorkSapce/Dify_Agents` 为你自己的目录即可（token、缓存、输出均在其下）。
 
+## 模型路由（v0.15.0 新增）
+
+四个角色默认使用不同模型，改的是"谁干哪一环"，不是"谁更聪明"：
+
+| 角色 | 默认路由 | 推理强度 | 理由 |
+|---|---|---|---|
+| 选股分析师 | deepseek-official/deepseek-flash | low | 全市场海选是体力活，快 + 便宜 |
+| 消息获取师 | deepseek-official/deepseek-flash | low | 检索 + 摘要抽取为主 |
+| 深度分析师 | deepseek-official/deepseek-v4-pro | high | 质量关键路径（证据生产者） |
+| 总判断师 | zai-coding-cn/glm-5.3（失败自动回退 deepseek-v4-pro@max） | max | 异构模型 = 独立第二意见，避免同源自证 |
+
+预置档（preset）：balanced（默认）/ budget（全 flash）/ deepseek-only（不引入第二家厂商）/ quality（深度 max）/ inherit（全部继承宿主会话模型 = 一键回滚）。
+值格式为 provider/model@effort，用 | 写备选链，写 inherit 表示该角色继承宿主。
+
+四层配置，后者覆盖前者（按角色粒度）：
+
+1. 插件 config（~/.dsh/profiles/web/cordis.patch.yml）：
+
+   ```yaml
+   - id: invest
+     config:
+       preset: balanced
+       routes:
+         总判断: deepseek-official/deepseek-v4-pro@max   # 只用一家厂商
+   ```
+
+2. 工作区文件 .dsh-invest/routes.json：{"深度":"deepseek-official/deepseek-v4-pro@max"}
+3. 环境变量 DSH_INVEST_PRESET=budget；DSH_INVEST_ROUTES 写 JSON 覆盖
+4. 单次调用：invest_run(mode="all", question="…", preset="quality", routes={"深度":"deepseek-official/deepseek-v4-pro@max"})
+
+任一环路由不可用（provider 未注册 / 模型名错 / effort 不支持）→ 该角色**静默回退继承宿主模型**并在报告"路由提示"里标注；运行中路由失败也会自动降级重试，流水线不会因换模型而整体失败。卡片标签、报告表头、.dsh-invest/runs.jsonl 都会记录每个阶段实际使用的模型。
+
 ## 使用案例
 
 > Agent 会**按问题类型自动选择 mode**，无需用户指定：单股深度分析走 `个股`（最省时），短线选股/全市场扫描走 `选股`，持仓复盘/完整决策走 `all`。
@@ -155,7 +189,7 @@ Agent 自动调用 `invest_run(mode="选股", ...)`（全市场海选）或 `mod
 ## 修改提示词
 
 1. 编辑 `packages/dsh-invest/lib/prompts.js`（或同源的 `src/prompts.js`）
-2. 同步另一处（两处同源，改动需一致）
+2. 同步另一处（两处同源，改动需一致）；路由表只改 src/lib/routes.js，执行 node tools/build.js 自动同步两侧
 3. 常规插件：改完重启 DSH 生效（link 安装无需重装）；动态插件：`node tools/build.js` + 重新注册
 
 ## 已知限制
@@ -167,7 +201,7 @@ Agent 自动调用 `invest_run(mode="选股", ...)`（全市场海选）或 `mod
 
 ## 版本
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.14.3**（GitHub tag: `v0.14.3`）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.15.0**。
 
 ## 免责声明
 

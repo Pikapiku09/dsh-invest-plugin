@@ -177,7 +177,7 @@ window.__ModuleLoader__.load({
           const st = stages[i];
           const cls = "invr-tab " + (i === safeIdx ? "active" : "") + (st ? (st.ok ? " ok" : " fail") : "");
           return React.createElement("span", { key: i, className: cls, onClick: () => setStageIdx(i) },
-            (i + 1) + ". " + s.key + (st ? " · " + fmt(st.elapsedMs) : ""));
+            (i + 1) + ". " + s.key + (st ? (st.route ? " · " + String(st.route).split("/").pop() : "") + " · " + fmt(st.elapsedMs) : ""));
         });
         const curSection = sections[safeIdx];
         const metaText = stages[safeIdx] && typeof stages[safeIdx].text === "string" && stages[safeIdx].text ? stages[safeIdx].text : "";
@@ -191,7 +191,7 @@ window.__ModuleLoader__.load({
           } catch (e) { /* ignore */ }
           const doneList = (prog && Array.isArray(prog.done)) ? prog.done : [];
           const doneBadges = doneList.map((d, i) => React.createElement("span", { key: "d" + i, className: "invr-tab ok" },
-            d.stage + " · " + fmt(d.ms)));
+            d.stage + (d.route ? " · " + String(d.route).split("/").pop() : "") + " · " + fmt(d.ms)));
           const line = (prog && typeof prog.total === "number" && prog.total > 0)
             ? "进行中 " + prog.index + "/" + prog.total + "：" + prog.stage
             : "子代理启动中…";
@@ -209,7 +209,7 @@ window.__ModuleLoader__.load({
           open ? React.createElement("div", null,
             charts.length ? React.createElement("div", { className: "invr-charts" }, chartNodes) : null,
             curSection ? React.createElement("div", null,
-              React.createElement("div", { className: "invr-stagehead" }, "【" + curSection.key + "】完整报告"),
+              React.createElement("div", { className: "invr-stagehead" }, "【" + curSection.key + "】完整报告" + (stages[safeIdx] && stages[safeIdx].route ? " · " + String(stages[safeIdx].route).split("/").pop() : "")),
               React.createElement(StageBody, { text: curText, reasoning: curReasoning })) : null) : null,
           zoomIdx >= 0 && charts[zoomIdx] && charts[zoomIdx].svg !== null ? React.createElement("div", { className: "invr-zoom", onClick: () => setZoomIdx(-1) },
             React.createElement("img", { className: "invr-zoomimg", src: "data:image/svg+xml;charset=utf-8," + encodeURIComponent(charts[zoomIdx].svg), alt: charts[zoomIdx].path })) : null);
