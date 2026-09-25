@@ -2,6 +2,15 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.16.1（2026-09-24）
+
+- **适配 Minke 0.7.0 / DSH 0.1.6-alpha.1（修复「插件不工作」）**：宿主 `@deepseek-ai/dsh` 已从 `0.1.0-rc.x` 升到 `0.1.6-alpha.1`（Minke app-0.7.0），插件此前的两处假设同时失效，结果是 profile 里插件根本没挂上——`invest_run` 不出现在工具列表里，且没有任何报错弹到界面上：
+  - **依赖链接指向旧部署（根因）**：`scripts/link-deps.ps1` 把 peer 依赖 junction 到 `%APPDATA%\npm\node_modules\@deepseek-ai\dsh\...`，那是 npm 全局安装的 **DSH 0.1.0-rc.6**（2026-08 前的部署，仍留在磁盘上）。这些 junction 会**遮蔽** dsh 自己维护的镜像 `~\.dsh\profiles\node_modules\@deepseek-ai`（指向当前宿主 0.1.6-alpha.1），于是 `lib/index.js` 拿到的是 rc 版 `dsh-tools`，与宿主注册表不兼容 → 插件挂载失败。现改为链接到该镜像（随应用升级自动更新），并补上 `schemastery`
+  - **ESM 构建静默失败**：`tools/build.js` 用**精确字符串**替换 `module.exports = {...}` 来生成 ESM。`src/prompts.js` 后来新增了 `KB_PSY` / `KB_SELECT` / `KB_NEWS` / `KB_DEEP` / `KB_FINAL` 等符号，精确匹配失效且**不报错**，于是 `packages/dsh-invest/lib/prompts.js` 继续留着 CommonJS 的 `module.exports`，加载时报 `The requested module './prompts.js' does not provide an export named 'DATA_BASE'`。现改为按导出行结构匹配，**匹配不到直接抛错**（不再静默产出坏文件）；已重新构建 `lib/{prompts,pure,routes}.js`
+  - `peerDependencies` 对齐到宿主实际版本 `0.1.6-alpha.1`（原 `^0.1.0-rc.6`）
+  - `scripts/enable-plugin.ps1` / `scripts/disable-plugin.ps1` 不再**整文件覆盖** profile 的 `cordis.patch.yml`——那里还挂着 `openviking-boot`（OpenViking 本地服务自启钩子），覆盖会让它静默失效；改为只按 id 停用 `invest` 行，并始终保留该钩子
+- 验证：`packages/dsh-invest/lib` 在宿主 0.1.6-alpha.1 下可正常 import；`apply()` 跑通并注册 `invest_run`（7 参数，required=`[mode, question]`）、2 条路由（`/api/dsh-invest/chart`、`/api/dsh-invest/progress`）与 1 个提示词节（`plugin:dsh-invest`）
+
 ## v0.15.0（2026-09-17）
 
 - **异构模型路由（核心）**：4 个角色不再共用宿主会话模型。插件此前调用 `subs.start("spawn", …)` 从未传 `agentOptions`，运行时 `resolveChildAgentOptions()` 让所有阶段完整继承父会话的 provider/model/reasoningEffort——"多 Agent"实际是同一个大脑的 4 个分身。现按角色下发 `agentOptions: { provider, model, reasoningEffort }`（`spawn` 提供方声明了 `agentOptions` 能力，无需改 DSH 源码）

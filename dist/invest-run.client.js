@@ -1,6 +1,6 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.client 函数体
-// 生成时间：2026-09-24T02:30:08.397Z
+// 生成时间：2026-09-25T08:18:18.484Z
 
 // dsh-invest 纯函数集合（无副作用、无外部依赖，可独立单测）
 // 双形态共享：dist 由 tools/build.js 内联；packages/lib/pure.js 由 build.js 转换为 ESM 后 import

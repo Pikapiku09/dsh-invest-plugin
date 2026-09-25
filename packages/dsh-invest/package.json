@@ -1,7 +1,7 @@
 {
   "name": "dsh-invest",
   "description": "A 股多角色投研流水线常规插件：invest_run 工具（选股/消息/深度/总判断 4 角色子代理 + Tushare 实时数据 + 三级缓存 + 报告归档），GUI 工具卡片（分阶段标签 + 推理过程 + SVG 图表内联渲染）。Hot-pluggable — mounted via profile package.json bundles + dsh.bundle.patch, no dsh source changes.",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "type": "module",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -27,9 +27,9 @@
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": ">=3.0.0",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
+    "@deepseek-ai/dsh-host-webserver": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-system-prompt": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-tools": "0.1.6-alpha.1"
   },
   "files": [
     "lib",

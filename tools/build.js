@@ -34,17 +34,30 @@ const clientBody = clientBanner + '\n' +
 fs.writeFileSync(path.join(root, 'dist', 'invest-run.client.js'), clientBody)
 
 // ---- 2) packages：常规插件形态（ESM 转换）----
+// 把 CJS 的导出行可靠地转成 ESM `export { ... }`。
+// 历史教训：这里曾用精确字符串替换，src/prompts.js 后来新增 KB_* 符号后
+// 精确匹配静默失效 → lib/prompts.js 仍是 CommonJS → profile 加载时报
+// `does not provide an export named 'DATA_BASE'`，且不报错、只静默产出坏文件。
+// 现在改为按导出行结构匹配，匹配不到直接抛错（fail fast，不再静默产出坏文件）。
+const CJS_EXPORT_RE = /^(?:if\s*\([^)]*\)\s*)?module\.exports\s*=\s*\{([^}]*)\}\s*$/m
+function toEsm(source, label) {
+  if (!CJS_EXPORT_RE.test(source)) {
+    throw new Error(label + ': 未找到 CJS 导出行 `module.exports = { ... }`，无法转换为 ESM')
+  }
+  return source.replace(CJS_EXPORT_RE, function (_match, names) { return 'export {' + names + '}' })
+}
+
 const promptsSrc = fs.readFileSync(path.join(root, 'src', 'prompts.js'), 'utf8')
 const promptsEsm = '// 由 src/prompts.js 转换（CommonJS → ESM），与 dist/invest-run.host.js 的 PROMPTS 同源\n' +
-  promptsSrc.replace('module.exports = { DATA_BASE, CHECKLIST, P_SELECT, P_NEWS, P_DEEP, P_FINAL }', 'export { DATA_BASE, CHECKLIST, P_SELECT, P_NEWS, P_DEEP, P_FINAL }')
+  toEsm(promptsSrc, 'src/prompts.js')
 fs.writeFileSync(path.join(root, 'packages', 'dsh-invest', 'lib', 'prompts.js'), promptsEsm)
 
 const pureEsm = '// 由 src/lib/pure.js 转换（CommonJS → ESM），与 dist 的 pure 同源\n' +
-  pure.replace(PURE_EXPORT, 'export { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks }')
+  toEsm(pure, 'src/lib/pure.js')
 fs.writeFileSync(path.join(root, 'packages', 'dsh-invest', 'lib', 'pure.js'), pureEsm)
 
 const routesEsm = '// 由 src/lib/routes.js 转换（CommonJS → ESM），与 dist 的 routes 同源\n' +
-  routes.replace(ROUTES_EXPORT, 'export { ROLE_CODES, PRESETS, DEFAULT_PRESET, parseRoute, parseRouteList, mergeRoutes, formatRoute, formatRouteChain, routeShort, parseRoutesJson }')
+  toEsm(routes, 'src/lib/routes.js')
 fs.writeFileSync(path.join(root, 'packages', 'dsh-invest', 'lib', 'routes.js'), routesEsm)
 
 console.log('build ok -> dist/invest-run.host.js, dist/invest-run.client.js, packages/dsh-invest/lib/{prompts,pure,routes}.js')
