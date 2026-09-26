@@ -61,3 +61,8 @@ const routesEsm = '// 由 src/lib/routes.js 转换（CommonJS → ESM），与 d
 fs.writeFileSync(path.join(root, 'packages', 'dsh-invest', 'lib', 'routes.js'), routesEsm)
 
 console.log('build ok -> dist/invest-run.host.js, dist/invest-run.client.js, packages/dsh-invest/lib/{prompts,pure,routes}.js')
+
+// ---- 提示词预算检查（v0.17.0 起）----
+try {
+  const budget = require('./check_prompt_budget.js')
+} catch (e) { /* 预算脚本 exit(1) 时 require 抛错 → 提示但不阻断构建 */ console.warn('[预算] ' + e.message) }
