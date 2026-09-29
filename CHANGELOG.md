@@ -1,3 +1,7 @@
+## 0.17.2 (2026-09-29)
+
+- fix: 放宽 packages/dsh-invest peerDependencies（0.1.6-alpha.1 精确钉版本 → >=0.1.6-alpha.1），修复 Minke/DSH 0.1.7-rc.2 下 bundle 因版本门禁被跳过、invest_run 工具不加载的问题（dsh: skipping profile bundle "dsh-invest"）
+
 # Changelog
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
