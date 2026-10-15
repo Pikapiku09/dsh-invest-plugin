@@ -43,7 +43,7 @@ const PRESETS = {
     '总判断': 'zai-coding-cn/glm-5.3@max|deepseek-official/deepseek-v4-pro@max',
   },
 }
-const DEFAULT_PRESET = 'balanced'
+const DEFAULT_PRESET = 'inherit'   // 2026-10-15 用户决策：默认继承宿主模型（原 balanced）
 
 const trimStr = (v) => (typeof v === 'string' ? v.trim() : '')
 
