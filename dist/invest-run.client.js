@@ -1,6 +1,6 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.client 函数体
-// 生成时间：2026-10-15T05:35:06.654Z
+// 生成时间：2026-10-18T05:11:23.588Z
 
 // dsh-invest 纯函数集合（无副作用、无外部依赖，可独立单测）
 // 双形态共享：dist 由 tools/build.js 内联；packages/lib/pure.js 由 build.js 转换为 ESM 后 import
@@ -37,14 +37,15 @@ function collectCharts(t) {
   return Array.from(set)
 }
 
-// 由角色简码数组构建分组：①选股∥②消息 并行 → ③深度 → ④总判断（缺失角色跳过）
-// roleMap 形如 { '选股': {name, persona}, '消息': {...}, '深度': {...}, '总判断': {...} }
+// 由角色简码数组构建分组：①选股∥消息∥波段 并行 → ②深度 → ③总判断（缺失角色跳过）
+// roleMap 形如 { '选股': {name, persona}, '消息': {...}, '深度': {...}, '总判断': {...}, '波段': {...} }
 function buildGroups(roleCodes, roleMap) {
   const has = (c) => roleCodes.includes(c)
   const groups = []
   const a = []
   if (has('选股')) a.push(roleMap['选股'])
   if (has('消息')) a.push(roleMap['消息'])
+  if (has('波段')) a.push(roleMap['波段'])
   if (a.length) groups.push(a)
   if (has('深度')) groups.push([roleMap['深度']])
   if (has('总判断')) groups.push([roleMap['总判断']])
