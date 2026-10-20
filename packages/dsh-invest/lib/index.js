@@ -2,7 +2,7 @@
 // 常规 Cordis 插件（profile bundle 挂载），所有会话可见
 import z from "@deepseek-ai/schemastery"
 import { defineTool } from "@deepseek-ai/dsh-tools"
-import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL } from "./prompts.js"
+import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING } from "./prompts.js"
 import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, z2, localYmd } from "./pure.js"
 import { DEFAULT_PRESET, mergeRoutes, formatRoute, parseRoutesJson } from "./routes.js"
 
@@ -19,6 +19,7 @@ const ROLE_MAP = {
   "消息": R("消息", "市场重点消息获取师", P_NEWS),
   "深度": R("深度", "股票深度分析师", P_DEEP),
   "总判断": R("总判断", "总判断师", P_FINAL),
+  "波段": R("波段", "波段池管理师", P_SWING),
 }
 // 默认角色组合（按 mode）
 const DEFAULT_ROLES = {
@@ -27,6 +28,7 @@ const DEFAULT_ROLES = {
   "消息": ["消息"],
   "深度分析": ["选股", "深度"],
   "总判断": ["选股", "消息", "深度", "总判断"],
+  "波段池": ["波段"],
 }
 
 /** Stable cordis plugin name. */
@@ -36,7 +38,7 @@ const name = "invest"
 const inject = ["webServer", "tools", "systemPrompt"]
 
 /** Model-facing announcement: plugin presence, capabilities, and limits. */
-const INVEST_GUIDANCE = "本机已安装 dsh-invest 插件（A 股多角色投研流水线）：invest_run 工具由 4 个角色子代理（选股分析师 → 市场重点消息获取师 → 股票深度分析师 → 总判断师）用 Tushare 实时数据逐层分析，自动生成 SVG 图表并在 GUI 卡片内联显示（卡片可查看每个 Agent 的完整报告与推理过程）。参数：mode 按问题类型选择（见下）；question=投研问题（可含多只股票对比）；roles=可选的自定义角色组合（['选股','消息','深度','总判断'] 的子集，如 ['深度','总判断']，省略则按 mode 默认）；context=上一轮结论（记忆与追问）；detail=summary（默认，模型侧摘要省 token）/full（模型侧全量）。【模式选择规则】① 单只/两只个股的深度分析、操作建议、值不值得买（问题已指定具体代码）→ mode=个股（仅股票深度分析师，最省时）；② 收集某标的/行业/市场消息 → mode=消息；③ 全市场海选、短线强势股/下周可买标的推荐、需要候选名单的扫描 → mode=选股；④ 多只股票对比、需要选股初筛+深度逐只 → mode=深度分析；⑤ 持仓复盘、市场全景、需要完整流水线与最终综合建议、不确定时 → mode=all（选股∥消息 → 深度 → 总判断）。【角色选择规则】用户问题中明确列出了角色（如「用深度分析师和总判断师分析XX」）→ 必须按所列角色传 roles 组合执行，不得额外加角色；用户要求「让我选角色/自定义角色/勾选角色」→ 先用 ask_user_question 列出 4 个角色（多选）让用户选择，再按选择传 roles；用户没提角色 → 按模式选择规则默认执行。【触发】用户问任何与 A 股个股/持仓/板块/市场相关的分析、选股、买卖建议、消息面、深度诊断、多标的对比、持仓复盘时，直接用 invest_run 执行，不要凭模型知识作答；数据锚定真实最新交易日，接口受限如实标注。用户提到「投研 / 选股 / 持仓分析 / 股票分析」时即指本插件，请据此协作。"
+const INVEST_GUIDANCE = "本机已安装 dsh-invest 插件（A 股多角色投研流水线）：invest_run 工具由 5 个角色子代理（选股分析师/市场重点消息获取师/股票深度分析师/总判断师/波段池管理师）用 Tushare 实时数据逐层分析，自动生成 SVG 图表并在 GUI 卡片内联显示（卡片可查看每个 Agent 的完整报告与推理过程）。参数：mode 按问题类型选择（见下）；question=投研问题（可含多只股票对比）；roles=可选的自定义角色组合（['选股','消息','深度','总判断','波段'] 的子集，如 ['深度','总判断']，省略则按 mode 默认）；context=上一轮结论（记忆与追问）；detail=summary（默认，模型侧摘要省 token）/full（模型侧全量）。【模式选择规则】① 单只/两只个股的深度分析、操作建议、值不值得买（问题已指定具体代码）→ mode=个股（仅股票深度分析师，最省时）；② 收集某标的/行业/市场消息 → mode=消息；③ 全市场海选、短线强势股/下周可买标的推荐、需要候选名单的扫描 → mode=选股；④ 多只股票对比、需要选股初筛+深度逐只 → mode=深度分析；⑤ 持仓复盘、市场全景、需要完整流水线与最终综合建议、不确定时 → mode=all（选股∥消息 → 深度 → 总判断）；⑥ 中长周期波段建池/波段池跟踪（持有 3 周-3 个月、持仓<5 只、非必要可空仓）→ mode=波段池。【角色选择规则】用户问题中明确列出了角色（如「用深度分析师和总判断师分析XX」）→ 必须按所列角色传 roles 组合执行，不得额外加角色；用户要求「让我选角色/自定义角色/勾选角色」→ 先用 ask_user_question 列出 5 个角色（多选）让用户选择，再按选择传 roles；用户没提角色 → 按模式选择规则默认执行。【触发】用户问任何与 A 股个股/持仓/板块/市场相关的分析、选股、买卖建议、消息面、深度诊断、多标的对比、持仓复盘、波段池建池/跟踪时，直接用 invest_run 执行，不要凭模型知识作答；数据锚定真实最新交易日，接口受限如实标注。用户提到「投研 / 选股 / 持仓分析 / 股票分析」时即指本插件，请据此协作。"
 
 /** One JSON response. */
 function writeJson(res, status, body) {
@@ -144,11 +146,11 @@ function apply(ctx, config) {
 
   const tool = defineTool({
     name: "invest_run",
-    description: "运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）。question 为用户投研问题（可含多只股票）；roles 可选：自定义角色组合（如 ['深度','总判断']，省略则按 mode 默认）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。routes/preset 可选：按角色覆盖模型路由（默认 balanced：选股/消息=deepseek-flash，深度=deepseek-v4-pro，总判断=glm-5.3，失败自动回退）。数据用 Tushare 实时获取。",
+    description: "运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）/波段池（中长周期波段建池与跟踪，持有 3 周-3 个月，持仓<5 只，可空仓）。question 为用户投研问题（可含多只股票）；roles 可选：自定义角色组合（如 ['深度','总判断']，省略则按 mode 默认）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。routes/preset 可选：按角色覆盖模型路由（默认 balanced：选股/消息=deepseek-flash，深度=deepseek-v4-pro，总判断=glm-5.3，失败自动回退）。数据用 Tushare 实时获取。",
     parameters: {
       mode: { type: "string", description: "运行模式", required: true },
       question: { type: "string", description: "用户投研问题（可含多只股票）", required: true },
-      roles: { type: "array", items: { type: "string" }, description: "可选：自定义角色组合，取值 ['选股','消息','深度','总判断'] 的子集（如 ['深度','总判断']）；省略则按 mode 默认角色。用户问题中明确列出角色时按所列角色执行；用户要求选择角色时用 ask_user_question 询问后再传" },
+      roles: { type: "array", items: { type: "string" }, description: "可选：自定义角色组合，取值 ['选股','消息','深度','总判断','波段'] 的子集（如 ['深度','总判断']）；省略则按 mode 默认角色。用户问题中明确列出角色时按所列角色执行；用户要求选择角色时用 ask_user_question 询问后再传" },
       context: { type: "string", description: "可选：上一轮分析结论/追问背景，让本轮分析有记忆" },
       routes: { type: "object", additionalProperties: true, description: "可选：按角色覆盖模型路由，形如 {\"总判断\":\"zai-coding-cn/glm-5.3@max\"}；值为 provider/model@effort，可用 \"a|b\" 写备选链，写 \"inherit\" 表示继承宿主模型；省略则用插件默认路由表" },
       preset: { type: "string", description: "可选：路由预置档 inherit/budget/balanced/deepseek-only/quality，默认 balanced" },
@@ -213,7 +215,7 @@ function apply(ctx, config) {
       let roleCodes
       if (Array.isArray(args.roles) && args.roles.length) {
         roleCodes = args.roles.filter((r) => ROLE_MAP[r])
-        if (!roleCodes.length) return { error: "无效的角色列表：" + JSON.stringify(args.roles) + "，可选：选股/消息/深度/总判断" }
+        if (!roleCodes.length) return { error: "无效的角色列表：" + JSON.stringify(args.roles) + "，可选：选股/消息/深度/总判断/波段" }
       } else {
         roleCodes = DEFAULT_ROLES[mode] || DEFAULT_ROLES["总判断"]
       }

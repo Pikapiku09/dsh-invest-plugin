@@ -5,8 +5,8 @@
 // 语义：路由值 = 'provider/model@effort'；用 '|' 分隔备选链（前一条预检/运行失败自动试下一条）；
 //       'inherit' = 该角色不传 agentOptions，完整继承宿主会话的 provider/model/reasoningEffort。
 
-// 4 个角色简码（顺序即展示顺序）
-const ROLE_CODES = ['选股', '消息', '深度', '总判断']
+// 5 个角色简码（顺序即展示顺序）
+const ROLE_CODES = ['选股', '消息', '深度', '总判断', '波段']
 
 // 预置档位。balanced 为默认档：
 //   选股/消息 = flash 档（体力活，省时省钱）；深度 = v4-pro@high（质量关键路径）；
@@ -17,30 +17,35 @@ const PRESETS = {
     '消息': 'inherit',
     '深度': 'inherit',
     '总判断': 'inherit',
+    '波段': 'inherit',
   },
   budget: {
     '选股': 'deepseek-official/deepseek-flash@off',
     '消息': 'deepseek-official/deepseek-flash@off',
     '深度': 'deepseek-official/deepseek-v4-flash@high',
     '总判断': 'deepseek-official/deepseek-v4-flash@high',
+    '波段': 'deepseek-official/deepseek-v4-flash@high',
   },
   balanced: {
     '选股': 'deepseek-official/deepseek-flash@low',
     '消息': 'deepseek-official/deepseek-flash@low',
     '深度': 'deepseek-official/deepseek-v4-pro@high',
     '总判断': 'zai-coding-cn/glm-5.3@max|deepseek-official/deepseek-v4-pro@max',
+    '波段': 'deepseek-official/deepseek-v4-pro@high',
   },
   'deepseek-only': {
     '选股': 'deepseek-official/deepseek-flash@low',
     '消息': 'deepseek-official/deepseek-flash@low',
     '深度': 'deepseek-official/deepseek-v4-pro@high',
     '总判断': 'deepseek-official/deepseek-v4-pro@max',
+    '波段': 'deepseek-official/deepseek-v4-pro@high',
   },
   quality: {
     '选股': 'deepseek-official/deepseek-v4-pro@low',
     '消息': 'deepseek-official/deepseek-v4-flash@low',
     '深度': 'deepseek-official/deepseek-v4-pro@max',
     '总判断': 'zai-coding-cn/glm-5.3@max|deepseek-official/deepseek-v4-pro@max',
+    '波段': 'deepseek-official/deepseek-v4-pro@max',
   },
 }
 const DEFAULT_PRESET = 'inherit'   // 2026-10-15 用户决策：默认继承宿主模型（原 balanced）

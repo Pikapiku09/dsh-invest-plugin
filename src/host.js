@@ -3,7 +3,7 @@
 // 依赖：ctx（Cordis 受限上下文）、harness（DSH Host 内建）、PROMPTS（build 注入的提示词数据）、
 //        pure.js 顶层函数（z2/localYmd/extractBoth/collectCharts/buildGroups，build 内联）
 
-const { P_SELECT, P_NEWS, P_DEEP, P_FINAL } = PROMPTS
+const { P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING } = PROMPTS
 
 // 角色定义：简码 → { code, 显示名, persona }（模块级常量，避免每次 execute 重建）
 const R = (code, name, persona) => ({ code, name, persona })
@@ -12,6 +12,7 @@ const ROLE_MAP = {
   '消息': R('消息', '市场重点消息获取师', P_NEWS),
   '深度': R('深度', '股票深度分析师', P_DEEP),
   '总判断': R('总判断', '总判断师', P_FINAL),
+  '波段': R('波段', '波段池管理师', P_SWING),
 }
 // 默认角色组合（按 mode）
 const DEFAULT_ROLES = {
@@ -20,6 +21,7 @@ const DEFAULT_ROLES = {
   '消息': ['消息'],
   '深度分析': ['选股', '深度'],
   '总判断': ['选股', '消息', '深度', '总判断'],
+  '波段池': ['波段'],
 }
 
 return {
@@ -100,8 +102,8 @@ return {
 
     const tool = harness.defineTool({
       name: 'invest_run',
-      description: '运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）。question 为用户投研问题（可含多只股票）；roles 可选：自定义角色组合（如 [\'深度\',\'总判断\']，省略则按 mode 默认）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。routes/preset 可选：按角色覆盖模型路由（默认 balanced：选股/消息=deepseek-flash，深度=deepseek-v4-pro，总判断=glm-5.3，失败自动回退）。数据用 Tushare 实时获取。',
-      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, roles: { type: 'array', items: { type: 'string' }, description: '可选：自定义角色组合，取值 [\'选股\',\'消息\',\'深度\',\'总判断\'] 的子集；省略则按 mode 默认角色' }, routes: { type: 'object', additionalProperties: true, description: '可选：按角色覆盖模型路由，形如 {"总判断":"zai-coding-cn/glm-5.3@max"}；值为 provider/model@effort，可用 "a|b" 写备选链，写 "inherit" 表示继承宿主模型；省略则用插件默认路由表' }, preset: { type: 'string', description: '可选：路由预置档 inherit/budget/balanced/deepseek-only/quality，默认 balanced' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' }, detail: { type: 'string', description: '可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理' } }, required: ['mode', 'question'] },
+      description: '运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）/波段池（中长周期波段建池与跟踪，持有 3 周-3 个月，持仓<5 只，可空仓）。question 为用户投研问题（可含多只股票）；roles 可选：自定义角色组合（如 [\'深度\',\'总判断\']，省略则按 mode 默认）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。routes/preset 可选：按角色覆盖模型路由（默认 balanced：选股/消息=deepseek-flash，深度=deepseek-v4-pro，总判断=glm-5.3，失败自动回退）。数据用 Tushare 实时获取。',
+      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, roles: { type: 'array', items: { type: 'string' }, description: '可选：自定义角色组合，取值 [\'选股\',\'消息\',\'深度\',\'总判断\',\'波段\'] 的子集；省略则按 mode 默认角色' }, routes: { type: 'object', additionalProperties: true, description: '可选：按角色覆盖模型路由，形如 {"总判断":"zai-coding-cn/glm-5.3@max"}；值为 provider/model@effort，可用 "a|b" 写备选链，写 "inherit" 表示继承宿主模型；省略则用插件默认路由表' }, preset: { type: 'string', description: '可选：路由预置档 inherit/budget/balanced/deepseek-only/quality，默认 balanced' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' }, detail: { type: 'string', description: '可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理' } }, required: ['mode', 'question'] },
       output: {
         schema: { type: { type: "object" }, additionalProperties: true }, 
         render: (args, value) => {
@@ -161,7 +163,7 @@ return {
         let roleCodes
         if (Array.isArray(args.roles) && args.roles.length) {
           roleCodes = args.roles.filter((r) => ROLE_MAP[r])
-          if (!roleCodes.length) return { error: '无效的角色列表：' + JSON.stringify(args.roles) + '，可选：选股/消息/深度/总判断' }
+          if (!roleCodes.length) return { error: '无效的角色列表：' + JSON.stringify(args.roles) + '，可选：选股/消息/深度/总判断/波段' }
         } else {
           roleCodes = DEFAULT_ROLES[mode] || DEFAULT_ROLES['总判断']
         }

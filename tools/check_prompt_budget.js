@@ -3,7 +3,7 @@
 const prompts = require('../src/prompts.js')
 
 const BUDGET_WARN = 8000, BUDGET_FAIL = 10000
-const roles = ['P_SELECT', 'P_NEWS', 'P_DEEP', 'P_FINAL']
+const roles = ['P_SELECT', 'P_NEWS', 'P_DEEP', 'P_FINAL', 'P_SWING']
 
 let bad = 0
 console.log('角色        字数    状态')
@@ -14,7 +14,7 @@ for (const r of roles) {
   console.log(r.padEnd(10), String(n).padStart(6), s)
 }
 // KB 模块单模块上限 700
-for (const k of ['KB_PSY', 'KB_VERIFIED']) {
+for (const k of ['KB_PSY', 'KB_VERIFIED', 'SWING_RULES']) {
   const n = prompts[k].length
   const s = n > 700 ? 'WARN(>700)' : 'OK'
   if (n > 700) bad++

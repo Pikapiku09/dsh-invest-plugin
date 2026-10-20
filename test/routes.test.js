@@ -7,12 +7,12 @@ const {
   formatRoute, formatRouteChain, routeShort, parseRoutesJson,
 } = require('../src/lib/routes.js')
 
-test('ROLE_CODES 覆盖 4 个角色', () => {
-  assert.deepEqual(ROLE_CODES, ['选股', '消息', '深度', '总判断'])
+test('ROLE_CODES 覆盖 5 个角色', () => {
+  assert.deepEqual(ROLE_CODES, ['选股', '消息', '深度', '总判断', '波段'])
 })
 
-test('DEFAULT_PRESET 为 balanced 且每档覆盖全部角色', () => {
-  assert.equal(DEFAULT_PRESET, 'balanced')
+test('DEFAULT_PRESET 为 inherit（2026-10-15 用户决策）且每档覆盖全部角色', () => {
+  assert.equal(DEFAULT_PRESET, 'inherit')
   for (const name of Object.keys(PRESETS)) {
     for (const code of ROLE_CODES) {
       assert.equal(typeof PRESETS[name][code], 'string', name + '/' + code + ' 缺失')
@@ -29,6 +29,7 @@ test('balanced 默认档：选股/消息=deepseek-flash，深度=v4-pro，总判
     { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'max' },
     { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'max' },
   ])
+  assert.deepEqual(r['波段'], [{ provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'high' }])
 })
 
 test('parseRoute：合法 / 缺 effort / 缺 provider / inherit / 空', () => {

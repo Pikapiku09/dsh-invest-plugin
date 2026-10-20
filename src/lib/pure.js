@@ -33,14 +33,15 @@ function collectCharts(t) {
   return Array.from(set)
 }
 
-// 由角色简码数组构建分组：①选股∥②消息 并行 → ③深度 → ④总判断（缺失角色跳过）
-// roleMap 形如 { '选股': {name, persona}, '消息': {...}, '深度': {...}, '总判断': {...} }
+// 由角色简码数组构建分组：①选股∥消息∥波段 并行 → ②深度 → ③总判断（缺失角色跳过）
+// roleMap 形如 { '选股': {name, persona}, '消息': {...}, '深度': {...}, '总判断': {...}, '波段': {...} }
 function buildGroups(roleCodes, roleMap) {
   const has = (c) => roleCodes.includes(c)
   const groups = []
   const a = []
   if (has('选股')) a.push(roleMap['选股'])
   if (has('消息')) a.push(roleMap['消息'])
+  if (has('波段')) a.push(roleMap['波段'])
   if (a.length) groups.push(a)
   if (has('深度')) groups.push([roleMap['深度']])
   if (has('总判断')) groups.push([roleMap['总判断']])

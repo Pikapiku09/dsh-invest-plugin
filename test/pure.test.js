@@ -69,6 +69,21 @@ test('buildGroups：全角色三组（选股∥消息 → 深度 → 总判断�
   assert.deepEqual(g[2].map((x) => x.name), ['D'])
 })
 
+test('buildGroups：波段与选股∥消息同组并行 → 深度', () => {
+  const rm = { '选股': { name: 'A' }, '消息': { name: 'B' }, '深度': { name: 'C' }, '总判断': { name: 'D' }, '波段': { name: 'E' } }
+  const g = buildGroups(['选股', '消息', '波段', '深度'], rm)
+  assert.equal(g.length, 2)
+  assert.deepEqual(g[0].map((x) => x.name), ['A', 'B', 'E'])
+  assert.deepEqual(g[1].map((x) => x.name), ['C'])
+})
+
+test('buildGroups：波段池模式单角色单组', () => {
+  const rm = { '选股': { name: 'A' }, '消息': { name: 'B' }, '深度': { name: 'C' }, '总判断': { name: 'D' }, '波段': { name: 'E' } }
+  const g = buildGroups(['波段'], rm)
+  assert.equal(g.length, 1)
+  assert.deepEqual(g[0].map((x) => x.name), ['E'])
+})
+
 test('buildGroups：缺失角色跳过、空列表返回空', () => {
   const rm = { '选股': { name: 'A' }, '消息': { name: 'B' }, '深度': { name: 'C' }, '总判断': { name: 'D' } }
   assert.equal(buildGroups(['深度'], rm).length, 1)
