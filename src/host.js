@@ -102,8 +102,8 @@ return {
 
     const tool = harness.defineTool({
       name: 'invest_run',
-      description: '运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）/波段池（中长周期波段建池与跟踪，持有 3 周-3 个月，持仓<5 只，可空仓）。question 为用户投研问题（可含多只股票）；roles 可选：自定义角色组合（如 [\'深度\',\'总判断\']，省略则按 mode 默认）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。routes/preset 可选：按角色覆盖模型路由（默认 balanced：选股/消息=deepseek-flash，深度=deepseek-v4-pro，总判断=glm-5.3，失败自动回退）。数据用 Tushare 实时获取。',
-      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, roles: { type: 'array', items: { type: 'string' }, description: '可选：自定义角色组合，取值 [\'选股\',\'消息\',\'深度\',\'总判断\',\'波段\'] 的子集；省略则按 mode 默认角色' }, routes: { type: 'object', additionalProperties: true, description: '可选：按角色覆盖模型路由，形如 {"总判断":"zai-coding-cn/glm-5.3@max"}；值为 provider/model@effort，可用 "a|b" 写备选链，写 "inherit" 表示继承宿主模型；省略则用插件默认路由表' }, preset: { type: 'string', description: '可选：路由预置档 inherit/budget/balanced/deepseek-only/quality，默认 balanced' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' }, detail: { type: 'string', description: '可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理' } }, required: ['mode', 'question'] },
+      description: '运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）/波段池（中长周期波段建池与跟踪，持有 3 周-3 个月，持仓<5 只，可空仓）。question 为用户投研问题（可含多只股票）；roles 可选：自定义角色组合（如 [\'深度\',\'总判断\']，省略则按 mode 默认）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。routes/preset 可选：按角色覆盖模型路由（默认 inherit=继承宿主模型；preset 档位 inherit/budget/balanced/deepseek-only/quality；每角色可用 routes.json 自定义）。数据用 Tushare 实时获取。',
+      parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, roles: { type: 'array', items: { type: 'string' }, description: '可选：自定义角色组合，取值 [\'选股\',\'消息\',\'深度\',\'总判断\',\'波段\'] 的子集；省略则按 mode 默认角色' }, routes: { type: 'object', additionalProperties: true, description: '可选：按角色覆盖模型路由，形如 {"总判断":"zai-coding-cn/glm-5.3@max"}；值为 provider/model@effort，可用 "a|b" 写备选链，写 "inherit" 表示继承宿主模型；省略则用插件默认路由表' }, preset: { type: 'string', description: '可选：路由预置档 inherit/budget/balanced/deepseek-only/quality，默认 inherit（继承宿主）' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' }, detail: { type: 'string', description: '可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理' } }, required: ['mode', 'question'] },
       output: {
         schema: { type: { type: "object" }, additionalProperties: true }, 
         render: (args, value) => {
@@ -143,6 +143,23 @@ return {
         }),
       },
       async execute(args, exec) {
+        // 缓存清理（2026-10-23）：>30 天缓存文件后台清理，防 .dsh-invest/cache 无限增长
+        ;(async () => {
+          try {
+            const fs2 = ctx.get('fs')
+            if (fs2 === undefined) return
+            const cutoff = Date.now() - 30 * 24 * 3600 * 1000
+            const entries = await fs2.list?.(CACHE_DIR)
+            if (Array.isArray(entries)) {
+              for (const ent of entries) {
+                try {
+                  const st = await fs2.stat?.(ent.path || ent)
+                  if (st && st.mtime && st.mtime < cutoff) await fs2.remove?.(ent.path || ent)
+                } catch (e) { /* 单文件失败忽略 */ }
+              }
+            }
+          } catch (e) { /* 清理失败绝不阻断流水线 */ }
+        })()
         const mode = args.mode
         const question = args.question
         const context = typeof args.context === 'string' && args.context.trim() ? args.context.trim().slice(0, 4000) : ''
