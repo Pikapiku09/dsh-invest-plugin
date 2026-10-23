@@ -102,7 +102,7 @@ return {
 
     const tool = harness.defineTool({
       name: 'invest_run',
-      description: '运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）/波段池（中长周期波段建池与跟踪，持有 3 周-3 个月，持仓<5 只，可空仓）。question 为用户投研问题（可含多只股票）；roles 可选：自定义角色组合（如 [\'深度\',\'总判断\']，省略则按 mode 默认）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。routes/preset 可选：按角色覆盖模型路由（默认 inherit=继承宿主模型；preset 档位 inherit/budget/balanced/deepseek-only/quality；每角色可用 routes.json 自定义）。数据用 Tushare 实时获取。',
+      description: '运行多角色投研流水线。mode：个股（单只股票深度分析，最常用）/选股（全市场海选）/消息（消息面收集）/深度分析（选股+深度）/总判断/all（完整流水线）/波段池（中长周期波段建池与跟踪，持有 3 周-3 个月，持仓<5 只，可空仓）。question 为用户投研问题（可含多只股票）；roles 可选：自定义角色组合（如 [\'深度\',\'总判断\']，省略则按 mode 默认）；context 可选，传入上一轮分析结论或追问背景（记忆与追问）；detail 可选：full=模型侧全量输出（token 多），summary=摘要输出省 token（默认，GUI 卡片始终显示完整报告）。routes/preset 可选：按角色覆盖模型路由（默认 inherit=继承宿主模型；preset 档位 inherit/budget/balanced/deepseek-only/quality；每角色可用 routes.json 自定义）。数据用 Tushare 实时获取。/ Multi-role A-share research pipeline: mode=stock(深析)/screening/news/deep/total/swing-pool; routes/preset select per-role LLM (default: inherit host model); Tushare realtime data.',
       parameters: { type: 'object', properties: { mode: { type: 'string', description: '运行模式' }, question: { type: 'string', description: '用户投研问题（可含多只股票）' }, roles: { type: 'array', items: { type: 'string' }, description: '可选：自定义角色组合，取值 [\'选股\',\'消息\',\'深度\',\'总判断\',\'波段\'] 的子集；省略则按 mode 默认角色' }, routes: { type: 'object', additionalProperties: true, description: '可选：按角色覆盖模型路由，形如 {"总判断":"zai-coding-cn/glm-5.3@max"}；值为 provider/model@effort，可用 "a|b" 写备选链，写 "inherit" 表示继承宿主模型；省略则用插件默认路由表' }, preset: { type: 'string', description: '可选：路由预置档 inherit/budget/balanced/deepseek-only/quality，默认 inherit（继承宿主）' }, context: { type: 'string', description: '可选：上一轮分析结论/追问背景，让本轮分析有记忆' }, detail: { type: 'string', description: '可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理' } }, required: ['mode', 'question'] },
       output: {
         schema: { type: { type: "object" }, additionalProperties: true }, 
@@ -131,7 +131,7 @@ return {
             lines.push('')
             lines.push('报告归档：' + reports.join(' , '))
           }
-          if (value.reportError) lines.push('归档错误：' + value.reportError)
+          if (value.reportError) lines.push('归档错误：' + value.reportError + ' / Archive error')
           return text(lines.join('\n'))
         },
         presentationMeta: (args, value) => ({
@@ -338,6 +338,26 @@ return {
             const target = await fs.resolve(reportPath)
             await fs.writeText(target, lines.join('\n'), undefined, undefined, policy)
             reports.push(reportPath)
+                // 建议登记（2026-10-23 内建）：评级表行 → advice_log.jsonl（LihuQuantify track review 对账）
+                try {
+                  const ADVICE_PAT = /综合评级|建议仓位|评级=|买入|持有|观望|回避|减仓|加仓/
+                  const recs = []
+                  for (const o of outputs) {
+                    if (!o.ok || typeof o.text !== 'string') continue
+                    for (const ln of o.text.split('\n')) {
+                      if (ln.includes('|') && ADVICE_PAT.test(ln)) {
+                        const codes = Array.from(ln.matchAll(/\b(\d{6})\.(SH|SZ|BJ)\b/g)).map((m) => m[1] + '.' + m[2])
+                        if (codes.length) recs.push({ date: localYmd(), question: String(question).slice(0, 120), stocks: codes, line: ln.trim().slice(0, 200), report: reportPath })
+                      }
+                    }
+                  }
+                  if (recs.length) {
+                    const aT = await fs.resolve(BASE_DIR + '/.dsh-invest/advice_log.jsonl')
+                    let aOld = ''
+                    try { aOld = await fs.readText(aT) } catch (e) { /* 首次 */ }
+                    await fs.writeText(aT, aOld + recs.map((r) => JSON.stringify(r)).join('\n') + '\n', undefined, undefined, policy)
+                  }
+                } catch (e) { /* 登记失败不影响流水线 */ }
           } catch (e) {
             reportError = String(e).slice(0, 300)
           }
@@ -433,5 +453,84 @@ return {
       },
     })
     harness.registerTool(ctx, tool)
+
+    // ---- invest_config：分析师模型路由配置（2026-10-23）----
+    // 与 invest_run 同机制注册；读写工作区 routes.json（fs.readText/writeText 已有先例），
+    // 使"每个分析师用什么模型"可在对话里直接调整（说"把总判断换成 glm-5.3"即由 agent 调用本工具）。
+    const cfgTool = harness.defineTool({
+      name: 'invest_config',
+      description: '查看或修改 dsh-invest 分析师模型路由。action：show=查看当前各角色生效路由 / set=设置某角色模型（role+model，model 写 inherit 恢复继承宿主）/ preset=把预设档物化进 routes.json（可再用 set 微调单角色）。修改立即生效无需重启。View or update per-role model routing: show / set (role+model) / preset (inherit|budget|balanced|deepseek-only|quality).',
+      parameters: { type: 'object', properties: {
+        action: { type: 'string', enum: ['show', 'set', 'preset'], description: 'show=查看 / set=设置单角色 / preset=物化预设档' },
+        role: { type: 'string', description: 'set 用：角色名（选股/消息/深度/总判断/波段）' },
+        model: { type: 'string', description: 'set 用：provider/model@effort（备选链用 | 分隔）或 inherit' },
+        preset: { type: 'string', description: 'preset 用：inherit/budget/balanced/deepseek-only/quality' },
+      }, required: ['action'] },
+      output: {
+        schema: { type: { type: "object" }, additionalProperties: true },
+        render: (a, v) => text(Array.isArray(v.lines) ? v.lines.join('\n') : JSON.stringify(v)),
+      },
+      async execute(args, exec) {
+        const fs2 = ctx.get('fs')
+        const sp = ctx.get('sandboxPolicy')
+        const policy2 = (sp !== undefined && exec.agent !== undefined) ? sp.resolve({ session: exec.agent.session }) : undefined
+        const action = String(args.action || 'show')
+        const readCur = async () => {
+          try { const t = await fs2.resolve(ROUTES_FILE); return JSON.parse(await fs2.readText(t)) } catch (e) { return {} }
+        }
+        const writeCur = async (obj) => {
+          const t = await fs2.resolve(ROUTES_FILE)
+          await fs2.writeText(t, JSON.stringify(obj, null, 2), undefined, undefined, policy2)
+        }
+        const out = []
+        if (action === 'show') {
+          const cur = await readCur()
+          const presetName = (typeof cur._preset === 'string' && cur._preset) || DEFAULT_PRESET
+          const merged = mergeRoutes(presetName, PLUGIN_CONFIG.routes, cur)
+          out.push('# dsh-invest 分析师模型路由 / Analyst model routing')
+          out.push('')
+          out.push('当前生效（preset=' + presetName + '，优先级：preset < 插件config < routes.json < env < 单次调用）：')
+          for (const code of ROLE_CODES) out.push('- ' + code + ' → ' + formatRouteChain(merged[code]))
+          out.push('')
+          out.push('routes.json 现有内容：' + JSON.stringify(cur))
+          out.push('')
+          out.push('修改方式：调用本工具 action=set（如 role=总判断 model=zai-coding-cn/glm-5.3@max）；或 preset=quality 物化整档；或直接编辑 ' + ROUTES_FILE)
+        } else if (action === 'set') {
+          const role = String(args.role || '').trim()
+          const model = String(args.model || '').trim()
+          if (!ROLE_CODES.includes(role)) return text({ lines: ['未知角色：' + role + '（可选：' + ROLE_CODES.join('/') + '）/ unknown role'] })
+          if (!model) return text({ lines: ['缺少 model 参数（provider/model@effort 或 inherit）/ missing model'] })
+          const cur = await readCur()
+          cur[role] = model
+          try {
+            await writeCur(cur)
+            out.push('已设置 ' + role + ' = ' + model + '（立即生效）/ updated')
+          } catch (e) {
+            out.push('写入失败 / write failed: ' + String(e).slice(0, 200))
+            out.push('请手动保存以下内容到 ' + ROUTES_FILE + '：')
+            out.push(JSON.stringify(cur, null, 2))
+          }
+        } else if (action === 'preset') {
+          const name = String(args.preset || '').trim()
+          const presetObj = PRESETS[name]
+          if (!presetObj) return text({ lines: ['未知档位 / unknown preset：' + name + '（可选：' + Object.keys(PRESETS).join('/') + '）'] })
+          const cur = await readCur()
+          for (const code of ROLE_CODES) cur[code] = presetObj[code]
+          try {
+            await writeCur(cur)
+            out.push('已将 ' + name + ' 档物化到 routes.json（可再用 set 微调单角色）/ applied')
+            for (const code of ROLE_CODES) out.push('- ' + code + ' → ' + presetObj[code])
+          } catch (e) {
+            out.push('写入失败 / write failed: ' + String(e).slice(0, 200))
+            out.push('请手动保存以下内容到 ' + ROUTES_FILE + '：')
+            out.push(JSON.stringify(cur, null, 2))
+          }
+        } else {
+          out.push('未知 action / unknown action：' + action)
+        }
+        return { lines: out }
+      },
+    })
+    harness.registerTool(ctx, cfgTool)
   },
 }

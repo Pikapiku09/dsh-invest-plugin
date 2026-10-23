@@ -108,6 +108,28 @@ dsh --profile web --dump-config   # 应看到：- id: invest / name: dsh-invest
 3. `cordis_run` 激活（Client 半部需 GUI 批准一次）
 4. 重启后需重新注册
 
+## invest_config 工具（v0.20.0）：对话式配置分析师模型
+
+无需编辑文件、无需 GUI——直接在对话里说"把总判断换成 glm-5.3"，由 agent 调用 invest_config 完成：
+
+| action | 用法 | 说明 |
+|---|---|---|
+| show | — | 查看各角色当前生效路由 + routes.json 内容 |
+| set | role=总判断, model=zai-coding-cn/glm-5.3@max | 设置单角色（model 写 inherit 恢复继承宿主） |
+| preset | preset=quality | 把预设档物化进 routes.json（可再用 set 微调单角色） |
+
+写入目标：`E:/Dsh_WorkSapce/Dify_Agents/.dsh-invest/routes.json`（立即生效，无需重启）。
+
+## 建议登记闭环（v0.20.0）
+
+invest_run 报告归档时自动提取评级表行（买入/持有/观望/回避）登记到 `.dsh-invest/advice_log.jsonl`；
+LihuQuantify 侧 `scripts/track_dsh_advice.py review` 用面板数据对账 20 日方向命中率。
+
+## 已知限制
+
+- 缓存目录 `.dsh-invest/cache` 超过 30 天的文件会自动清理（若宿主 fs API 不支持删除则静默跳过，可手动清）
+- Tushare token 需用户自备（Tushare Pro）
+
 ## 配置
 
 | 配置项 | 位置 | 说明 |
