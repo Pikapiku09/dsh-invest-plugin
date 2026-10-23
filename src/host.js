@@ -175,8 +175,15 @@ return {
         const sp = ctx.get('sandboxPolicy')
         const policy = (sp !== undefined && exec.agent !== undefined) ? sp.resolve({ session: exec.agent.session }) : undefined
         try {
-        const subs = ctx.get('subagents')
-        if (subs === undefined) return { error: 'subagents not mounted' }
+        // 2026-10-23 兼容修复：宿主 ctx.subagents 与 ctx.get('subagents') 可能返回不同形态，
+        // 取真正带 start() 的服务实例；都不可用时把探测键名写进错误便于定位
+        const subs = [ctx.subagents, (typeof ctx.get === 'function' ? ctx.get('subagents') : undefined)]
+          .find((x) => x && typeof x.start === 'function')
+        if (subs === undefined) {
+          const probe = ctx.subagents || (typeof ctx.get === 'function' ? ctx.get('subagents') : undefined)
+          const keys = probe ? Object.keys(probe).concat(Object.getOwnPropertyNames(Object.getPrototypeOf(probe) || {})) : []
+          return { error: 'subagents not mounted（start() 不可用）；探测键名: ' + keys.join(',') }
+        }
         let roleCodes
         if (Array.isArray(args.roles) && args.roles.length) {
           roleCodes = args.roles.filter((r) => ROLE_MAP[r])
