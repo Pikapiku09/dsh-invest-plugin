@@ -11,8 +11,8 @@
 - **修复 invest_run 彻底不可用（subagents not mounted）——适配宿主“激活式” subagent API**：v0.19.5 已解决服务取值方式（safeGet），但新宿主把 `start(name, request)` 换成了 `startActivation({provider,label,request,signal,delivery})`，旧代码只找 `start()`，故候选对象全都“没有 start”。从 app.asar 解包核对宿主真实实现后完成适配：
   - 统一入口 `startStage(spec)`：原生 `start()` 优先（兼容旧宿主），否则调用 `startActivation`；
   - 新返回值 `{childId, result: Promise<{output:[{type:'text'|'reasoning',text}], stopReason}>, dispose}`：`result` 可直接 `await`，`output` 与既有 `extractBoth` 口径兼容 → 阶段串联/图表收集/报告归档逻辑零改动；
-  - 新 provider 能力集 = {agentOptions, agentPreset, outputSchema, depthLimit}，**不支持** persona/toolFilter：角色设定文本注入 prompt 前缀（`【角色设定】`），递归改用 `maxDepth: 0` 阻断（替代旧 toolFilter 拉黑子代理工具）；
-  - `delivery: 'caller'`：程序化调用方语义——不向父会话投递完成通知与 send_message 引导，避免污染对话；
+  - 新 provider 能力集 = {agentOptions, agentPreset, outputSchema, depthLimit}，**不支持** persona/toolFilter：角色设定文本注入 prompt 前缀（`【角色设定】`）；递归防护改为**继承宿主 maxDepth**（默认 1 = 本级允许、孙代被拒）——实测 `maxDepth: 0` 是“禁止本级”（子代深度 1 直接 SubagentDepthError）；
+  - `delivery: 'caller'`：程序化调用方语义——不向父会话投递完成通知与 send_message 引导，避免污染对话；宿主若不接受则自动降级为官方工具同款 `parent`；
   - 新增失败守卫：子代理失败以 `{stopReason:'error', output:[]}` 返回（不 reject），显式转异常以触发既有重试/路由降级。
 - **验证**：app.asar 解包阅读宿主实现（startActivation → receipt() → activation.result.promise → settleRunResult 的 output 形状）；模块 import 冒烟（EXPORTS: Config/apply/inject/name）；`node tools/build.js` 与 `node --test`（34 项）全绿；ESM 语法校验通过。
 - 注意：插件为宿主进程内加载，**需重启 DSH 应用（或重载 desktop profile）后生效**；运行中的旧模块不会被热替换。

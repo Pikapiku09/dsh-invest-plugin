@@ -245,15 +245,24 @@ function apply(ctx, config) {
           ? spec.prompt.map((b) => (b && b.text) || "").join("\n")
           : String(spec.prompt || "")
         const text = spec.persona ? "【角色设定】\n" + spec.persona + "\n\n" + plain : plain
-        const request = { prompt: [{ type: "text", text }], parent: spec.parent, maxDepth: 0 }
+        // maxDepth 不显式传：继承宿主设置（默认 1 = 本级允许、孙代被拒，等效旧的“禁止递归”）。
+        // 实测 maxDepth:0 表示“禁止本级”——子代深度 1 会直接 SubagentDepthError。
+        const request = { prompt: [{ type: "text", text }], parent: spec.parent }
         if (spec.agentOptions) request.agentOptions = spec.agentOptions
-        const act = await activationHost.startActivation({
+        const call = (delivery) => activationHost.startActivation({
           provider: "spawn",
           label: spec.label,
           request,
           signal: spec.signal,
-          delivery: "caller",
+          delivery,
         })
+        let act
+        try {
+          act = await call("caller")   // 程序化调用方语义：不向父会话投递完成通知
+        } catch (e) {
+          if (/delivery|caller|UNSUPPORTED/i.test(String(e))) act = await call("parent")
+          else throw e
+        }
         return { result: act.result, childId: act.childId, dispose: act.dispose }
       }
       let roleCodes
