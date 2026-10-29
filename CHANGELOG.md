@@ -6,6 +6,22 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.19.6（2026-10-29）
+
+- **修复 invest_run 彻底不可用（subagents not mounted）——适配宿主“激活式” subagent API**：v0.19.5 已解决服务取值方式（safeGet），但新宿主把 `start(name, request)` 换成了 `startActivation({provider,label,request,signal,delivery})`，旧代码只找 `start()`，故候选对象全都“没有 start”。从 app.asar 解包核对宿主真实实现后完成适配：
+  - 统一入口 `startStage(spec)`：原生 `start()` 优先（兼容旧宿主），否则调用 `startActivation`；
+  - 新返回值 `{childId, result: Promise<{output:[{type:'text'|'reasoning',text}], stopReason}>, dispose}`：`result` 可直接 `await`，`output` 与既有 `extractBoth` 口径兼容 → 阶段串联/图表收集/报告归档逻辑零改动；
+  - 新 provider 能力集 = {agentOptions, agentPreset, outputSchema, depthLimit}，**不支持** persona/toolFilter：角色设定文本注入 prompt 前缀（`【角色设定】`），递归改用 `maxDepth: 0` 阻断（替代旧 toolFilter 拉黑子代理工具）；
+  - `delivery: 'caller'`：程序化调用方语义——不向父会话投递完成通知与 send_message 引导，避免污染对话；
+  - 新增失败守卫：子代理失败以 `{stopReason:'error', output:[]}` 返回（不 reject），显式转异常以触发既有重试/路由降级。
+- **验证**：app.asar 解包阅读宿主实现（startActivation → receipt() → activation.result.promise → settleRunResult 的 output 形状）；模块 import 冒烟（EXPORTS: Config/apply/inject/name）；`node tools/build.js` 与 `node --test`（34 项）全绿；ESM 语法校验通过。
+- 注意：插件为宿主进程内加载，**需重启 DSH 应用（或重载 desktop profile）后生效**；运行中的旧模块不会被热替换。
+
+## v0.19.5（2026-10-28）
+
+- **修复 invest_run 报 "cannot get property \"subagents\" without inject"**：新宿主 cordis reflect 对未声明 `inject` 的服务**属性访问**直接抛错（`ctx.subagents` 落进 reflect trap），导致 execute 在取子代理服务瞬间崩溃。改为 `safeGet()` 安全取值：优先 `ctx.get(name, false)`（reflect.get，不带 inject 要求），`ctx[name]` 属性访问包 try/catch 兜底；候选服务名扩展为 `subagents`/`subagent`；探不通时错误信息带上 `ctx.get` 类型便于定位。已修 src/host.js、packages/dsh-invest/lib/index.js、dist/invest-run.host.js 三处同源代码（dist 本次因文件锁未能由 build.js 重生，已手工同步；下次 `node tools/build.js` 产出一致），34 项单测全过
+- 注意：profile 挂载的常规插件为进程内加载，本修复需**重启 DSH** 后生效
+
 ## v0.19.4（2026-10-23）
 
 - **修复 invest_run 在新宿主下报 "subs.start is not a function"**：`ctx.get('subagents')` 与 `ctx.subagents`（当前 d.ts 声明的属性访问）在新宿主下可能返回不同形态；改为取真正带 `start()` 的服务实例，都不可用时把探测到的键名写进错误信息便于定位。已用 no-op 探针验证获取链路恢复（src/host.js 与 packages/dsh-invest/lib/index.js 同步修复，build 重生 dist）

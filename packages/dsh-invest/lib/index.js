@@ -35,7 +35,7 @@ const DEFAULT_ROLES = {
 const name = "invest"
 
 /** Services required before the invest surfaces can mount. */
-const inject = ["webServer", "tools", "systemPrompt"]
+const inject = ["webServer", "tools", "systemPrompt", "subagents"]
 
 /** Model-facing announcement: plugin presence, capabilities, and limits. */
 const INVEST_GUIDANCE = "本机已安装 dsh-invest 插件（A 股多角色投研流水线）：invest_run 工具由 5 个角色子代理（选股分析师/市场重点消息获取师/股票深度分析师/总判断师/波段池管理师）用 Tushare 实时数据逐层分析，自动生成 SVG 图表并在 GUI 卡片内联显示（卡片可查看每个 Agent 的完整报告与推理过程）。参数：mode 按问题类型选择（见下）；question=投研问题（可含多只股票对比）；roles=可选的自定义角色组合（['选股','消息','深度','总判断','波段'] 的子集，如 ['深度','总判断']，省略则按 mode 默认）；context=上一轮结论（记忆与追问）；detail=summary（默认，模型侧摘要省 token）/full（模型侧全量）。【模式选择规则】① 单只/两只个股的深度分析、操作建议、值不值得买（问题已指定具体代码）→ mode=个股（仅股票深度分析师，最省时）；② 收集某标的/行业/市场消息 → mode=消息；③ 全市场海选、短线强势股/下周可买标的推荐、需要候选名单的扫描 → mode=选股；④ 多只股票对比、需要选股初筛+深度逐只 → mode=深度分析；⑤ 持仓复盘、市场全景、需要完整流水线与最终综合建议、不确定时 → mode=all（选股∥消息 → 深度 → 总判断）；⑥ 中长周期波段建池/波段池跟踪（持有 3 周-3 个月、持仓<5 只、非必要可空仓）→ mode=波段池。【角色选择规则】用户问题中明确列出了角色（如「用深度分析师和总判断师分析XX」）→ 必须按所列角色传 roles 组合执行，不得额外加角色；用户要求「让我选角色/自定义角色/勾选角色」→ 先用 ask_user_question 列出 5 个角色（多选）让用户选择，再按选择传 roles；用户没提角色 → 按模式选择规则默认执行。【触发】用户问任何与 A 股个股/持仓/板块/市场相关的分析、选股、买卖建议、消息面、深度诊断、多标的对比、持仓复盘、波段池建池/跟踪时，直接用 invest_run 执行，不要凭模型知识作答；数据锚定真实最新交易日，接口受限如实标注。用户提到「投研 / 选股 / 持仓分析 / 股票分析」时即指本插件，请据此协作。"
@@ -165,6 +165,7 @@ function apply(ctx, config) {
         const outputs = Array.isArray(value.outputs) ? value.outputs : []
         const charts = Array.isArray(value.charts) ? value.charts.slice(0, MAX_CHARTS) : []
         const reports = Array.isArray(value.reports) ? value.reports : []
+        if (value.error) lines.push("错误：" + String(value.error))
         lines.push("invest_run 模式=" + String(value.mode || "") + " ｜ 阶段数=" + outputs.length + (charts.length ? " ｜ 图表=" + charts.length + " 张" : "") + (reports.length ? " ｜ 报告已归档" : "") + " ｜ detail=" + detail)
         for (const o of outputs) {
           lines.push("")
@@ -210,14 +211,50 @@ function apply(ctx, config) {
       const sp = ctx.get("sandboxPolicy")
       const policy = (sp !== void 0 && exec.agent !== void 0) ? sp.resolve({ session: exec.agent.session }) : void 0
       try {
-      // 2026-10-23 兼容修复：宿主 ctx.subagents 与 ctx.get("subagents") 可能返回不同形态，
-      // 取真正带 start() 的服务实例；都不可用时把探测键名写进错误便于定位
-      const subs = [ctx.subagents, (typeof ctx.get === "function" ? ctx.get("subagents") : undefined)]
-        .find((x) => x && typeof x.start === "function")
-      if (subs === void 0) {
-        const probe = ctx.subagents || (typeof ctx.get === "function" ? ctx.get("subagents") : undefined)
+      // 2026-10-28 修复（第二版）：插件已在 inject 中声明 subagents，属性访问 ctx.subagents 取得的才是
+      // 带 start() 的运行时（与宿主 dsh-tool-subagent 的 runtimeCtx.subagents 同源）；ctx.get() 取到的形态不带 start()。
+      // 候选顺序：属性访问 → ctx.get(n, true) → ctx.get(n, false)，取第一个带 start() 的实例；
+      // 都不可用时把探测到的键名写进错误便于定位。
+      const candidatesOf = (n) => {
+        const out = []
+        try { out.push(ctx[n]) } catch (e) { /* 未声明 inject 时会抛错，忽略 */ }
+        if (typeof ctx.get === "function") {
+          try { out.push(ctx.get(n, true)) } catch (e) { /* 忽略 */ }
+          try { out.push(ctx.get(n, false)) } catch (e) { /* 忽略 */ }
+        }
+        return out.filter((x) => x)
+      }
+      const allCands = candidatesOf("subagents").concat(candidatesOf("subagent"))
+      // 2026-10-29 修复（第三版）：DSH 宿主 subagent 运行时换代——新宿主以 startActivation() 取代 start()。
+      // 新契约：startActivation({provider,label,request,signal,delivery}) →
+      //   { childId, result: Promise<{output:[{type:'text'|'reasoning',text}], stopReason}>, dispose }
+      // result.output 与 extractBoth 的解析口径兼容，可直接复用。
+      // 新 provider 能力集 = {agentOptions,agentPreset,outputSchema,depthLimit}：不支持旧字段
+      // persona/toolFilter → 角色设定注入 prompt，递归用 maxDepth=0 阻断。
+      const nativeStart = allCands.find((x) => typeof x.start === "function")
+      const activationHost = allCands.find((x) => typeof x.startActivation === "function")
+      if (nativeStart === void 0 && activationHost === void 0) {
+        const probe = allCands[0]
         const keys = probe ? Object.keys(probe).concat(Object.getOwnPropertyNames(Object.getPrototypeOf(probe) || {})) : []
-        return { error: "subagents not mounted（start() 不可用）；探测键名: " + keys.join(",") }
+        return { error: "subagents not mounted（start()/startActivation() 均不可用）；候选 " + allCands.length + " 个；探测键名: " + keys.join(",") + "；ctx.get 类型: " + (typeof ctx.get) }
+      }
+      // 统一入口：旧宿主走原生 start()；新宿主翻译为 startActivation（返回同形状 {result,...}）
+      const startStage = async (spec) => {
+        if (nativeStart !== void 0) return nativeStart.start("spawn", spec)
+        const plain = Array.isArray(spec.prompt)
+          ? spec.prompt.map((b) => (b && b.text) || "").join("\n")
+          : String(spec.prompt || "")
+        const text = spec.persona ? "【角色设定】\n" + spec.persona + "\n\n" + plain : plain
+        const request = { prompt: [{ type: "text", text }], parent: spec.parent, maxDepth: 0 }
+        if (spec.agentOptions) request.agentOptions = spec.agentOptions
+        const act = await activationHost.startActivation({
+          provider: "spawn",
+          label: spec.label,
+          request,
+          signal: spec.signal,
+          delivery: "caller",
+        })
+        return { result: act.result, childId: act.childId, dispose: act.dispose }
       }
       let roleCodes
       if (Array.isArray(args.roles) && args.roles.length) {
@@ -292,7 +329,7 @@ function apply(ctx, config) {
           const routeLabel = route ? formatRoute(route) : "继承宿主"
           try {
             const promptText = lastErr ? basePrompt + "\n\n【上次执行失败，错误信息】" + lastErr + "\n请修正后重试。" : basePrompt
-            const run = await subs.start("spawn", Object.assign({
+            const run = await startStage(Object.assign({
               label: s.name + (attempt > 1 ? "(重试)" : ""),
               prompt: [{ type: "text", text: promptText }],
               parent: exec.agent,
@@ -308,6 +345,10 @@ function apply(ctx, config) {
               },
             }, route ? { agentOptions: route } : {}))
             const result = await run.result
+            // 新宿主 seam：子代理失败以 {stopReason:'error', output:[]} 返回（不 reject），显式转错误以触发重试
+            if (result && result.stopReason === "error" && !(Array.isArray(result.output) && result.output.length)) {
+              throw new Error("子代理执行失败（stopReason=error）" + (result.diagnostic ? "：" + String(result.diagnostic).slice(0, 200) : ""))
+            }
             const both = extractBoth(result)
             const full = String(both.text)
             collectCharts(full).forEach((c) => allCharts.add(c))

@@ -1,6 +1,6 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.host 函数体
-// 生成时间：2026-10-23T13:29:34.565Z
+// 生成时间：2026-10-29T01:35:06.424Z
 
 const PROMPTS = {
   "DATA_BASE": "# 数据获取（使用 pwsh 工具，重要）\n- Tushare token 文件：{{BASE_DIR}}/.dsh-invest/tushare.token（用 pwsh 执行 Get-Content 读取并去除换行）\n- 取数方式：用 pwsh 工具执行 node -e 后接双引号包裹的 JS；JS 内用单引号字符串；结构为：fetch 发送 POST 到 https://api.tushare.pro，请求体 JSON.stringify({api_name:接口名, token:令牌, params:{参数}})，然后 r.text() 后 console.log 输出\n- 接口速查：trade_cal(交易日历) / index_daily(指数，ts_code=000001.SH) / daily(日线，ts_code 形如 600519.SH，start_date/end_date 为 YYYYMMDD) / limit_list_d(涨跌停列表) / moneyflow(资金流，ts_code) / sw_daily(申万行业) / weekly(周线) / income(利润表) / fina_indicator(财务指标) / daily_basic(每日指标PE/PB) / news(新闻) / major_news(重大新闻) / express(业绩快报) / forecast(业绩预告)\n- 特色数据速查（概念/资金流/金股）：concept(概念板块列表，必带 trade_date=YYYYMMDD) / dc_index(东财概念指数行情，含领涨股与涨跌幅) / dc_member(东财概念成分，必带 trade_date，字段 con_code/con_name) / ths_index(同花顺概念指数，ts_code 形如 883300.TI) / ths_member(同花顺概念成分，ts_code=板块代码如 881174.TI) / moneyflow_dc(东财个股资金流，含主力净流入 net_amount) / moneyflow_ind_dc(东财板块资金流，content_type 区分 行业/概念/地域，概念资金流看题材主线) / moneyflow_ind_ths(同花顺板块资金流，含 net_buy_amount/net_amount) / moneyflow_ths(同花顺个股资金流) / broker_recommend(券商月度金股，month=YYYYMM，字段 month/broker/ts_code/name)\n- 日期锚定铁律：禁止用模型自身时间概念判断今天/上周/最近；先用 index_daily(ts_code=000001.SH, end_date=当年年末) 取返回记录中最大 trade_date 作为真实最新交易日；trade_cal 含未来日期，只能用于判断某日是否开市；所有行情查询 end_date 用真实最新交易日，start_date 往前推 60-120 自然日\n- 数据覆盖铁律：分析对象必须实际取到真实行情后才能给出具体价格；取数失败或接口无权限时如实标注，严禁编造数字；接口报错信息要贴出来\n- 禁止递归：你绝不可调用 invest_run、subagent、workflow 等任何子代理/流水线工具，也不能再发起子代理——取数只能自己用 pwsh 调 Tushare，分析只能自己完成，直接输出结果即可\n- 行情缓存：取数前先用 pwsh 检查缓存文件 {{BASE_DIR}}/.dsh-invest/cache/quotes/<接口>_<ts_code>_<end_date>_<start_date或na>.json 是否存在（<end_date> 填本次要查的日期、<start_date> 填本次查询区间起点，无区间参数的接口（如 daily_basic/income/fina_indicator）填 na；目录不存在视为未命中）；存在则 Get-Content 读取其内容直接使用，跳过该接口请求。每次取数成功后用 pwsh 把接口响应原文写入该路径（目录不存在先 New-Item -ItemType Directory -Force），供本流水线后续阶段与本日其他运行复用；缓存命中时在报告中标注[缓存命中]\n- 图表（强制规范与数量控制）：用 pwsh 工具写 SVG 文件到 {{BASE_DIR}}/.dsh-invest/charts/ 目录（注意转义）。每张图必须有：① 标题（股票名+代码+日期区间）；② 图例；③ 坐标轴与单位；④ 关键价位标注（水平虚线+文字：目标止盈价 L1/L2、止损价、支撑位、阻力位）。【数量上限】同一标的每轮流水线**最多生成 3 张**：a) 走势图（K线或收盘价 + MA5/10/20/60 + 关键价位水平线 + **九转序列计数标注合并在内**，数字标在K线上方=卖出序列/下方=买入序列）；b) MACD 背离图（DIF/DEA/柱 + 顶/底背离箭头与文字标注）；c) 仅多标的对比时才额外生成对比图。单标的默认只生成 a+b 两张。【去重铁律】输入中若提供【上游图表】清单，同类图表直接引用其完整绝对路径并在报告中标注，严禁重复生成同类型图表；整个流水线内同一标的的同一类型图只允许出现一张。报告正文提及图表时必须写完整绝对路径（以 E:/ 开头），禁止只写文件名\n- 效率纪律：① 取数脚本必须合并请求——一个 node -e 脚本内连续 fetch 多个接口（用 Promise.all 或顺序 await）一次性输出全部结果，严禁每个接口单独跑一次 pwsh；② 调用上限：行情类(daily/daily_basic/moneyflow/moneyflow_dc/weekly)每只股票各最多 1 次，指数与板块(index_daily/limit_list_d/sw_daily/dc_index/moneyflow_ind_dc/moneyflow_ind_ths/concept/broker_recommend)各最多 1 次，财务类(income/fina_indicator)合计 1 次；③ 输出精炼：最终 text 输出控制在 2500 字以内，reasoning 里不要重复粘贴已取到的数据，直接进入分析结论",
@@ -382,6 +382,7 @@ return {
           const outputs = Array.isArray(value.outputs) ? value.outputs : []
           const charts = Array.isArray(value.charts) ? value.charts.slice(0, MAX_CHARTS) : []
           const reports = Array.isArray(value.reports) ? value.reports : []
+          if (value.error) lines.push('错误：' + String(value.error))
           lines.push('invest_run 模式=' + String(value.mode || '') + ' ｜ 阶段数=' + outputs.length + (charts.length ? ' ｜ 图表=' + charts.length + ' 张' : '') + (reports.length ? ' ｜ 报告已归档' : '') + ' ｜ detail=' + detail)
           for (const o of outputs) {
             lines.push('')
@@ -444,14 +445,50 @@ return {
         const sp = ctx.get('sandboxPolicy')
         const policy = (sp !== undefined && exec.agent !== undefined) ? sp.resolve({ session: exec.agent.session }) : undefined
         try {
-        // 2026-10-23 兼容修复：宿主 ctx.subagents 与 ctx.get('subagents') 可能返回不同形态，
-        // 取真正带 start() 的服务实例；都不可用时把探测键名写进错误便于定位
-        const subs = [ctx.subagents, (typeof ctx.get === 'function' ? ctx.get('subagents') : undefined)]
-          .find((x) => x && typeof x.start === 'function')
-        if (subs === undefined) {
-          const probe = ctx.subagents || (typeof ctx.get === 'function' ? ctx.get('subagents') : undefined)
+        // 2026-10-28 修复（第二版）：插件已在 inject 中声明 subagents，属性访问 ctx.subagents 取得的才是
+        // 带 start() 的运行时（与宿主 dsh-tool-subagent 的 runtimeCtx.subagents 同源）；ctx.get() 取到的形态不带 start()。
+        // 候选顺序：属性访问 → ctx.get(n, true) → ctx.get(n, false)，取第一个带 start() 的实例；
+        // 都不可用时把探测到的键名写进错误便于定位。
+        const candidatesOf = (n) => {
+          const out = []
+          try { out.push(ctx[n]) } catch (e) { /* 未声明 inject 时会抛错，忽略 */ }
+          if (typeof ctx.get === 'function') {
+            try { out.push(ctx.get(n, true)) } catch (e) { /* 忽略 */ }
+            try { out.push(ctx.get(n, false)) } catch (e) { /* 忽略 */ }
+          }
+          return out.filter((x) => x)
+        }
+        const allCands = candidatesOf('subagents').concat(candidatesOf('subagent'))
+        // 2026-10-29 修复（第三版）：DSH 宿主 subagent 运行时换代——新宿主以 startActivation() 取代 start()。
+        // 新契约：startActivation({provider,label,request,signal,delivery}) →
+        //   { childId, result: Promise<{output:[{type:'text'|'reasoning',text}], stopReason}>, dispose }
+        // result.output 与 extractBoth 的解析口径兼容，可直接复用。
+        // 新 provider 能力集 = {agentOptions,agentPreset,outputSchema,depthLimit}：不支持旧字段
+        // persona/toolFilter → 角色设定注入 prompt，递归用 maxDepth=0 阻断。
+        const nativeStart = allCands.find((x) => typeof x.start === 'function')
+        const activationHost = allCands.find((x) => typeof x.startActivation === 'function')
+        if (nativeStart === undefined && activationHost === undefined) {
+          const probe = allCands[0]
           const keys = probe ? Object.keys(probe).concat(Object.getOwnPropertyNames(Object.getPrototypeOf(probe) || {})) : []
-          return { error: 'subagents not mounted（start() 不可用）；探测键名: ' + keys.join(',') }
+          return { error: 'subagents not mounted（start()/startActivation() 均不可用）；候选 ' + allCands.length + ' 个；探测键名: ' + keys.join(',') + '；ctx.get 类型: ' + (typeof ctx.get) }
+        }
+        // 统一入口：旧宿主走原生 start()；新宿主翻译为 startActivation（返回同形状 {result,...}）
+        const startStage = async (spec) => {
+          if (nativeStart !== undefined) return nativeStart.start('spawn', spec)
+          const plain = Array.isArray(spec.prompt)
+            ? spec.prompt.map((b) => (b && b.text) || '').join('\n')
+            : String(spec.prompt || '')
+          const text = spec.persona ? '【角色设定】\n' + spec.persona + '\n\n' + plain : plain
+          const request = { prompt: [{ type: 'text', text }], parent: spec.parent, maxDepth: 0 }
+          if (spec.agentOptions) request.agentOptions = spec.agentOptions
+          const act = await activationHost.startActivation({
+            provider: 'spawn',
+            label: spec.label,
+            request,
+            signal: spec.signal,
+            delivery: 'caller',
+          })
+          return { result: act.result, childId: act.childId, dispose: act.dispose }
         }
         let roleCodes
         if (Array.isArray(args.roles) && args.roles.length) {
@@ -526,7 +563,7 @@ return {
             const routeLabel = route ? formatRoute(route) : '继承宿主'
             try {
               const promptText = lastErr ? basePrompt + '\n\n【上次执行失败，错误信息】' + lastErr + '\n请修正后重试。' : basePrompt
-              const run = await subs.start('spawn', Object.assign({
+              const run = await startStage(Object.assign({
                 label: s.name + (attempt > 1 ? '(重试)' : ''),
                 prompt: [{ type: 'text', text: promptText }],
                 parent: exec.agent,
@@ -541,6 +578,10 @@ return {
                 },
               }, route ? { agentOptions: route } : {}))
               const result = await run.result
+              // 新宿主 seam：子代理失败以 {stopReason:'error', output:[]} 返回（不 reject），显式转错误以触发重试
+              if (result && result.stopReason === 'error' && !(Array.isArray(result.output) && result.output.length)) {
+                throw new Error('子代理执行失败（stopReason=error）' + (result.diagnostic ? '：' + String(result.diagnostic).slice(0, 200) : ''))
+              }
               const both = extractBoth(result)
               const full = String(both.text)
               collectCharts(full).forEach(c => allCharts.add(c))
