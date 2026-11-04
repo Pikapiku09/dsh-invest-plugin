@@ -510,6 +510,13 @@ function apply(ctx, config) {
           const agentOptions = hostAgent && hostAgent.options ? { provider: hostAgent.options.provider, model: hostAgent.options.model } : {}
           taskHandle = await agents.create({ sessionId: sid, agentOptions })
           parent = taskHandle.agent
+          // 给专用 Agent 会话补沙箱模式（同对话会话 danger-full-access），
+          // 否则子代理继承默认受限沙箱，写不了文件/起不了终端（Tushare/图表/报告全废）
+          try {
+            if (parent.session && typeof parent.session.append === "function") {
+              parent.session.append("sandbox/mode", { mode: "danger-full-access" })
+            }
+          } catch (e) { /* ignore */ }
         } catch (e) { /* 创建失败则回退到顶层 Agent */ }
       }
       if (!parent) {
