@@ -47,6 +47,8 @@ return {
     const HOLDINGS_FILE = BASE_DIR + '/.dsh-invest/持仓.json'
     const REALTIME_SCRIPT = BASE_DIR + '/scripts/realtime_quote.py'
     const STORE_INDEX = BASE_DIR + '/.dsh-invest/store/index.json'
+    // 单阶段超时：默认 20 分钟（高推理强度深度分析约 12-15 分钟，留足余量），可用环境变量覆盖
+    const STAGE_TIMEOUT_MS = (Number(process.env.DSH_INVEST_STAGE_TIMEOUT_MS) > 0) ? Number(process.env.DSH_INVEST_STAGE_TIMEOUT_MS) : 1200000
     const CONCLUSIONS_LOG = BASE_DIR + '/.dsh-invest/store/conclusions.jsonl'
 
     // 读取账本 → 紧凑 Markdown 摘要（不存在/损坏时返回空串，绝不阻断流水线）
@@ -451,8 +453,8 @@ return {
               const result = await new Promise((resolve, reject) => {
                 const timer = setTimeout(() => {
                   try { Promise.resolve(run.dispose ? run.dispose() : null).catch(() => {}) } catch (e) { /* ignore */ }
-                  reject(new Error('阶段执行超时（8 分钟），已主动终止子代理'))
-                }, 480000)
+                  reject(new Error('阶段执行超时（' + Math.round(STAGE_TIMEOUT_MS / 60000) + ' 分钟），已主动终止子代理'))
+                }, STAGE_TIMEOUT_MS)
                 Promise.resolve(run.result).then((v) => { clearTimeout(timer); resolve(v) }, (e) => { clearTimeout(timer); reject(e) })
               })
               if (result && result.stopReason === 'error') {

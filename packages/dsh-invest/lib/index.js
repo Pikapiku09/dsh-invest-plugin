@@ -80,6 +80,8 @@ function apply(ctx, config) {
   // 工作台（P1 只读）：页面与索引文件（tools/index_store.py 生成，运行时读取，改页面无需改插件）
   const WEB_INDEX = BASE_DIR + "/.dsh-invest/web/index.html"
   const STORE_INDEX = BASE_DIR + "/.dsh-invest/store/index.json"
+  // 单阶段超时：默认 20 分钟，可用环境变量 DSH_INVEST_STAGE_TIMEOUT_MS 覆盖
+  const STAGE_TIMEOUT_MS = (Number(process.env.DSH_INVEST_STAGE_TIMEOUT_MS) > 0) ? Number(process.env.DSH_INVEST_STAGE_TIMEOUT_MS) : 1200000
   const CONCLUSIONS_LOG = BASE_DIR + "/.dsh-invest/store/conclusions.jsonl"
   const WEB_DIST_DIR = BASE_DIR + "/.dsh-invest/web/dist"
   const WEB_DIST_INDEX = WEB_DIST_DIR + "/index.html"
@@ -776,8 +778,8 @@ function apply(ctx, config) {
             const result = await new Promise((resolve, reject) => {
               const timer = setTimeout(() => {
                 try { Promise.resolve(run.dispose ? run.dispose() : null).catch(() => {}) } catch (e) { /* ignore */ }
-                reject(new Error("阶段执行超时（8 分钟），已主动终止子代理"))
-              }, 480000)
+                reject(new Error("阶段执行超时（" + Math.round(STAGE_TIMEOUT_MS / 60000) + " 分钟），已主动终止子代理"))
+              }, STAGE_TIMEOUT_MS)
               Promise.resolve(run.result).then((v) => { clearTimeout(timer); resolve(v) }, (e) => { clearTimeout(timer); reject(e) })
             })
             // stopReason=error 一律视为失败（即使已有部分输出），防止把被 429/异常打断的半截报告当成功
