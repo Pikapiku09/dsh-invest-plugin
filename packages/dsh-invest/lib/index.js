@@ -80,8 +80,8 @@ function apply(ctx, config) {
   // 工作台（P1 只读）：页面与索引文件（tools/index_store.py 生成，运行时读取，改页面无需改插件）
   const WEB_INDEX = BASE_DIR + "/.dsh-invest/web/index.html"
   const STORE_INDEX = BASE_DIR + "/.dsh-invest/store/index.json"
-  // 单阶段超时：默认 20 分钟，可用环境变量 DSH_INVEST_STAGE_TIMEOUT_MS 覆盖
-  const STAGE_TIMEOUT_MS = (Number(process.env.DSH_INVEST_STAGE_TIMEOUT_MS) > 0) ? Number(process.env.DSH_INVEST_STAGE_TIMEOUT_MS) : 1200000
+  // 单阶段超时：默认 60 分钟，可用环境变量 DSH_INVEST_STAGE_TIMEOUT_MS 覆盖
+  const STAGE_TIMEOUT_MS = (Number(process.env.DSH_INVEST_STAGE_TIMEOUT_MS) > 0) ? Number(process.env.DSH_INVEST_STAGE_TIMEOUT_MS) : 3600000
   const CONCLUSIONS_LOG = BASE_DIR + "/.dsh-invest/store/conclusions.jsonl"
   const WEB_DIST_DIR = BASE_DIR + "/.dsh-invest/web/dist"
   const WEB_DIST_INDEX = WEB_DIST_DIR + "/index.html"
