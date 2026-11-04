@@ -504,7 +504,11 @@ function apply(ctx, config) {
           const sid = (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function")
             ? globalThis.crypto.randomUUID()
             : "wb-task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8)
-          taskHandle = await agents.create({ sessionId: sid })
+          // 专用 Agent 装上宿主模型：使"继承宿主"类角色能继承到有效模型
+          const roots0 = agents.roots ? agents.roots() : []
+          const hostAgent = roots0[roots0.length - 1]
+          const agentOptions = hostAgent && hostAgent.options ? { provider: hostAgent.options.provider, model: hostAgent.options.model } : {}
+          taskHandle = await agents.create({ sessionId: sid, agentOptions })
           parent = taskHandle.agent
         } catch (e) { /* 创建失败则回退到顶层 Agent */ }
       }
@@ -1038,10 +1042,16 @@ function apply(ctx, config) {
         || (typeof PLUGIN_CONFIG.preset === "string" && PLUGIN_CONFIG.preset)
         || (typeof process !== "undefined" && process.env && process.env.DSH_INVEST_PRESET)
         || DEFAULT_PRESET
+      const fileRoutesRaw = await readRoutesFile() || {}
+      // 模板预设（非 inherit）优先于角色的 inherit 默认；角色显式模型仍覆盖
+      const isTemplatePreset = presetName !== "inherit" && presetName !== DEFAULT_PRESET
+      const fileRoutes = isTemplatePreset
+        ? Object.fromEntries(Object.entries(fileRoutesRaw).filter(([, v]) => String(v).trim().toLowerCase() !== "inherit"))
+        : fileRoutesRaw
       const roleRoutes = mergeRoutes(
         presetName,
         PLUGIN_CONFIG.routes,
-        await readRoutesFile(),
+        fileRoutes,
         parseRoutesJson(typeof process !== "undefined" && process.env ? process.env.DSH_INVEST_ROUTES : void 0),
         parseRoutesJson(args.routes),
       )
