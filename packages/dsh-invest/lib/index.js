@@ -389,6 +389,49 @@ function apply(ctx, config) {
     }
   }
 
+  // 股票名查找：索引 + 腾讯行情缓存，失败时回退腾讯智能搜索
+  const lookupStockName = async (code) => {
+    try {
+      const idx = JSON.parse(await (ctx.get("fs")).readText(await (ctx.get("fs")).resolve(STORE_INDEX)))
+      const c = idx.codes && idx.codes[code]
+      if (c && c.name) return c.name
+    } catch (e) { /* ignore */ }
+    try {
+      const h = await readHoldingsDoc()
+      const p = (h.positions || []).find((x) => x.code === code)
+      if (p && p.name) return p.name
+    } catch (e) { /* ignore */ }
+    return ""
+  }
+  const resolveNameToCode = async (name) => {
+    const n = String(name).trim()
+    const map = new Map()
+    try {
+      const idx = JSON.parse(await (ctx.get("fs")).readText(await (ctx.get("fs")).resolve(STORE_INDEX)))
+      for (const [code, e] of Object.entries(idx.codes || {})) if (e.name) map.set(code, e.name)
+    } catch (e) { /* ignore */ }
+    try {
+      const h = await readHoldingsDoc()
+      for (const p of (h.positions || [])) if (p.name) map.set(p.code, p.name)
+    } catch (e) { /* ignore */ }
+    for (const [code, nm] of map) if (nm === n) return { code, name: nm, found: true }
+    for (const [code, nm] of map) if (nm.includes(n) || n.includes(nm)) return { code, name: nm, found: true }
+    try {
+      const suffixOf = (d) => /^[69]/.test(d) ? "SH" : /^[023]/.test(d) ? "SZ" : /^159/.test(d) ? "SZ" : /^[458]/.test(d) ? "SH" : /^[48]/.test(d) ? "BJ" : "SH"
+      const r = await fetch("https://smartbox.gtimg.cn/s3/?v=2&q=" + encodeURIComponent(n) + "&t=all")
+      const t = await r.text()
+      const m = t.match(/v_hint="([^"]*)"/)
+      if (m) {
+        const first = m[1].split(";")[0].split("~")
+        if (first.length >= 2 && /^\d{6}$/.test(first[0])) {
+          const code = first[0] + "." + suffixOf(first[0])
+          return { code, name: first[1], found: true }
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return null
+  }
+
   // P2：一键任务模板（question 中 {code}/{input} 由网页传入）
   const TASK_TEMPLATES = [
     { id: "stock-review", name: "个股体检", description: "消息面 → 技术估值财务 → 综合决策", mode: "个股", roles: ["消息", "深度", "总判断"], preset: "inherit", needsCode: true, placeholder: "600519 或 600519.SH", question: "对 {code} 做深度体检：先取最新消息面，再做技术/估值/财务六维诊断，最后综合给出目标价、止损与失效条件。{input}" },
@@ -770,6 +813,8 @@ function apply(ctx, config) {
             return
           }
           if (source === "screenshot") {
+            const busy = jobOrder.some((id) => { const j = jobStore[id]; return j && (j.status === "queued" || j.status === "running") })
+            if (busy) { writeJson(res, 409, { error: "分析任务进行中，模型暂不可用，请稍后再导入截图。" }); return }
             const imageBase64 = String(body.imageBase64 || "").replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "")
             if (!imageBase64) { writeJson(res, 400, { error: "请提供截图 imageBase64" }); return }
             const parsed = await recognizeScreenshot(imageBase64, String(body.mimeType || "image/png"))
@@ -812,6 +857,30 @@ function apply(ctx, config) {
           const body = await readRequestJson(req)
           writeJson(res, 200, await confirmHoldingsDraft(String(body.draftId || ""), body.positions, body.account))
         } catch (e) { writeJson(res, 400, { error: String(e).slice(0, 400) }) }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/stock/resolve",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const url = new URL(req.url ?? "/", "http://localhost")
+          const query = String(queryParam(url, "query") || "").trim()
+          if (!query) { writeJson(res, 400, { error: "缺少 query" }); return }
+          const suffixOf = (d) => /^[69]/.test(d) ? "SH" : /^[023]/.test(d) ? "SZ" : /^159/.test(d) ? "SZ" : /^[458]/.test(d) ? "SH" : /^[48]/.test(d) ? "BJ" : "SH"
+          const q = query.toUpperCase()
+          if (/^\d{6}$/.test(q) || /^\d{6}\.(SH|SZ|BJ)$/.test(q)) {
+            const digits = q.slice(0, 6)
+            const code = q.includes(".") ? q : digits + "." + suffixOf(digits)
+            writeJson(res, 200, { code, name: await lookupStockName(code), found: true })
+            return
+          }
+          const found = await resolveNameToCode(query)
+          if (found) { writeJson(res, 200, found); return }
+          writeJson(res, 200, { code: null, name: null, found: false })
+        } catch (e) { writeJson(res, 400, { error: String(e).slice(0, 300) }) }
       },
     },
   ]

@@ -179,12 +179,17 @@ function parseEastmoneyCsv(text) {
   }
   const clean = (v) => String(v == null ? '' : v).trim().replace(/^=\s*/, '').replace(/"/g, '').trim()
   const num = (v) => { const n = Number(clean(v)); return Number.isFinite(n) ? n : null }
-  const codeOf = (v) => {
+  const codeOf = (v, market) => {
     const d = clean(v).replace(/\D/g, '')
     if (!/^\d{6}$/.test(d)) return ''
+    const m = clean(market)
+    if (m.includes('沪')) return d + '.SH'
+    if (m.includes('深')) return d + '.SZ'
+    if (m.includes('北')) return d + '.BJ'
     if (/^[69]/.test(d)) return d + '.SH'
     if (/^[023]/.test(d)) return d + '.SZ'
-    if (/^[48]/.test(d)) return d + '.BJ'
+    if (/^159/.test(d)) return d + '.SZ'
+    if (/^[458]/.test(d)) return d + '.SH'
     return ''
   }
   if (!rows.length) return { positions: [], account: {}, warnings: ['CSV 无有效数据'] }
@@ -198,10 +203,11 @@ function parseEastmoneyCsv(text) {
     code: col(['证券代码'], 3), name: col(['证券名称'], 4), type: col(['交易类别', '摘要', '业务名称'], 5),
     qty: col(['成交数量'], 6), price: col(['成交均价'], 7),
     balance: col(['股份余额', '股票余额'], 14), cash: col(['资金余额'], 15),
+    market: col(['交易市场', '市场'], 19),
   }
   const trades = []
   for (const r of rows.slice(1)) {
-    const code = codeOf(r[idx.code])
+    const code = codeOf(r[idx.code], r[idx.market])
     if (!code) continue
     const date = clean(r[idx.date])
     const time = clean(r[idx.time])
