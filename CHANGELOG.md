@@ -6,6 +6,15 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.22.0（2026-11-04）
+
+- **SQLite 主存储**：`tools/index_store.py` 现在生成 `.dsh-invest/store/invest.db`（runs/reports/records/codes/meta 五表与索引），`index.json` 降级为宿主 Node 零依赖读取的只读投影；同时合并 `conclusions.jsonl` 中的 P3 结构化结论。
+- **P2 一键任务**：内置个股体检/组合体检/早盘异动/波段周检/财报速读五个模板；网页 POST `/dsh-invest/api/run` 后立即返回 jobId，后台串行队列执行 invest_run，`/api/job` 轮询阶段进度，`/api/jobs` 查看最近任务；执行结束自动重建 SQLite/索引，也可 POST `/api/reindex` 手动刷新。网页任务复用当前顶层 Agent 作为 subagent 父级，无可用 Agent 时如实失败。
+- **P3 结论记忆**：角色报告末尾新增强制 `【结论结构化】{"code","stance","target","stop","thesis","invalidate_if"}` 协议；插件把最后成功阶段的结构化结论追加到 `store/conclusions.jsonl`。下次分析同一代码（组合问题则按账本）自动注入上次立场/目标/止损/论据/失效条件及距今天数，并要求输出相同点、变化点与原因。动态插件与 profile bundle 已同步。
+- **前端工程化与视觉升级**：`.dsh-invest/web` 改为 Vite + 原生 TypeScript，固定构建 `dist/index.html + workbench.js + workbench.css`；工作台/标的档案/运行记录/一键任务/报告阅读器全部重写，新增任务进度、空态/加载/错误状态和响应式深色视觉。
+- **验证**：node --test 38 项全绿；P2 mock 队列（模板→执行→完成→reindex）通过；P3 stub（历史注入→差异规则→新结论落库）通过；SQLite 行数核对通过。
+- 生效仍需重启 DSH；此后改 web/src 并执行 `pnpm build` 即可更新页面，无需改插件。
+
 ## v0.21.0（2026-11-04）
 
 - **投研工作台 P0+P1（只读）**：解决"分析散落、跨会话看不见、重复提问"的第一层——把历史运行/报告/图表/账本聚合成一个本地页面。

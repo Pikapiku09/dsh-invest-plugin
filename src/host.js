@@ -46,6 +46,8 @@ return {
     // 本地持仓账本（跨会话共享）：由 scripts/holdings.py 维护，invest_run 每次运行注入摘要
     const HOLDINGS_FILE = BASE_DIR + '/.dsh-invest/持仓.json'
     const REALTIME_SCRIPT = BASE_DIR + '/scripts/realtime_quote.py'
+    const STORE_INDEX = BASE_DIR + '/.dsh-invest/store/index.json'
+    const CONCLUSIONS_LOG = BASE_DIR + '/.dsh-invest/store/conclusions.jsonl'
 
     // 读取账本 → 紧凑 Markdown 摘要（不存在/损坏时返回空串，绝不阻断流水线）
     const readHoldingsBlock = async () => {
@@ -75,6 +77,96 @@ return {
         out.push('【账本使用规则】① 本账本只记录用户与 AI 确认过的实盘/纸面持仓，**不含 LihuQuantify 模拟盘（短线池）数据**，严禁把量化系统的模拟盘数字混进来；② 凡涉及个股/组合/加减仓/复盘，先按上表核对：是否已持有、成本与浮盈亏、止损位、仓位占比（数量×现价÷总资产）；③ 结论必须区分「已持有（加仓/减仓/持有）」与「新建仓」，账本外的标的按空仓处理；④ 用户在对话中口述持仓变动时，必须用 pwsh 执行 python "' + BASE_DIR + '/scripts/holdings.py" add/update 落账；⑤ 账本与用户口述冲突时以用户为准并明确提示差异，严禁编造账本外的持仓数字。')
         return out.join('\n')
       } catch (e) { return '' }
+    }
+
+    // P3：结构化结论读取、历史注入与落库（与 profile bundle 同源）
+    const readConclusionRecords = async () => {
+      const fs = ctx.get('fs')
+      if (fs === undefined) return []
+      try {
+        const raw = await fs.readText(await fs.resolve(CONCLUSIONS_LOG))
+        const out = []
+        for (const line of raw.split(/\r?\n/)) {
+          if (!line.trim()) continue
+          try { const j = JSON.parse(line); if (j && j.code) out.push(j) } catch (e) { /* 坏行跳过 */ }
+        }
+        return out
+      } catch (e) { return [] }
+    }
+    const conclusionDays = (asof) => {
+      const m = String(asof || '').match(/(\d{4})-?(\d{2})-?(\d{2})/)
+      const c = String(localYmd()).match(/(\d{4})(\d{2})(\d{2})/)
+      if (!m || !c) return '未知'
+      const a = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+      const b = Date.UTC(Number(c[1]), Number(c[2]) - 1, Number(c[3]))
+      const d = Math.max(0, Math.round((b - a) / 86400000))
+      return d === 0 ? '今天' : d + ' 天前'
+    }
+    const readHistoryBlock = async (question, context, mode) => {
+      let codes = extractInvestCodes(String(question || '') + ' ' + String(context || ''))
+      if (!codes.length && /持仓|组合|复盘|波段|总判断|all/i.test(String(question || '') + ' ' + String(mode || ''))) {
+        const fs = ctx.get('fs')
+        if (fs !== undefined) {
+          try {
+            const h = JSON.parse(await fs.readText(await fs.resolve(HOLDINGS_FILE)))
+            codes = (Array.isArray(h.positions) ? h.positions : []).map((p) => p.code).filter(Boolean)
+          } catch (e) { /* ignore */ }
+        }
+      }
+      if (!codes.length) return ''
+      const structured = await readConclusionRecords()
+      let backfill = []
+      const fs = ctx.get('fs')
+      if (fs !== undefined) {
+        try { backfill = (JSON.parse(await fs.readText(await fs.resolve(STORE_INDEX))).records || []) } catch (e) { /* ignore */ }
+      }
+      const lines = []
+      const val = (v) => (v === null || v === undefined || v === '') ? '—' : String(v)
+      for (const code of codes.slice(0, 5)) {
+        const ss = structured.filter((r) => r.code === code)
+        const bb = backfill.filter((r) => r.code === code)
+        const rec = ss.length ? ss[ss.length - 1] : (bb.length ? bb[bb.length - 1] : null)
+        if (!rec) continue
+        const asof = rec.asof || String(rec.ts || '').slice(0, 10)
+        lines.push(code + '｜上次 ' + val(asof) + '（' + conclusionDays(asof) + '，' + val(rec.source) + '）：' + val(rec.stance)
+          + '；目标 ' + val(rec.target) + '；止损 ' + val(rec.stop)
+          + '；论据 ' + val(rec.thesis).slice(0, 160)
+          + (rec.invalidate_if ? '；失效条件 ' + String(rec.invalidate_if).slice(0, 120) : ''))
+      }
+      if (!lines.length) return ''
+      return '【历史结论记忆（自动注入）】\n以下历史结论只用于对照，不是当前事实；行情与指标必须重新取数。\n'
+        + lines.join('\n')
+        + '\n请先判断上次结论是否已兑现或失效，再明确写出本次与上次的**相同点、变化点及变化原因**；没有新证据不得简单重复历史结论。'
+    }
+    const persistConclusions = async (mode, question, callId, outputs, reports, policy) => {
+      const fs = ctx.get('fs')
+      if (fs === undefined) return 0
+      let chosen = null
+      let blocks = []
+      for (let i = outputs.length - 1; i >= 0; i--) {
+        const o = outputs[i]
+        if (!o.ok) continue
+        const parsed = parseConclusionBlocks(o.text)
+        if (parsed.length) { chosen = o; blocks = parsed; break }
+      }
+      if (!chosen || !blocks.length) return 0
+      const lines = blocks.slice(0, 3).map((b) => JSON.stringify({
+        ts: new Date().toISOString(), mode, question: String(question).slice(0, 200), callId,
+        code: b.code, stance: b.stance || '未明',
+        target: (typeof b.target === 'number' ? b.target : null),
+        stop: (typeof b.stop === 'number' ? b.stop : null),
+        thesis: String(b.thesis || '').slice(0, 200),
+        invalidate_if: String(b.invalidate_if || '').slice(0, 200),
+        stage: chosen.stage, report: reports[0] || null, source: 'invest_run',
+      }))
+      try {
+        const target = await fs.resolve(CONCLUSIONS_LOG)
+        let existing = ''
+        try { existing = await fs.readText(target) } catch (e) { /* 首次 */ }
+        const prefix = existing && !existing.endsWith('\n') ? existing + '\n' : existing
+        await fs.writeText(target, prefix + lines.join('\n') + '\n', undefined, undefined, policy)
+        return lines.length
+      } catch (e) { return 0 }
     }
 
     // 读取工作区路由覆盖文件（不存在/损坏 → undefined，绝不阻断流水线）
@@ -318,12 +410,14 @@ return {
           : '【交易日缓存为空】按日期锚定铁律完成 index_daily 锚定后，用 pwsh 执行 node -e 把 JSON {"date":"' + localYmd() + '","trade_date":"你的锚定结果YYYYMMDD"} 写入 ' + TRADE_CACHE + '（目录不存在先创建），供本日后续运行复用') + '\n' + realtimeLine
         const history = []
         const holdingsBlock = await readHoldingsBlock()
+        const historyBlock = await readHistoryBlock(question, context, mode)
         const runStage = async (s) => {
           const t0 = Date.now()
           const parts = ['用户问题：' + question]
           if (context) parts.push('【对话上下文（记忆）】' + context + '\n请结合上述上下文继续分析，保持口径一致。')
           parts.push(anchorLine)
           if (holdingsBlock) parts.push(holdingsBlock)
+          if (historyBlock) parts.push(historyBlock)
           if (allCharts.size) {
             parts.push('【上游图表（同类图表直接引用其完整绝对路径，严禁重复生成同类图）】' + Array.from(allCharts).join(' , '))
           }
@@ -516,6 +610,7 @@ return {
           }
         }
         for (const c of roleCodes) routeMap[c] = formatRoute(chosenRoutes[c])
+        await persistConclusions(mode, question, callId, outputs, reports, policy)
         return { mode, stages: outputs.map(o => o.stage), charts: Array.from(allCharts), reports, reportError, outputs, routes: routeMap, routeNotes }
         } finally {
           // 防内存泄漏：流水线结束（无论成败）即清理进度条目

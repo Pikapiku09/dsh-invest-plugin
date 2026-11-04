@@ -3,7 +3,7 @@
 import z from "@deepseek-ai/schemastery"
 import { defineTool } from "@deepseek-ai/dsh-tools"
 import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING } from "./prompts.js"
-import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, z2, localYmd } from "./pure.js"
+import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, extractInvestCodes, parseConclusionBlocks, z2, localYmd } from "./pure.js"
 import { DEFAULT_PRESET, mergeRoutes, formatRoute, parseRoutesJson } from "./routes.js"
 
 // 插件配置：路由预置档 + 按角色覆盖（写在 profile 的 cordis.patch.yml 的 - id: invest → config）
@@ -80,6 +80,11 @@ function apply(ctx, config) {
   // 工作台（P1 只读）：页面与索引文件（tools/index_store.py 生成，运行时读取，改页面无需改插件）
   const WEB_INDEX = BASE_DIR + "/.dsh-invest/web/index.html"
   const STORE_INDEX = BASE_DIR + "/.dsh-invest/store/index.json"
+  const CONCLUSIONS_LOG = BASE_DIR + "/.dsh-invest/store/conclusions.jsonl"
+  const WEB_DIST_DIR = BASE_DIR + "/.dsh-invest/web/dist"
+  const WEB_DIST_INDEX = WEB_DIST_DIR + "/index.html"
+  const WEB_DIST_JS = WEB_DIST_DIR + "/workbench.js"
+  const WEB_DIST_CSS = WEB_DIST_DIR + "/workbench.css"
 
   // 读取账本 → 紧凑 Markdown 摘要（不存在/损坏时返回空串，绝不阻断流水线）
   const readHoldingsBlock = async () => {
@@ -111,6 +116,101 @@ function apply(ctx, config) {
     } catch (e) { return "" }
   }
 
+  // P3：读取结构化结论事件日志（invest_run 每次运行追加）
+  const readConclusionRecords = async () => {
+    const fs = ctx.get("fs")
+    if (fs === void 0) return []
+    try {
+      const raw = await fs.readText(await fs.resolve(CONCLUSIONS_LOG))
+      const out = []
+      for (const line of raw.split(/\r?\n/)) {
+        if (!line.trim()) continue
+        try { const j = JSON.parse(line); if (j && j.code) out.push(j) } catch (e) { /* 跳过坏行 */ }
+      }
+      return out
+    } catch (e) { return [] }
+  }
+
+  const conclusionDays = (asof) => {
+    const m = String(asof || "").match(/(\d{4})-?(\d{2})-?(\d{2})/)
+    const c = String(localYmd()).match(/(\d{4})(\d{2})(\d{2})/)
+    if (!m || !c) return "未知"
+    const a = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    const b = Date.UTC(Number(c[1]), Number(c[2]) - 1, Number(c[3]))
+    const d = Math.max(0, Math.round((b - a) / 86400000))
+    return d === 0 ? "今天" : d + " 天前"
+  }
+
+  // P3：按问题中的代码（组合问题则按账本）注入最近一条历史结论，并强制做差异分析
+  const readHistoryBlock = async (question, context, mode) => {
+    let codes = extractInvestCodes(String(question || "") + " " + String(context || ""))
+    if (!codes.length && /持仓|组合|复盘|波段|总判断|all/i.test(String(question || "") + " " + String(mode || ""))) {
+      const fs = ctx.get("fs")
+      if (fs !== void 0) {
+        try {
+          const h = JSON.parse(await fs.readText(await fs.resolve(HOLDINGS_FILE)))
+          codes = (Array.isArray(h.positions) ? h.positions : []).map((p) => p.code).filter(Boolean)
+        } catch (e) { /* ignore */ }
+      }
+    }
+    if (!codes.length) return ""
+    const structured = await readConclusionRecords()
+    let backfill = []
+    const fs = ctx.get("fs")
+    if (fs !== void 0) {
+      try { backfill = (JSON.parse(await fs.readText(await fs.resolve(STORE_INDEX))).records || []) } catch (e) { /* ignore */ }
+    }
+    const lines = []
+    const val = (v) => (v === null || v === void 0 || v === "") ? "—" : String(v)
+    for (const code of codes.slice(0, 5)) {
+      const ss = structured.filter((r) => r.code === code)
+      const bb = backfill.filter((r) => r.code === code)
+      const rec = ss.length ? ss[ss.length - 1] : (bb.length ? bb[bb.length - 1] : null)
+      if (!rec) continue
+      const asof = rec.asof || String(rec.ts || "").slice(0, 10)
+      lines.push(code + "｜上次 " + val(asof) + "（" + conclusionDays(asof) + "，" + val(rec.source) + "）：" + val(rec.stance)
+        + "；目标 " + val(rec.target) + "；止损 " + val(rec.stop)
+        + "；论据 " + val(rec.thesis).slice(0, 160)
+        + (rec.invalidate_if ? "；失效条件 " + String(rec.invalidate_if).slice(0, 120) : ""))
+    }
+    if (!lines.length) return ""
+    return "【历史结论记忆（自动注入）】\n以下历史结论只用于对照，不是当前事实；行情与指标必须重新取数。\n"
+      + lines.join("\n")
+      + "\n请先判断上次结论是否已兑现或失效，再明确写出本次与上次的**相同点、变化点及变化原因**；没有新证据不得简单重复历史结论。"
+  }
+
+  // P3：从最后一个含结构化结论的成功阶段落库（最多 3 个核心标的）
+  const persistConclusions = async (mode, question, callId, outputs, reports, policy) => {
+    const fs = ctx.get("fs")
+    if (fs === void 0) return 0
+    let chosen = null
+    let blocks = []
+    for (let i = outputs.length - 1; i >= 0; i--) {
+      const o = outputs[i]
+      if (!o.ok) continue
+      const parsed = parseConclusionBlocks(o.text)
+      if (parsed.length) { chosen = o; blocks = parsed; break }
+    }
+    if (!chosen || !blocks.length) return 0
+    const lines = blocks.slice(0, 3).map((b) => JSON.stringify({
+      ts: new Date().toISOString(), mode, question: String(question).slice(0, 200), callId,
+      code: b.code, stance: b.stance || "未明",
+      target: (typeof b.target === "number" ? b.target : null),
+      stop: (typeof b.stop === "number" ? b.stop : null),
+      thesis: String(b.thesis || "").slice(0, 200),
+      invalidate_if: String(b.invalidate_if || "").slice(0, 200),
+      stage: chosen.stage, report: reports[0] || null, source: "invest_run",
+    }))
+    try {
+      const target = await fs.resolve(CONCLUSIONS_LOG)
+      let existing = ""
+      try { existing = await fs.readText(target) } catch (e) { /* 首次 */ }
+      const prefix = existing && !existing.endsWith("\n") ? existing + "\n" : existing
+      await fs.writeText(target, prefix + lines.join("\n") + "\n", void 0, void 0, policy)
+      return lines.length
+    } catch (e) { return 0 }
+  }
+
   // 读取工作区路由覆盖文件（不存在/损坏 → undefined，绝不阻断流水线）
   const readRoutesFile = async () => {
     const fs = ctx.get("fs")
@@ -132,6 +232,110 @@ function apply(ctx, config) {
       if (obj && typeof obj.trade_date === "string" && /^\d{8}$/.test(obj.trade_date) && obj.date === localYmd()) return obj.trade_date
     } catch (e) { /* ignore */ }
     return null
+  }
+
+  // P2：一键任务模板（question 中 {code}/{input} 由网页传入）
+  const TASK_TEMPLATES = [
+    { id: "stock-review", name: "个股体检", description: "六维诊断、目标价、止损与失效条件", mode: "个股", roles: ["深度"], needsCode: true, placeholder: "600519 或 600519.SH", question: "对 {code} 做个股体检：先对照历史结论与持仓账本，再给出趋势、估值、目标价、止损与失效条件。{input}" },
+    { id: "portfolio-review", name: "组合体检", description: "按当前账本复盘持仓风险与加减仓优先级", mode: "总判断", roles: ["深度", "总判断"], needsCode: false, placeholder: "", question: "复盘当前持仓账本：逐只核对成本、趋势、止损与仓位风险，给出持有/加仓/减仓/离场优先级，并明确与上次结论的差异。{input}" },
+    { id: "morning-news", name: "早盘异动", description: "扫描持仓和近期关注标的的消息与异动", mode: "消息", roles: ["消息"], needsCode: false, placeholder: "", question: "扫描当前持仓账本及近期关注标的的最新消息、政策和异动，按可信度与影响排序，标注需跟踪的风险。{input}" },
+    { id: "swing-weekly", name: "波段周检", description: "复核三重共振、v2 出场与纸面买卖点", mode: "波段池", roles: ["波段"], needsCode: false, placeholder: "", question: "执行本周波段池周检：读取台账，复核池内标的三重共振与 v2 出场条件，记录纸面虚拟买卖点并更新台账；暂停实盘纪律不变。{input}" },
+    { id: "earnings", name: "财报速读", description: "最新财务数据、盈利质量与估值位置", mode: "个股", roles: ["深度"], needsCode: true, placeholder: "代码 + 可选报告期", question: "速读 {code} 最新可得的财报与财务指标：增长、盈利质量、现金流、负债、估值分位与主要风险，给出结论和失效条件。{input}" },
+  ]
+  const jobStore = Object.create(null)
+  const jobOrder = []
+  const taskQueue = []
+  let queueRunning = false
+  let reindexPromise = null
+
+  const readRequestJson = async (req) => {
+    let text = ""
+    for await (const chunk of req) {
+      text += String(chunk)
+      if (text.length > 65536) throw new Error("request body too large")
+    }
+    return text.trim() ? JSON.parse(text) : {}
+  }
+
+  const runReindex = () => {
+    if (reindexPromise) return reindexPromise
+    reindexPromise = (async () => {
+      const { spawn } = await import("node:child_process")
+      await new Promise((resolve, reject) => {
+        const child = spawn("python", [BASE_DIR + "/tools/index_store.py"], { cwd: BASE_DIR, stdio: "ignore", windowsHide: true })
+        const timer = setTimeout(() => { child.kill(); reject(new Error("index_store timeout")) }, 90000)
+        child.on("error", (e) => { clearTimeout(timer); reject(e) })
+        child.on("close", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error("index_store exit " + code)) })
+      })
+      const fs = ctx.get("fs")
+      if (fs !== void 0) {
+        try { return JSON.parse(await fs.readText(await fs.resolve(STORE_INDEX))).stats || {} } catch (e) { return {} }
+      }
+      return {}
+    })().finally(() => { reindexPromise = null })
+    return reindexPromise
+  }
+
+  const jobSummary = (job, full) => {
+    const out = {
+      id: job.id, templateId: job.templateId, name: job.name, status: job.status,
+      question: job.question, createdAt: job.createdAt, startedAt: job.startedAt || 0,
+      elapsedMs: job.elapsedMs || 0, error: job.error || "",
+    }
+    if (full) {
+      out.progress = progressStore[job.id] || null
+      if (job.result) out.result = {
+        mode: job.result.mode, reports: job.result.reports || [], charts: job.result.charts || [],
+        outputs: (job.result.outputs || []).map((o) => ({ stage: o.stage, ok: o.ok, elapsedMs: o.elapsedMs, route: o.route, error: o.error, text: String(o.text || "").slice(0, 6000) })),
+      }
+    }
+    return out
+  }
+
+  const executeJob = async (job) => {
+    job.status = "running"
+    job.startedAt = Date.now()
+    try {
+      const agents = ctx.get("agents")
+      const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
+      const parent = roots[roots.length - 1]
+      if (!parent) throw new Error("当前没有可用的顶层 Agent；请先打开一个 DSH 会话再启动网页任务")
+      const controller = new AbortController()
+      job.abort = () => controller.abort()
+      const result = await tool.execute({ mode: job.mode, question: job.question, roles: job.roles, detail: "full" }, { callId: job.id, agent: parent, signal: controller.signal })
+      job.result = result
+      const outs = Array.isArray(result.outputs) ? result.outputs : []
+      job.status = result.error || (outs.length && outs.every((o) => !o.ok)) ? "failed" : "done"
+      job.error = result.error || (outs.find((o) => !o.ok) || {}).error || ""
+    } catch (e) {
+      job.status = "failed"
+      job.error = String(e).slice(0, 600)
+    } finally {
+      job.elapsedMs = Date.now() - job.startedAt
+      job.abort = null
+      try { job.reindexStats = await runReindex() } catch (e) { job.reindexError = String(e).slice(0, 200) }
+    }
+  }
+
+  const pumpJobs = async () => {
+    if (queueRunning) return
+    queueRunning = true
+    try {
+      while (taskQueue.length) await executeJob(taskQueue.shift())
+    } finally { queueRunning = false }
+  }
+
+  const enqueueJob = (template, code, custom) => {
+    if (taskQueue.length >= 8) throw new Error("任务队列已满，请等待现有任务完成")
+    const id = "job_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7)
+    const question = template.question.replaceAll("{code}", code || "").replaceAll("{input}", custom ? "\n补充要求：" + custom : "")
+    const job = { id, templateId: template.id, name: template.name, mode: template.mode, roles: template.roles, question, status: "queued", createdAt: Date.now(), elapsedMs: 0 }
+    jobStore[id] = job
+    jobOrder.push(id)
+    if (jobOrder.length > 30) { const old = jobOrder.shift(); if (jobStore[old] && jobStore[old].status !== "running") delete jobStore[old] }
+    taskQueue.push(job)
+    void pumpJobs()
+    return job
   }
 
   const routes = [
@@ -186,17 +390,13 @@ function apply(ctx, config) {
         if (req.method !== "GET") { res.statusCode = 405; res.end("method not allowed"); return }
         const fs = ctx.get("fs")
         if (fs === void 0) { res.statusCode = 503; res.end("fs unavailable"); return }
-        try {
-          const html = await fs.readText(await fs.resolve(WEB_INDEX))
-          res.statusCode = 200
-          res.setHeader("content-type", "text/html; charset=utf-8")
-          res.setHeader("cache-control", "no-store")
-          res.end(html)
-        } catch (e) {
-          res.statusCode = 404
-          res.setHeader("content-type", "application/json; charset=utf-8")
-          res.end(JSON.stringify({ error: "workbench page missing (.dsh-invest/web/index.html): " + String(e).slice(0, 120) }))
-        }
+        let html = ""
+        try { html = await fs.readText(await fs.resolve(WEB_DIST_INDEX)) }
+        catch (e) { html = await fs.readText(await fs.resolve(WEB_INDEX)) }
+        res.statusCode = 200
+        res.setHeader("content-type", "text/html; charset=utf-8")
+        res.setHeader("cache-control", "no-store")
+        res.end(html)
       },
     },
     {
@@ -244,6 +444,116 @@ function apply(ctx, config) {
           if (text.length > 2000000) { writeJson(res, 413, { error: "too large" }); return }
           writeJson(res, 200, { path: p, text })
         } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 200) }) }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/workbench.js",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { res.statusCode = 403; res.end("forbidden"); return }
+        if (req.method !== "GET") { res.statusCode = 405; res.end("method not allowed"); return }
+        const fs = ctx.get("fs")
+        try {
+          const text = await fs.readText(await fs.resolve(WEB_DIST_JS))
+          res.statusCode = 200
+          res.setHeader("content-type", "text/javascript; charset=utf-8")
+          res.setHeader("cache-control", "no-store")
+          res.end(text)
+        } catch (e) { res.statusCode = 404; res.end("workbench bundle not built") }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/workbench.css",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { res.statusCode = 403; res.end("forbidden"); return }
+        if (req.method !== "GET") { res.statusCode = 405; res.end("method not allowed"); return }
+        const fs = ctx.get("fs")
+        try {
+          const text = await fs.readText(await fs.resolve(WEB_DIST_CSS))
+          res.statusCode = 200
+          res.setHeader("content-type", "text/css; charset=utf-8")
+          res.setHeader("cache-control", "no-store")
+          res.end(text)
+        } catch (e) { res.statusCode = 404; res.end("workbench css not built") }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/templates",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        writeJson(res, 200, { templates: TASK_TEMPLATES.map((t) => ({ id: t.id, name: t.name, description: t.description, mode: t.mode, roles: t.roles, needsCode: t.needsCode, placeholder: t.placeholder })) })
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/run",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const template = TASK_TEMPLATES.find((t) => t.id === String(body.templateId || ""))
+          if (!template) { writeJson(res, 400, { error: "unknown templateId" }); return }
+          const code = String(body.code || "").trim().toUpperCase()
+          if (template.needsCode && !/^\d{6}(?:\.(?:SH|SZ|BJ))?$/.test(code)) { writeJson(res, 400, { error: "请输入正确的 6 位股票代码" }); return }
+          const custom = String(body.question || "").trim().slice(0, 500)
+          const job = enqueueJob(template, code, custom)
+          writeJson(res, 202, { jobId: job.id })
+        } catch (e) { writeJson(res, 400, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/job",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const url = new URL(req.url ?? "/", "http://localhost")
+        const job = jobStore[queryParam(url, "id") || ""]
+        if (!job) { writeJson(res, 404, { error: "job not found" }); return }
+        writeJson(res, 200, jobSummary(job, true))
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/jobs",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const jobs = jobOrder.slice().reverse().slice(0, 20).map((id) => jobStore[id]).filter(Boolean).map((j) => jobSummary(j, false))
+        writeJson(res, 200, { jobs })
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/reindex",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try { const stats = await runReindex(); writeJson(res, 200, { ok: true, stats }) }
+        catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/conclusions",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const url = new URL(req.url ?? "/", "http://localhost")
+        const code = queryParam(url, "code") || ""
+        let records = await readConclusionRecords()
+        if (code) records = records.filter((r) => r.code === code)
+        if (!records.length && code) {
+          const fs = ctx.get("fs")
+          if (fs !== void 0) {
+            try { records = (JSON.parse(await fs.readText(await fs.resolve(STORE_INDEX))).records || []).filter((r) => r.code === code) } catch (e) { /* ignore */ }
+          }
+        }
+        writeJson(res, 200, { records: records.slice(-100) })
       },
     },
   ]
@@ -424,12 +734,14 @@ function apply(ctx, config) {
         : "【交易日缓存为空】按日期锚定铁律完成 index_daily 锚定后，用 pwsh 执行 node -e 把 JSON {\"date\":\"" + localYmd() + "\",\"trade_date\":\"你的锚定结果YYYYMMDD\"} 写入 " + TRADE_CACHE + "（目录不存在先创建），供本日后续运行复用") + "\n" + realtimeLine
       const history = []
       const holdingsBlock = await readHoldingsBlock()
+      const historyBlock = await readHistoryBlock(question, context, mode)
       const runStage = async (s) => {
         const t0 = Date.now()
         const parts = ["用户问题：" + question]
         if (context) parts.push("【对话上下文（记忆）】" + context + "\n请结合上述上下文继续分析，保持口径一致。")
         parts.push(anchorLine)
         if (holdingsBlock) parts.push(holdingsBlock)
+        if (historyBlock) parts.push(historyBlock)
         if (allCharts.size) {
           parts.push("【上游图表（同类图表直接引用其完整绝对路径，严禁重复生成同类图）】" + Array.from(allCharts).join(" , "))
         }
@@ -602,6 +914,7 @@ function apply(ctx, config) {
         }
       }
       for (const c of roleCodes) routeMap[c] = formatRoute(chosenRoutes[c])
+      await persistConclusions(mode, question, callId, outputs, reports, policy)
       return { mode, stages: outputs.map((o) => o.stage), charts: Array.from(allCharts), reports, reportError, outputs, routes: routeMap, routeNotes }
       } finally {
         // 防内存泄漏：流水线结束（无论成败）即清理进度条目

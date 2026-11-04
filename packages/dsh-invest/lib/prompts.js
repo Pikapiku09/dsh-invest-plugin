@@ -16,6 +16,7 @@ const DATA_BASE = [
   '- 图表（强制规范与数量控制）：用 pwsh 工具写 SVG 文件到 {{BASE_DIR}}/.dsh-invest/charts/ 目录（注意转义）。每张图必须有：① 标题（股票名+代码+日期区间）；② 图例；③ 坐标轴与单位；④ 关键价位标注（水平虚线+文字：目标止盈价 L1/L2、止损价、支撑位、阻力位）。【数量上限】同一标的每轮流水线**最多生成 3 张**：a) 走势图（K线或收盘价 + MA5/10/20/60 + 关键价位水平线 + **九转序列计数标注合并在内**，数字标在K线上方=卖出序列/下方=买入序列）；b) MACD 背离图（DIF/DEA/柱 + 顶/底背离箭头与文字标注）；c) 仅多标的对比时才额外生成对比图。单标的默认只生成 a+b 两张。【去重铁律】输入中若提供【上游图表】清单，同类图表直接引用其完整绝对路径并在报告中标注，严禁重复生成同类型图表；整个流水线内同一标的的同一类型图只允许出现一张。报告正文提及图表时必须写完整绝对路径（以 E:/ 开头），禁止只写文件名',
   '- 实时行情兜底：若行情接口最新交易日早于今日（盘中尤其明显），用 pwsh 执行 python "{{BASE_DIR}}/scripts/realtime_quote.py" <代码1> <代码2> 取腾讯财经实时价；正文用 [实时·腾讯 HH:MM] 与 [日线·TuShare YYYYMMDD] 双标注；技术指标（MA/MACD/九转/周线）只能用日线收盘计算，实时价仅作盘中参考，严禁混用',
   '- 持仓账本：{{BASE_DIR}}/.dsh-invest/持仓.json（流水线已自动注入【当前持仓账本】摘要；需要细节用 pwsh 执行 python "{{BASE_DIR}}/scripts/holdings.py" list；严禁编造账本外持仓）',
+  '- 结论结构化（强制，供工作台结论链读取）：报告末尾必须为每个核心标的（最多 3 个）各输出一行，格式严格为：【结论结构化】{"code":"600519.SH","stance":"观察","target":123.45,"stop":110.0,"thesis":"80字内论据","invalidate_if":"结论失效条件"}；stance 只能取 看多/拒绝/观察/持有/减仓/离场；未知数字填 null，不得编造。该行之后可再写免责声明，但不得省略此结构',
   '- 效率纪律：① 取数脚本必须合并请求——一个 node -e 脚本内连续 fetch 多个接口（用 Promise.all 或顺序 await）一次性输出全部结果，严禁每个接口单独跑一次 pwsh；② 调用上限：行情类(daily/daily_basic/moneyflow/moneyflow_dc/weekly)每只股票各最多 1 次，指数与板块(index_daily/limit_list_d/sw_daily/dc_index/moneyflow_ind_dc/moneyflow_ind_ths/concept/broker_recommend)各最多 1 次，财务类(income/fina_indicator)合计 1 次；③ 输出精炼：最终 text 输出控制在 2500 字以内，reasoning 里不要重复粘贴已取到的数据，直接进入分析结论',
 ].join('\n')
 

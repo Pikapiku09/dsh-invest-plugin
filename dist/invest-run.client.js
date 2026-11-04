@@ -1,6 +1,6 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.client 函数体
-// 生成时间：2026-11-04T06:52:41.153Z
+// 生成时间：2026-11-04T07:59:59.629Z
 
 // dsh-invest 纯函数集合（无副作用、无外部依赖，可独立单测）
 // 双形态共享：dist 由 tools/build.js 内联；packages/lib/pure.js 由 build.js 转换为 ESM 后 import
@@ -106,13 +106,48 @@ function splitBlocks(text) {
   return blocks
 }
 
+// 从文本提取 A 股代码（排除时间戳、hex、8 位日期；转债/基金不入索引）
+function extractInvestCodes(text) {
+  const re = /(?<![\dA-Za-z_])(?:sh|sz|bj)?(\d{6})(?:\.(SH|SZ|BJ))?(?![\dA-Za-z_])/gi
+  const out = []
+  const seen = new Set()
+  let m
+  while ((m = re.exec(String(text || '')))) {
+    const digits = m[1]
+    let suffix = m[2] ? m[2].toUpperCase() : ''
+    if (!suffix) {
+      if (/^[69]/.test(digits)) suffix = 'SH'
+      else if (/^[023]/.test(digits)) suffix = 'SZ'
+      else if (/^[48]/.test(digits)) suffix = 'BJ'
+      else continue
+    }
+    const code = digits + '.' + suffix
+    if (!seen.has(code)) { seen.add(code); out.push(code) }
+  }
+  return out
+}
+
+// 解析角色报告末尾的【结论结构化】{"code":...} 行；坏行跳过，不影响主流程
+function parseConclusionBlocks(text) {
+  const out = []
+  const re = /【结论结构化】\s*(\{[^\r\n]+\})/g
+  let m
+  while ((m = re.exec(String(text || '')))) {
+    try {
+      const obj = JSON.parse(m[1])
+      if (obj && typeof obj.code === 'string' && obj.code) out.push(obj)
+    } catch (e) { /* 单行坏 JSON 忽略 */ }
+  }
+  return out
+}
+
 // 工作台静态服务路径校验：必须位于指定根目录内，且拒绝 .. 目录穿越
 function isSafeServePath(p, root) {
   const s = String(p || '')
   return s.length > 0 && !s.includes('..') && s.startsWith(String(root || ''))
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks, isSafeServePath }
+if (typeof module !== 'undefined' && module.exports) module.exports = { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks, isSafeServePath, extractInvestCodes, parseConclusionBlocks }
 
 // DSH 动态插件 Client 半部（invest_run 专属工具卡片：分阶段标签页 + 推理过程折叠 + 图表渲染/放大 + Markdown 表格）
 // 由 tools/build.js 复制为 dist/invest-run.client.js

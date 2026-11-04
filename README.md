@@ -11,7 +11,7 @@ DSH（DeepSeek Harness）**多角色 A 股投研流水线插件**：`invest_run`
        └─ ④ 总判断师          （综合三份上游 → 最终投资决策建议）
 ```
 
-**当前版本：v0.21.0**
+**当前版本：v0.22.0**
 
 ---
 
@@ -53,6 +53,15 @@ DSH（DeepSeek Harness）**多角色 A 股投研流水线插件**：`invest_run`
 - 场景：TuShare 日线在盘中只有上一交易日数据
 - 用法：`python scripts/realtime_quote.py 600519 000768.SZ [--human]`
 - 规则：正文用 `[实时·腾讯 HH:MM]` 与 `[日线·TuShare YYYYMMDD]` 双标注；技术指标（MA/MACD/九转/周线）仍必须用日线收盘计算，实时价仅作盘中参考，禁止混算
+
+## 投研工作台（v0.22.0）
+
+- 地址：`http://127.0.0.1:<DSH端口>/dsh-invest/app`（仅 loopback）
+- **数据层**：SQLite 主库 `.dsh-invest/store/invest.db`；`tools/index_store.py` 重建数据库与 `index.json` 投影；`conclusions.jsonl` 保存每次 invest_run 的结构化结论事件。
+- **一键任务**：个股体检/组合体检/早盘异动/波段周检/财报速读；后台异步队列执行，页面轮询进度，完成后自动刷新索引。
+- **结论记忆**：同一标的再次分析时自动注入上次结论、目标、止损与失效条件，并要求说明本次变化；新结论通过 `【结论结构化】` 协议落库。
+- **前端**：`.dsh-invest/web` 使用 Vite + 原生 TypeScript；修改 `web/src` 后执行 `pnpm build`，产物为 `dist/index.html + workbench.js + workbench.css`，插件运行时直接读取。
+- 仅本机只读页面 + 本机任务触发，未做公网/多用户/自动下单。
 
 ## 目录结构
 
