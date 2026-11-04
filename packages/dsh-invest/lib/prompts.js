@@ -5,7 +5,8 @@
 const DATA_BASE = [
   '# 数据获取（使用 pwsh 工具，重要）',
   '- Tushare token 文件：{{BASE_DIR}}/.dsh-invest/tushare.token（用 pwsh 执行 Get-Content 读取并去除换行）',
-  '- 取数方式：用 pwsh 工具执行 node -e 后接双引号包裹的 JS；JS 内用单引号字符串；结构为：fetch 发送 POST 到 https://api.tushare.pro，请求体 JSON.stringify({api_name:接口名, token:令牌, params:{参数}})，然后 r.text() 后 console.log 输出',
+  '- 取数方式（首选，最稳）：用 pwsh 执行 python "{{BASE_DIR}}/scripts/tushare_query.py" <api_name> k=v ...（脚本已 strip token，输出 {ok,code,msg,fields,rows}；加 --raw 看原始响应）。token 文件若带尾随换行，接口会直接返回 40101「您的token不对」——不要手写 token 拼接',
+  '- 取数方式（备选）：用 pwsh 工具执行 node -e 后接双引号包裹的 JS；JS 内用单引号字符串；结构为：fetch 发送 POST 到 https://api.tushare.pro，请求体 JSON.stringify({api_name:接口名, token:令牌.trim(), params:{参数}})，然后 r.text() 后 console.log 输出',
   '- 接口速查：trade_cal(交易日历) / index_daily(指数，ts_code=000001.SH) / daily(日线，ts_code 形如 600519.SH，start_date/end_date 为 YYYYMMDD) / limit_list_d(涨跌停列表) / moneyflow(资金流，ts_code) / sw_daily(申万行业) / weekly(周线) / income(利润表) / fina_indicator(财务指标) / daily_basic(每日指标PE/PB) / news(新闻) / major_news(重大新闻) / express(业绩快报) / forecast(业绩预告)',
   '- 特色数据速查（概念/资金流/金股）：concept(概念板块列表，必带 trade_date=YYYYMMDD) / dc_index(东财概念指数行情，含领涨股与涨跌幅) / dc_member(东财概念成分，必带 trade_date，字段 con_code/con_name) / ths_index(同花顺概念指数，ts_code 形如 883300.TI) / ths_member(同花顺概念成分，ts_code=板块代码如 881174.TI) / moneyflow_dc(东财个股资金流，含主力净流入 net_amount) / moneyflow_ind_dc(东财板块资金流，content_type 区分 行业/概念/地域，概念资金流看题材主线) / moneyflow_ind_ths(同花顺板块资金流，含 net_buy_amount/net_amount) / moneyflow_ths(同花顺个股资金流) / broker_recommend(券商月度金股，month=YYYYMM，字段 month/broker/ts_code/name)',
   '- 日期锚定铁律：禁止用模型自身时间概念判断今天/上周/最近；先用 index_daily(ts_code=000001.SH, end_date=当年年末) 取返回记录中最大 trade_date 作为真实最新交易日；trade_cal 含未来日期，只能用于判断某日是否开市；所有行情查询 end_date 用真实最新交易日，start_date 往前推 60-120 自然日',
