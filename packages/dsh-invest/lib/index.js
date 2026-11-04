@@ -494,11 +494,25 @@ function apply(ctx, config) {
   const executeJob = async (job) => {
     job.status = "running"
     job.startedAt = Date.now()
+    let taskHandle = null
     try {
       const agents = ctx.get("agents")
-      const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
-      const parent = roots[roots.length - 1]
-      if (!parent) throw new Error("当前没有可用的顶层 Agent；请先打开一个 DSH 会话再启动网页任务")
+      // 方案A：为本次任务创建专用执行 Agent，与当前对话彻底隔离（不挂在聊天下）
+      let parent = null
+      if (agents && typeof agents.create === "function") {
+        try {
+          const sid = (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function")
+            ? globalThis.crypto.randomUUID()
+            : "wb-task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8)
+          taskHandle = await agents.create({ sessionId: sid })
+          parent = taskHandle.agent
+        } catch (e) { /* 创建失败则回退到顶层 Agent */ }
+      }
+      if (!parent) {
+        const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
+        parent = roots[roots.length - 1]
+      }
+      if (!parent) throw new Error("当前没有可用的执行 Agent；请先打开一个 DSH 会话再启动网页任务")
       const controller = new AbortController()
       job.abort = () => controller.abort()
       const preset = await resolveTemplatePreset(job.templateId, job.preset)
@@ -513,6 +527,10 @@ function apply(ctx, config) {
     } finally {
       job.elapsedMs = Date.now() - job.startedAt
       job.abort = null
+      // 释放专用任务执行 Agent（任务串行执行，分析子代理已完成）
+      if (taskHandle && typeof taskHandle.dispose === "function") {
+        try { await taskHandle.dispose() } catch (e) { /* ignore */ }
+      }
       try { job.reindexStats = await runReindex() } catch (e) { job.reindexError = String(e).slice(0, 200) }
     }
   }
