@@ -288,7 +288,7 @@ function apply(ctx, config) {
     const d = new Date()
     const stamp = localYmd() + "_" + z2(d.getHours()) + z2(d.getMinutes()) + z2(d.getSeconds())
     const backup = HOLDINGS_BACKUP_DIR + "/持仓_" + stamp + ".json"
-    try { await fs.writeText(await fs.resolve(backup), JSON.stringify(current, null, 2) + "\n") } catch (e) { /* 首次无账本可忽略 */ }
+    try { await fs.writeText(await fs.resolve(backup), JSON.stringify(current, null, 2) + "\n", void 0, void 0, getFsPolicy()) } catch (e) { /* 首次无账本可忽略 */ }
     const updatedAt = d.toISOString()
     const next = { version: 1, updated_at: updatedAt, account: nextAccount, positions }
     await writeJsonFile(HOLDINGS_FILE, next)
@@ -296,7 +296,7 @@ function apply(ctx, config) {
     let oldLog = ""
     try { oldLog = await fs.readText(auditTarget) } catch (e) { /* 首次 */ }
     const audit = JSON.stringify({ ts: updatedAt, action: "confirm", source: draft.source, draftId, diff, positions, account: nextAccount })
-    await fs.writeText(auditTarget, oldLog + (oldLog && !oldLog.endsWith("\n") ? "\n" : "") + audit + "\n")
+    await fs.writeText(auditTarget, oldLog + (oldLog && !oldLog.endsWith("\n") ? "\n" : "") + audit + "\n", void 0, void 0, getFsPolicy())
     delete holdingsDrafts[draftId]
     return { ok: true, updated_at: updatedAt, backup, diff }
   }
@@ -351,7 +351,17 @@ function apply(ctx, config) {
   const writeJsonFile = async (path, value) => {
     const fs = ctx.get("fs")
     if (fs === void 0) throw new Error("fs unavailable")
-    await fs.writeText(await fs.resolve(path), JSON.stringify(value, null, 2) + "\n")
+    await fs.writeText(await fs.resolve(path), JSON.stringify(value, null, 2) + "\n", void 0, void 0, getFsPolicy())
+  }
+  // 写文件必须带沙箱 policy（宿主 workspace-write 模式会拒绝无 policy 的写入）
+  const getFsPolicy = () => {
+    try {
+      const sp = ctx.get("sandboxPolicy")
+      const agents = ctx.get("agents")
+      const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
+      const agent = roots[roots.length - 1]
+      return (sp !== void 0 && agent !== void 0) ? sp.resolve({ session: agent.session }) : void 0
+    } catch (e) { return void 0 }
   }
   const resolveTemplatePreset = async (templateId, fallback) => {
     const settings = await readJsonFile(SETTINGS_FILE, {})
