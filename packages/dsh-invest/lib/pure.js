@@ -103,4 +103,10 @@ function splitBlocks(text) {
   return blocks
 }
 
-export { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks }
+// 工作台静态服务路径校验：必须位于指定根目录内，且拒绝 .. 目录穿越
+function isSafeServePath(p, root) {
+  const s = String(p || '')
+  return s.length > 0 && !s.includes('..') && s.startsWith(String(root || ''))
+}
+
+export { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks, isSafeServePath }

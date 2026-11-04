@@ -6,6 +6,15 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.21.0（2026-11-04）
+
+- **投研工作台 P0+P1（只读）**：解决"分析散落、跨会话看不见、重复提问"的第一层——把历史运行/报告/图表/账本聚合成一个本地页面。
+  - 新增 `tools/index_store.py`（workspace）：解析 runs.jsonl（113 次运行）+ reports（123 篇）+ invest-outputs（116 目录）→ `.dsh-invest/store/index.json`（约 280KB，含 runs/reports/records/codes 四张"表"）；运行↔报告按本地时间戳匹配（**94/113 匹配，29 篇早期孤儿报告单独入索引**，统计如实输出）；**结论链 records 为关键词回填**（立场/L1 目标/止损/论据摘要，source=backfill-keyword，P3 改为 invest_run 直接写结构化结论）；代码抽取防误报（排除时间戳/hex token/8 位日期；1xxxxx 转债与 5xxxxx 基金不入索引）。
+  - 新增页面 `.dsh-invest/web/index.html`（单文件原生 JS，无构建依赖）：概览（统计卡+最近结论+最近运行）/ 标的档案（结论链时间线+涉及运行）/ 运行记录（过滤）/ 报告阅读器（迷你 Markdown 渲染 + SVG 图表内联复用既有 chart 路由）/ 持仓侧栏（实时读账本）。
+  - 插件新增 4 条 loopback-only 路由：`GET /dsh-invest/app`（页面）、`/dsh-invest/api/index`（索引）、`/dsh-invest/api/holdings`（账本实时）、`/dsh-invest/api/report?path=`（报告正文：路径白名单 = REPORTS_DIR/OUTPUT_ROOT 且拒绝 `..`，≤2MB）。**页面与索引都是运行时读文件——之后改页面/重建索引不再需要动插件**。
+  - pure.js 新增 `isSafeServePath` + test/workbench.test.js；**node --test 36 项全绿**。
+  - 说明：HTTP 路由仅存在于 profile bundle（packages/dsh-invest/lib/index.js）；动态插件形态（src/host.js）无 webServer，不变。
+
 ## v0.20.0（2026-11-04）
 
 - **本地持仓账本（跨会话共享）**：此前每个会话的 invest_run 都看不到别的会话里的持仓，分析前要手工复述一遍。新增 `.dsh-invest/持仓.json` 作为唯一真相，流水线**每次运行自动读取并注入**每个阶段的提示词：
@@ -17,7 +26,7 @@
 - **账本边界（2026-11-04 用户明确）**：账本只记录**用户与 AI 对话/实盘决策产生**的持仓，**不混入 LihuQuantify 模拟盘**（paper_state 属量化系统，分账管理）；注入的账本规则中明确写死该边界，并要求 AI 在用户口述持仓变动时用 `holdings.py add/update` 落账。
 - 提示词预算：P_SELECT 5067 / P_NEWS 5919 / P_DEEP 6286 / P_FINAL 3254 / P_SWING 5063（均 <8000）；`node --test` 34 项全绿。
 - 生效仍需重启 DSH（宿主进程内模块不热替换）。
-- 说明：README 中标注 v0.20.0 的 `invest_config` 工具与「建议登记闭环」**尚未实现**（文档先行），下一版补齐；本版只交付持仓账本与实时兜底。
+- 说明：README 中标注 v0.20.0 的 `invest_config` 工具存在于**动态插件形态**（src/host.js → dist），尚未并入 profile bundle；「建议登记闭环」未实现。本版交付持仓账本与实时兜底。
 - **补充（同日验证中发现的真实故障）**：`.dsh-invest/tushare.token` 尾部多一个换行（57 字节），Tushare 对 `token+换行` 直接返回 **40101 您的token不对**，导致子代理取数全线失败、静默退化为缓存+腾讯。已把文件规范化为 56 字节（无尾换行/无 BOM），并新增 `scripts/tushare_query.py`（读 token 时 strip、输出结构化 JSON、`--raw` 看原始响应）；提示词取数方式改为**首选该脚本**，备选 node -e 也要求 `.trim()`。
 
 ## v0.19.6（2026-10-29）

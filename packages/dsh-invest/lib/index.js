@@ -3,7 +3,7 @@
 import z from "@deepseek-ai/schemastery"
 import { defineTool } from "@deepseek-ai/dsh-tools"
 import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING } from "./prompts.js"
-import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, z2, localYmd } from "./pure.js"
+import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, z2, localYmd } from "./pure.js"
 import { DEFAULT_PRESET, mergeRoutes, formatRoute, parseRoutesJson } from "./routes.js"
 
 // 插件配置：路由预置档 + 按角色覆盖（写在 profile 的 cordis.patch.yml 的 - id: invest → config）
@@ -77,6 +77,9 @@ function apply(ctx, config) {
   // 本地持仓账本（跨会话共享）：由 scripts/holdings.py 维护，invest_run 每次运行注入摘要
   const HOLDINGS_FILE = BASE_DIR + "/.dsh-invest/持仓.json"
   const REALTIME_SCRIPT = BASE_DIR + "/scripts/realtime_quote.py"
+  // 工作台（P1 只读）：页面与索引文件（tools/index_store.py 生成，运行时读取，改页面无需改插件）
+  const WEB_INDEX = BASE_DIR + "/.dsh-invest/web/index.html"
+  const STORE_INDEX = BASE_DIR + "/.dsh-invest/store/index.json"
 
   // 读取账本 → 紧凑 Markdown 摘要（不存在/损坏时返回空串，绝不阻断流水线）
   const readHoldingsBlock = async () => {
@@ -173,6 +176,74 @@ function apply(ctx, config) {
         }
         if (typeof p.elapsedMs === "number") out.elapsedMs = p.elapsedMs
         writeJson(res, 200, out)
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/app",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { res.statusCode = 403; res.end("forbidden: loopback-only"); return }
+        if (req.method !== "GET") { res.statusCode = 405; res.end("method not allowed"); return }
+        const fs = ctx.get("fs")
+        if (fs === void 0) { res.statusCode = 503; res.end("fs unavailable"); return }
+        try {
+          const html = await fs.readText(await fs.resolve(WEB_INDEX))
+          res.statusCode = 200
+          res.setHeader("content-type", "text/html; charset=utf-8")
+          res.setHeader("cache-control", "no-store")
+          res.end(html)
+        } catch (e) {
+          res.statusCode = 404
+          res.setHeader("content-type", "application/json; charset=utf-8")
+          res.end(JSON.stringify({ error: "workbench page missing (.dsh-invest/web/index.html): " + String(e).slice(0, 120) }))
+        }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/index",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const fs = ctx.get("fs")
+        if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
+        try {
+          const raw = await fs.readText(await fs.resolve(STORE_INDEX))
+          writeJson(res, 200, JSON.parse(raw))
+        } catch (e) { writeJson(res, 404, { error: "index not built: python tools/index_store.py" }) }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/holdings",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const fs = ctx.get("fs")
+        if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
+        try {
+          const raw = await fs.readText(await fs.resolve(HOLDINGS_FILE))
+          writeJson(res, 200, JSON.parse(raw))
+        } catch (e) { writeJson(res, 200, { none: true }) }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/report",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const url = new URL(req.url ?? "/", "http://localhost")
+        const p = queryParam(url, "path") ?? ""
+        const allowed = /.md$/i.test(p) && (isSafeServePath(p, REPORTS_DIR) || isSafeServePath(p, OUTPUT_ROOT))
+        if (!allowed) { writeJson(res, 400, { error: "denied" }); return }
+        const fs = ctx.get("fs")
+        if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
+        try {
+          const text = await fs.readText(await fs.resolve(p))
+          if (text.length > 2000000) { writeJson(res, 413, { error: "too large" }); return }
+          writeJson(res, 200, { path: p, text })
+        } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 200) }) }
       },
     },
   ]
