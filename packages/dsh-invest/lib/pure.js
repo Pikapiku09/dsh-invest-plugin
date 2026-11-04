@@ -127,13 +127,33 @@ function extractInvestCodes(text) {
 // 解析角色报告末尾的【结论结构化】{"code":...} 行；坏行跳过，不影响主流程
 function parseConclusionBlocks(text) {
   const out = []
-  const re = /【结论结构化】\s*(\{[^\r\n]+\})/g
-  let m
-  while ((m = re.exec(String(text || '')))) {
-    try {
-      const obj = JSON.parse(m[1])
-      if (obj && typeof obj.code === 'string' && obj.code) out.push(obj)
-    } catch (e) { /* 单行坏 JSON 忽略 */ }
+  const s = String(text || '')
+  const marker = '【结论结构化】'
+  let i = 0
+  while ((i = s.indexOf(marker, i)) >= 0) {
+    let j = i + marker.length
+    while (j < s.length) {
+      const cc = s.charCodeAt(j)
+      if (cc === 32 || cc === 9 || cc === 10 || cc === 13 || cc === 42 || cc === 96) j++
+      else break
+    }
+    if (s.charAt(j) !== '{') { i += marker.length; continue }
+    let depth = 0, inStr = false, esc = false, end = -1
+    for (let k = j; k < s.length; k++) {
+      const c = s.charAt(k)
+      if (esc) { esc = false; continue }
+      if (c.charCodeAt(0) === 92) { esc = true; continue }
+      if (inStr) { if (c === '"') { inStr = false } continue }
+      if (c === '"') { inStr = true; continue }
+      if (c === '{') { depth++ } else if (c === '}') { depth--; if (depth === 0) { end = k; break } }
+    }
+    if (end > 0) {
+      try {
+        const obj = JSON.parse(s.slice(j, end + 1))
+        if (obj && typeof obj.code === 'string' && obj.code) out.push(obj)
+      } catch (e) { /* 坏 JSON 忽略 */ }
+    }
+    i += marker.length
   }
   return out
 }

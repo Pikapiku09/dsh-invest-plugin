@@ -14,3 +14,10 @@ test('parseConclusionBlocks：解析结构化结论并跳过坏行', () => {
   assert.equal(rows[0].code, '600519.SH')
   assert.equal(rows[0].stance, '拒绝')
 })
+
+test('parseConclusionBlocks：容忍 markdown 加粗 **【结论结构化】**', () => {
+  const text = '**【结论结构化】**{"code":"000858.SZ","stance":"看多","target":180,"stop":150}'
+  const rows = parseConclusionBlocks(text)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].code, '000858.SZ')
+})
