@@ -1,6 +1,6 @@
 // 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改
 // 用法：将本文件内容作为 cordis_define 的 code.host 函数体
-// 生成时间：2026-11-04T12:29:44.746Z
+// 生成时间：2026-11-04T13:02:23.926Z
 
 const PROMPTS = {
   "DATA_BASE": "# 数据获取（使用 pwsh 工具，重要）\n- Tushare token 文件：{{BASE_DIR}}/.dsh-invest/tushare.token（用 pwsh 执行 Get-Content 读取并去除换行）\n- 取数方式（首选，最稳）：用 pwsh 执行 python \"{{BASE_DIR}}/scripts/tushare_query.py\" <api_name> k=v ...（脚本已 strip token，输出 {ok,code,msg,fields,rows}；加 --raw 看原始响应）。token 文件若带尾随换行，接口会直接返回 40101「您的token不对」——不要手写 token 拼接\n- 取数方式（备选）：用 pwsh 工具执行 node -e 后接双引号包裹的 JS；JS 内用单引号字符串；结构为：fetch 发送 POST 到 https://api.tushare.pro，请求体 JSON.stringify({api_name:接口名, token:令牌.trim(), params:{参数}})，然后 r.text() 后 console.log 输出\n- 接口速查：trade_cal(交易日历) / index_daily(指数，ts_code=000001.SH) / daily(日线，ts_code 形如 600519.SH，start_date/end_date 为 YYYYMMDD) / limit_list_d(涨跌停列表) / moneyflow(资金流，ts_code) / sw_daily(申万行业) / weekly(周线) / income(利润表) / fina_indicator(财务指标) / daily_basic(每日指标PE/PB) / news(新闻) / major_news(重大新闻) / express(业绩快报) / forecast(业绩预告)\n- 特色数据速查（概念/资金流/金股）：concept(概念板块列表，必带 trade_date=YYYYMMDD) / dc_index(东财概念指数行情，含领涨股与涨跌幅) / dc_member(东财概念成分，必带 trade_date，字段 con_code/con_name) / ths_index(同花顺概念指数，ts_code 形如 883300.TI) / ths_member(同花顺概念成分，ts_code=板块代码如 881174.TI) / moneyflow_dc(东财个股资金流，含主力净流入 net_amount) / moneyflow_ind_dc(东财板块资金流，content_type 区分 行业/概念/地域，概念资金流看题材主线) / moneyflow_ind_ths(同花顺板块资金流，含 net_buy_amount/net_amount) / moneyflow_ths(同花顺个股资金流) / broker_recommend(券商月度金股，month=YYYYMM，字段 month/broker/ts_code/name)\n- 日期锚定铁律：禁止用模型自身时间概念判断今天/上周/最近；先用 index_daily(ts_code=000001.SH, end_date=当年年末) 取返回记录中最大 trade_date 作为真实最新交易日；trade_cal 含未来日期，只能用于判断某日是否开市；所有行情查询 end_date 用真实最新交易日，start_date 往前推 60-120 自然日\n- 数据覆盖铁律：分析对象必须实际取到真实行情后才能给出具体价格；取数失败或接口无权限时如实标注，严禁编造数字；接口报错信息要贴出来\n- 禁止递归：你绝不可调用 invest_run、subagent、workflow 等任何子代理/流水线工具，也不能再发起子代理——取数只能自己用 pwsh 调 Tushare，分析只能自己完成，直接输出结果即可\n- 行情缓存：取数前先用 pwsh 检查缓存文件 {{BASE_DIR}}/.dsh-invest/cache/quotes/<接口>_<ts_code>_<end_date>_<start_date或na>.json 是否存在（<end_date> 填本次要查的日期、<start_date> 填本次查询区间起点，无区间参数的接口（如 daily_basic/income/fina_indicator）填 na；目录不存在视为未命中）；存在则 Get-Content 读取其内容直接使用，跳过该接口请求。每次取数成功后用 pwsh 把接口响应原文写入该路径（目录不存在先 New-Item -ItemType Directory -Force），供本流水线后续阶段与本日其他运行复用；缓存命中时在报告中标注[缓存命中]\n- 图表（强制规范与数量控制）：用 pwsh 工具写 SVG 文件到 {{BASE_DIR}}/.dsh-invest/charts/ 目录（注意转义）。每张图必须有：① 标题（股票名+代码+日期区间）；② 图例；③ 坐标轴与单位；④ 关键价位标注（水平虚线+文字：目标止盈价 L1/L2、止损价、支撑位、阻力位）。【数量上限】同一标的每轮流水线**最多生成 3 张**：a) 走势图（K线或收盘价 + MA5/10/20/60 + 关键价位水平线 + **九转序列计数标注合并在内**，数字标在K线上方=卖出序列/下方=买入序列）；b) MACD 背离图（DIF/DEA/柱 + 顶/底背离箭头与文字标注）；c) 仅多标的对比时才额外生成对比图。单标的默认只生成 a+b 两张。【去重铁律】输入中若提供【上游图表】清单，同类图表直接引用其完整绝对路径并在报告中标注，严禁重复生成同类型图表；整个流水线内同一标的的同一类型图只允许出现一张。报告正文提及图表时必须写完整绝对路径（以 E:/ 开头），禁止只写文件名\n- 实时行情兜底：若行情接口最新交易日早于今日（盘中尤其明显），用 pwsh 执行 python \"{{BASE_DIR}}/scripts/realtime_quote.py\" <代码1> <代码2> 取腾讯财经实时价；正文用 [实时·腾讯 HH:MM] 与 [日线·TuShare YYYYMMDD] 双标注；技术指标（MA/MACD/九转/周线）只能用日线收盘计算，实时价仅作盘中参考，严禁混用\n- 持仓账本：{{BASE_DIR}}/.dsh-invest/持仓.json（流水线已自动注入【当前持仓账本】摘要；需要细节用 pwsh 执行 python \"{{BASE_DIR}}/scripts/holdings.py\" list；严禁编造账本外持仓）\n- 结论结构化（强制，供工作台结论链读取）：报告末尾必须为每个核心标的（最多 3 个）各输出一行，格式严格为：【结论结构化】{\"code\":\"600519.SH\",\"stance\":\"观察\",\"target\":123.45,\"stop\":110.0,\"thesis\":\"80字内论据\",\"invalidate_if\":\"结论失效条件\"}；stance 只能取 看多/拒绝/观察/持有/减仓/离场；未知数字填 null，不得编造。该行之后可再写免责声明，但不得省略此结构\n- 效率纪律：① 取数脚本必须合并请求——一个 node -e 脚本内连续 fetch 多个接口（用 Promise.all 或顺序 await）一次性输出全部结果，严禁每个接口单独跑一次 pwsh；② 调用上限：行情类(daily/daily_basic/moneyflow/moneyflow_dc/weekly)每只股票各最多 1 次，指数与板块(index_daily/limit_list_d/sw_daily/dc_index/moneyflow_ind_dc/moneyflow_ind_ths/concept/broker_recommend)各最多 1 次，财务类(income/fina_indicator)合计 1 次；③ 输出精炼：最终 text 输出控制在 2500 字以内，reasoning 里不要重复粘贴已取到的数据，直接进入分析结论",
@@ -59,6 +59,8 @@ function collectCharts(t) {
 function buildGroups(roleCodes, roleMap) {
   const has = (c) => roleCodes.includes(c)
   const groups = []
+  // 早盘异动：消息 → 选股 串行接力；其余模式仍沿用选股∥消息∥波段并行
+  if (roleCodes.length === 2 && has('消息') && has('选股')) return [[roleMap['消息']], [roleMap['选股']]]
   const a = []
   if (has('选股')) a.push(roleMap['选股'])
   if (has('消息')) a.push(roleMap['消息'])
@@ -178,13 +180,108 @@ function parseConclusionBlocks(text) {
   return out
 }
 
+
+// 东财交割单 CSV 解析（成交流水）：取每只股票最新「股份余额」，成本按买入加权均价估算
+function parseEastmoneyCsv(text) {
+  const rows = []
+  let row = [], cell = '', quoted = false
+  const s = String(text || '').replace(/^\uFEFF/, '')
+  for (let i = 0; i <= s.length; i++) {
+    const c = i < s.length ? s[i] : '\n'
+    if (c === '"') {
+      if (quoted && s[i + 1] === '"') { cell += '"'; i++ } else quoted = !quoted
+    } else if (c === ',' && !quoted) { row.push(cell); cell = '' }
+    else if ((c === '\n' || c === '\r') && !quoted) {
+      if (c === '\r' && s[i + 1] === '\n') i++
+      row.push(cell); cell = ''
+      if (row.some((x) => x.trim())) rows.push(row)
+      row = []
+    } else cell += c
+  }
+  const clean = (v) => String(v == null ? '' : v).trim().replace(/^=\s*/, '').replace(/"/g, '').trim()
+  const num = (v) => { const n = Number(clean(v)); return Number.isFinite(n) ? n : null }
+  const codeOf = (v) => {
+    const d = clean(v).replace(/\D/g, '')
+    if (!/^\d{6}$/.test(d)) return ''
+    if (/^[69]/.test(d)) return d + '.SH'
+    if (/^[023]/.test(d)) return d + '.SZ'
+    if (/^[48]/.test(d)) return d + '.BJ'
+    return ''
+  }
+  if (!rows.length) return { positions: [], account: {}, warnings: ['CSV 无有效数据'] }
+  const header = rows[0].map(clean)
+  const col = (names, fallback) => {
+    const i = header.findIndex((h) => names.includes(h))
+    return i >= 0 ? i : fallback
+  }
+  const idx = {
+    date: col(['发生日期', '交收日期', '成交日期'], 0), time: col(['发生时间', '成交时间'], 2),
+    code: col(['证券代码'], 3), name: col(['证券名称'], 4), type: col(['交易类别', '摘要', '业务名称'], 5),
+    qty: col(['成交数量'], 6), price: col(['成交均价'], 7),
+    balance: col(['股份余额', '股票余额'], 14), cash: col(['资金余额'], 15),
+  }
+  const trades = []
+  for (const r of rows.slice(1)) {
+    const code = codeOf(r[idx.code])
+    if (!code) continue
+    const date = clean(r[idx.date])
+    const time = clean(r[idx.time])
+    trades.push({
+      code, name: clean(r[idx.name]), type: clean(r[idx.type]),
+      qty: num(r[idx.qty]) || 0, price: num(r[idx.price]) || 0,
+      balance: num(r[idx.balance]), cash: num(r[idx.cash]),
+      date, time, sortKey: date.replace(/\D/g, '') + time.replace(/\D/g, ''),
+    })
+  }
+  const groups = new Map()
+  for (const t of trades) {
+    if (!groups.has(t.code)) groups.set(t.code, [])
+    groups.get(t.code).push(t)
+  }
+  const positions = []
+  let cash = null
+  let latestSort = ''
+  let latestName = ''
+  for (const t of trades) if (t.cash !== null && t.sortKey >= latestSort) { latestSort = t.sortKey; cash = t.cash; latestName = t.type }
+  for (const [code, list] of groups) {
+    list.sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    let qty = 0, cost = 0
+    for (const t of list) {
+      if (t.type.includes('买入')) {
+        const next = qty + t.qty
+        cost = next > 0 ? (qty * cost + t.qty * t.price) / next : 0
+        qty = next
+      } else if (t.type.includes('卖出')) {
+        qty = Math.max(0, qty - t.qty)
+        if (qty === 0) cost = 0
+      }
+    }
+    const latest = list[list.length - 1]
+    const shares = latest.balance !== null ? latest.balance : qty
+    if (shares > 0) positions.push({
+      code, name: latest.name, pool: '实盘', source: 'eastmoney-csv',
+      shares, weight_pct: null, cost: cost > 0 ? Math.round(cost * 1000) / 1000 : latest.price,
+      status: '持有', stop: null, target: null, note: '',
+    })
+  }
+  const dates = trades.map((t) => t.date).filter(Boolean).sort()
+  const warnings = ['成本价为交割单买入加权均价估算；若导出区间不含完整历史，请在确认页人工修正。']
+  if (latestName) warnings.push('现金取最后一笔「' + latestName + '」后的资金余额。')
+  return {
+    positions,
+    account: cash === null ? {} : { cash },
+    warnings,
+    meta: { trades: trades.length, firstDate: dates[0] || '', lastDate: dates[dates.length - 1] || '' },
+  }
+}
+
 // 工作台静态服务路径校验：必须位于指定根目录内，且拒绝 .. 目录穿越
 function isSafeServePath(p, root) {
   const s = String(p || '')
   return s.length > 0 && !s.includes('..') && s.startsWith(String(root || ''))
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks, isSafeServePath, extractInvestCodes, parseConclusionBlocks }
+if (typeof module !== 'undefined' && module.exports) module.exports = { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv }
 
 // dsh-invest 角色模型路由（纯数据 + 纯函数，无副作用、无外部依赖，可独立单测）
 // 双形态共享：dist 由 tools/build.js 内联；packages/dsh-invest/lib/routes.js 由 build.js 转换为 ESM 后 import
@@ -206,6 +303,13 @@ const PRESETS = {
     '深度': 'inherit',
     '总判断': 'inherit',
     '波段': 'inherit',
+  },
+  fast: {
+    '选股': 'deepseek-official/deepseek-v4-flash@low',
+    '消息': 'deepseek-official/deepseek-v4-flash@low',
+    '深度': 'deepseek-official/deepseek-v4-flash@low',
+    '总判断': 'deepseek-official/deepseek-v4-flash@low',
+    '波段': 'deepseek-official/deepseek-v4-flash@low',
   },
   budget: {
     '选股': 'deepseek-official/deepseek-flash@off',

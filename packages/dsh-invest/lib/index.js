@@ -3,8 +3,8 @@
 import z from "@deepseek-ai/schemastery"
 import { defineTool } from "@deepseek-ai/dsh-tools"
 import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING } from "./prompts.js"
-import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, extractInvestCodes, parseConclusionBlocks, z2, localYmd } from "./pure.js"
-import { DEFAULT_PRESET, mergeRoutes, formatRoute, parseRoutesJson } from "./routes.js"
+import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv, z2, localYmd } from "./pure.js"
+import { DEFAULT_PRESET, PRESETS, ROLE_CODES, mergeRoutes, formatRoute, formatRouteChain, parseRouteList, parseRoutesJson } from "./routes.js"
 
 // 插件配置：路由预置档 + 按角色覆盖（写在 profile 的 cordis.patch.yml 的 - id: invest → config）
 const Config = z.object({
@@ -74,6 +74,10 @@ function apply(ctx, config) {
   // 模型路由配置：插件 config（cordis.patch.yml）与工作区覆盖文件
   const PLUGIN_CONFIG = (config && typeof config === "object") ? config : {}
   const ROUTES_FILE = BASE_DIR + "/.dsh-invest/routes.json"
+  const SETTINGS_FILE = BASE_DIR + "/.dsh-invest/settings.json"
+  const HOLDINGS_AUDIT = BASE_DIR + "/.dsh-invest/store/holdings_audit.jsonl"
+  const HOLDINGS_BACKUP_DIR = BASE_DIR + "/.dsh-invest/store/backups"
+  const holdingsDrafts = Object.create(null)
   // 本地持仓账本（跨会话共享）：由 scripts/holdings.py 维护，invest_run 每次运行注入摘要
   const HOLDINGS_FILE = BASE_DIR + "/.dsh-invest/持仓.json"
   const REALTIME_SCRIPT = BASE_DIR + "/scripts/realtime_quote.py"
@@ -236,13 +240,153 @@ function apply(ctx, config) {
     return null
   }
 
+  // 持仓：所有来源先形成草稿，人工确认后才写账本；截图原图只转为临时 attachment，不留档
+  const readHoldingsDoc = async () => await readJsonFile(HOLDINGS_FILE, { version: 1, updated_at: null, account: {}, positions: [] })
+  const normalizePosition = (p, source) => {
+    const code = String(p.code || "").toUpperCase().trim()
+    if (!/^\d{6}\.(SH|SZ|BJ)$/.test(code)) throw new Error("股票代码格式错误：" + code)
+    const shares = Number(p.shares)
+    if (!Number.isFinite(shares) || shares < 0) throw new Error(code + " 持仓数量无效")
+    const cost = p.cost === null || p.cost === void 0 || p.cost === "" ? null : Number(p.cost)
+    if (cost !== null && (!Number.isFinite(cost) || cost < 0)) throw new Error(code + " 成本价无效")
+    return {
+      code, name: String(p.name || ""), pool: String(p.pool || "实盘"), source: source || p.source || "manual",
+      shares: Math.round(shares), weight_pct: null, cost,
+      status: String(p.status || "持有"), stop: p.stop ?? null, target: p.target ?? null, note: String(p.note || ""),
+    }
+  }
+  const positionsDiff = (before, after) => {
+    const a = new Map((before || []).map((p) => [p.code, p]))
+    const b = new Map((after || []).map((p) => [p.code, p]))
+    const added = [], removed = [], modified = [], unchanged = []
+    for (const [code] of b) if (!a.has(code)) added.push(code)
+    for (const [code] of a) if (!b.has(code)) removed.push(code)
+    for (const [code, next] of b) {
+      const prev = a.get(code)
+      if (!prev) continue
+      const changed = ["name", "shares", "cost", "status", "note", "pool", "stop", "target"].some((k) => String(prev[k] ?? "") !== String(next[k] ?? ""))
+      ;(changed ? modified : unchanged).push(code)
+    }
+    return { added, removed, modified, unchanged }
+  }
+  const makeHoldingsDraft = async (source, positions, account, warnings) => {
+    const current = await readHoldingsDoc()
+    const id = "hd_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7)
+    const draft = { id, source, createdAt: Date.now(), positions, account: account || {}, warnings: warnings || [] }
+    holdingsDrafts[id] = draft
+    return { draftId: id, source, positions, account: draft.account, diff: positionsDiff(current.positions, positions), warnings: draft.warnings }
+  }
+  const confirmHoldingsDraft = async (draftId, rawPositions, account) => {
+    const draft = holdingsDrafts[draftId]
+    if (!draft) throw new Error("草稿不存在或已过期，请重新上传/生成")
+    const current = await readHoldingsDoc()
+    const positions = (Array.isArray(rawPositions) ? rawPositions : []).map((p) => normalizePosition(p, draft.source)).filter((p) => p.shares > 0)
+    const nextAccount = account && typeof account === "object" ? account : (draft.account || {})
+    const diff = positionsDiff(current.positions, positions)
+    const fs = ctx.get("fs")
+    if (fs === void 0) throw new Error("fs unavailable")
+    const d = new Date()
+    const stamp = localYmd() + "_" + z2(d.getHours()) + z2(d.getMinutes()) + z2(d.getSeconds())
+    const backup = HOLDINGS_BACKUP_DIR + "/持仓_" + stamp + ".json"
+    try { await fs.writeText(await fs.resolve(backup), JSON.stringify(current, null, 2) + "\n") } catch (e) { /* 首次无账本可忽略 */ }
+    const updatedAt = d.toISOString()
+    const next = { version: 1, updated_at: updatedAt, account: nextAccount, positions }
+    await writeJsonFile(HOLDINGS_FILE, next)
+    const auditTarget = await fs.resolve(HOLDINGS_AUDIT)
+    let oldLog = ""
+    try { oldLog = await fs.readText(auditTarget) } catch (e) { /* 首次 */ }
+    const audit = JSON.stringify({ ts: updatedAt, action: "confirm", source: draft.source, draftId, diff, positions, account: nextAccount })
+    await fs.writeText(auditTarget, oldLog + (oldLog && !oldLog.endsWith("\n") ? "\n" : "") + audit + "\n")
+    delete holdingsDrafts[draftId]
+    return { ok: true, updated_at: updatedAt, backup, diff }
+  }
+  const runVisionSubagent = async (prompt) => {
+    const agents = ctx.get("agents")
+    const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
+    const parent = roots[roots.length - 1]
+    if (!parent) throw new Error("没有可用的顶层 Agent，无法识别截图")
+    const candidates = []
+    try { if (ctx.subagents) candidates.push(ctx.subagents) } catch (e) { /* ignore */ }
+    for (const n of ["subagents", "subagent"]) {
+      try { const v = ctx.get(n, true); if (v) candidates.push(v) } catch (e) { /* ignore */ }
+      try { const v = ctx.get(n, false); if (v) candidates.push(v) } catch (e) { /* ignore */ }
+    }
+    const native = candidates.find((x) => typeof x.start === "function")
+    const activation = candidates.find((x) => typeof x.startActivation === "function")
+    const signal = new AbortController().signal
+    let run
+    if (native) run = await native.start("spawn", { label: "持仓截图识别", prompt, parent, signal })
+    else if (activation) {
+      const act = await activation.startActivation({ provider: "spawn", label: "持仓截图识别", request: { prompt, parent }, signal, delivery: "caller" })
+      run = { result: act.result }
+    } else throw new Error("子代理服务不可用，无法识别截图")
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("截图识别超时（2 分钟）")), 120000))
+    const result = await Promise.race([run.result, timeout])
+    if (result && result.stopReason === "error") throw new Error("截图识别失败（stopReason=error）")
+    return extractBoth(result).text
+  }
+  const recognizeScreenshot = async (imageBase64, mimeType) => {
+    const attachments = ctx.get("attachments")
+    if (!attachments || typeof attachments.admitPromptContent !== "function") throw new Error("附件服务不可用，无法上传截图")
+    const instruction = "你是持仓截图识别器。只输出一个 JSON 对象，不要任何解释或代码围栏：{\"positions\":[{\"code\":\"600519.SH\",\"name\":\"贵州茅台\",\"shares\":100,\"cost\":1500,\"status\":\"持有\",\"note\":\"\"}],\"account\":{\"cash\":0}}。请真实读取截图中的证券代码、名称、持仓数量、成本价与可用资金；代码转换为 6 位+.SH/.SZ/.BJ，无法辨认的字段填 null，不要编造。"
+    const prompt = await attachments.admitPromptContent([
+      { type: "text", text: instruction },
+      { type: "image", data: imageBase64, mediaType: mimeType || "image/png", name: "holdings-upload" },
+    ])
+    const text = await runVisionSubagent(prompt)
+    const start = text.indexOf("{"), end = text.lastIndexOf("}")
+    if (start < 0 || end <= start) throw new Error("模型未返回持仓 JSON，请人工核对后重试")
+    let parsed
+    try { parsed = JSON.parse(text.slice(start, end + 1)) } catch (e) { throw new Error("持仓 JSON 解析失败：" + String(e).slice(0, 120)) }
+    if (!Array.isArray(parsed.positions)) throw new Error("识别结果缺少 positions 数组")
+    return { positions: parsed.positions, account: parsed.account || {} }
+  }
+
+  // 模型设置：角色路由写 routes.json；模板预设写 settings.json（模板 > 角色 > 全局预设 > 继承宿主）
+  const readJsonFile = async (path, fallback) => {
+    const fs = ctx.get("fs")
+    if (fs === void 0) return fallback
+    try { return JSON.parse(await fs.readText(await fs.resolve(path))) } catch (e) { return fallback }
+  }
+  const writeJsonFile = async (path, value) => {
+    const fs = ctx.get("fs")
+    if (fs === void 0) throw new Error("fs unavailable")
+    await fs.writeText(await fs.resolve(path), JSON.stringify(value, null, 2) + "\n")
+  }
+  const resolveTemplatePreset = async (templateId, fallback) => {
+    const settings = await readJsonFile(SETTINGS_FILE, {})
+    const value = settings.templates && settings.templates[templateId]
+    return typeof value === "string" && PRESETS[value] ? value : (PRESETS[fallback] ? fallback : "inherit")
+  }
+  const modelSettingsPayload = async () => {
+    const fileRoutes = (await readRoutesFile()) || {}
+    const effective = mergeRoutes(DEFAULT_PRESET, PLUGIN_CONFIG.routes, fileRoutes, {})
+    const settings = await readJsonFile(SETTINGS_FILE, {})
+    const descriptions = {
+      inherit: "继承当前会话模型（默认）",
+      fast: "快速档：DeepSeek V4 Flash，适合快诊/消息",
+      budget: "经济档：低成本快速分析",
+      balanced: "均衡档：速度与深度平衡",
+      quality: "高质量档：更强模型与推理强度",
+      "deepseek-only": "全部使用 DeepSeek 系列",
+    }
+    return {
+      roles: ROLE_CODES.map((code) => ({ code, name: ROLE_MAP[code].name, route: formatRouteChain(effective[code]) })),
+      templates: await Promise.all(TASK_TEMPLATES.map(async (t) => ({ id: t.id, name: t.name, preset: await resolveTemplatePreset(t.id, t.preset) }))),
+      presets: Object.keys(PRESETS).map((id) => ({ id, name: id, description: descriptions[id] || id })),
+      routesFile: ROUTES_FILE,
+      settingsFile: SETTINGS_FILE,
+    }
+  }
+
   // P2：一键任务模板（question 中 {code}/{input} 由网页传入）
   const TASK_TEMPLATES = [
-    { id: "stock-review", name: "个股体检", description: "六维诊断、目标价、止损与失效条件", mode: "个股", roles: ["深度"], needsCode: true, placeholder: "600519 或 600519.SH", question: "对 {code} 做个股体检：先对照历史结论与持仓账本，再给出趋势、估值、目标价、止损与失效条件。{input}" },
-    { id: "portfolio-review", name: "组合体检", description: "按当前账本复盘持仓风险与加减仓优先级", mode: "总判断", roles: ["深度", "总判断"], needsCode: false, placeholder: "", question: "复盘当前持仓账本：逐只核对成本、趋势、止损与仓位风险，给出持有/加仓/减仓/离场优先级，并明确与上次结论的差异。{input}" },
-    { id: "morning-news", name: "早盘异动", description: "扫描持仓和近期关注标的的消息与异动", mode: "消息", roles: ["消息"], needsCode: false, placeholder: "", question: "扫描当前持仓账本及近期关注标的的最新消息、政策和异动，按可信度与影响排序，标注需跟踪的风险。{input}" },
-    { id: "swing-weekly", name: "波段周检", description: "复核三重共振、v2 出场与纸面买卖点", mode: "波段池", roles: ["波段"], needsCode: false, placeholder: "", question: "执行本周波段池周检：读取台账，复核池内标的三重共振与 v2 出场条件，记录纸面虚拟买卖点并更新台账；暂停实盘纪律不变。{input}" },
-    { id: "earnings", name: "财报速读", description: "最新财务数据、盈利质量与估值位置", mode: "个股", roles: ["深度"], needsCode: true, placeholder: "代码 + 可选报告期", question: "速读 {code} 最新可得的财报与财务指标：增长、盈利质量、现金流、负债、估值分位与主要风险，给出结论和失效条件。{input}" },
+    { id: "stock-review", name: "个股体检", description: "消息面 → 技术估值财务 → 综合决策", mode: "个股", roles: ["消息", "深度", "总判断"], preset: "inherit", needsCode: true, placeholder: "600519 或 600519.SH", question: "对 {code} 做深度体检：先取最新消息面，再做技术/估值/财务六维诊断，最后综合给出目标价、止损与失效条件。{input}" },
+    { id: "stock-quick", name: "个股快诊", description: "快速技术估值判断 + 一句话结论", mode: "个股", roles: ["深度", "总判断"], preset: "fast", needsCode: true, placeholder: "600519 或 600519.SH", question: "对 {code} 做快速诊断：用必要行情与关键指标给出300字内结论、支撑/压力位、风险回报比与失效条件。{input}" },
+    { id: "portfolio-review", name: "组合体检", description: "持仓消息风险 + 逐只诊断 + 调仓建议", mode: "总判断", roles: ["消息", "深度", "总判断"], preset: "inherit", needsCode: false, placeholder: "", question: "复盘当前持仓账本：先排查持仓相关风险消息，再逐只核对成本、趋势、估值与止损，最后给出持有/加仓/减仓/离场及调仓优先级，并明确与上次结论的差异。{input}" },
+    { id: "morning-news", name: "早盘异动", description: "隔夜消息与大盘 → 影响标的行情", mode: "消息", roles: ["消息", "选股"], preset: "fast", needsCode: false, placeholder: "", question: "扫描隔夜消息、政策、大盘情绪及持仓/近期关注标的异动，随后补充受影响标的的最新行情与相对强弱，按可信度和影响排序。{input}" },
+    { id: "swing-weekly", name: "波段周检", description: "周线共振复核 → 纸面买卖决策", mode: "波段池", roles: ["波段", "总判断"], preset: "inherit", needsCode: false, placeholder: "", question: "执行本周波段池周检：读取台账，复核池内标的三重共振与 v2 出场条件，再由总判断汇总纸面虚拟买卖点并更新台账；暂停实盘纪律不变。{input}" },
+    { id: "market-screen", name: "全市场海选", description: "全市场扫描 → 候选交易计划", mode: "选股", roles: ["选股", "深度"], preset: "balanced", needsCode: false, placeholder: "", question: "按既定纪律做全市场海选，再对核心候选做必要的技术/估值复核，输出候选名单、评分、入场/止损与失效条件。{input}" },
   ]
   const jobStore = Object.create(null)
   const jobOrder = []
@@ -304,7 +448,8 @@ function apply(ctx, config) {
       if (!parent) throw new Error("当前没有可用的顶层 Agent；请先打开一个 DSH 会话再启动网页任务")
       const controller = new AbortController()
       job.abort = () => controller.abort()
-      const result = await tool.execute({ mode: job.mode, question: job.question, roles: job.roles, preset: "balanced", detail: "full" }, { callId: job.id, agent: parent, signal: controller.signal })
+      const preset = await resolveTemplatePreset(job.templateId, job.preset)
+      const result = await tool.execute({ mode: job.mode, question: job.question, roles: job.roles, preset, detail: "full" }, { callId: job.id, agent: parent, signal: controller.signal })
       job.result = result
       const outs = Array.isArray(result.outputs) ? result.outputs : []
       job.status = result.error || (outs.length && outs.every((o) => !o.ok)) ? "failed" : "done"
@@ -331,7 +476,7 @@ function apply(ctx, config) {
     if (taskQueue.length >= 8) throw new Error("任务队列已满，请等待现有任务完成")
     const id = "job_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7)
     const question = template.question.replaceAll("{code}", code || "").replaceAll("{input}", custom ? "\n补充要求：" + custom : "")
-    const job = { id, templateId: template.id, name: template.name, mode: template.mode, roles: template.roles, question, status: "queued", createdAt: Date.now(), elapsedMs: 0 }
+    const job = { id, templateId: template.id, name: template.name, mode: template.mode, roles: template.roles, preset: template.preset || "inherit", question, status: "queued", createdAt: Date.now(), elapsedMs: 0 }
     jobStore[id] = job
     jobOrder.push(id)
     if (jobOrder.length > 30) { const old = jobOrder.shift(); if (jobStore[old] && jobStore[old].status !== "running") delete jobStore[old] }
@@ -558,6 +703,107 @@ function apply(ctx, config) {
         writeJson(res, 200, { records: records.slice(-100) })
       },
     },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/model-settings",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        try {
+          if (req.method === "GET") { writeJson(res, 200, await modelSettingsPayload()); return }
+          if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+          const body = await readRequestJson(req)
+          if (body.scope === "role") {
+            const role = String(body.role || "")
+            if (!ROLE_MAP[role]) { writeJson(res, 400, { error: "未知分析师角色：" + role }); return }
+            const route = String(body.route || "inherit").trim() || "inherit"
+            if (route !== "inherit" && !(parseRouteList(route) || []).length) { writeJson(res, 400, { error: "模型路由格式应为 inherit 或 provider/model@effort（可用 | 备选）" }); return }
+            const doc = await readJsonFile(ROUTES_FILE, {})
+            doc[role] = route
+            await writeJsonFile(ROUTES_FILE, doc)
+            writeJson(res, 200, { ok: true, scope: "role", role, route, settings: await modelSettingsPayload() })
+            return
+          }
+          if (body.scope === "template") {
+            const template = TASK_TEMPLATES.find((t) => t.id === String(body.templateId || ""))
+            const preset = String(body.preset || "inherit")
+            if (!template) { writeJson(res, 400, { error: "未知模板" }); return }
+            if (!PRESETS[preset]) { writeJson(res, 400, { error: "未知预设档：" + preset }); return }
+            const settings = await readJsonFile(SETTINGS_FILE, {})
+            if (!settings.templates || typeof settings.templates !== "object") settings.templates = {}
+            settings.templates[template.id] = preset
+            await writeJsonFile(SETTINGS_FILE, settings)
+            writeJson(res, 200, { ok: true, scope: "template", templateId: template.id, preset, settings: await modelSettingsPayload() })
+            return
+          }
+          writeJson(res, 400, { error: "scope 必须为 role 或 template" })
+        } catch (e) { writeJson(res, 400, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/holdings/import",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const source = String(body.source || "")
+          if (source === "csv") {
+            let text = ""
+            if (typeof body.contentBase64 === "string" && body.contentBase64) {
+              text = new TextDecoder("gb18030").decode(Buffer.from(body.contentBase64, "base64"))
+            } else if (typeof body.content === "string") text = body.content
+            if (!text.trim()) { writeJson(res, 400, { error: "请上传东财交割单 CSV（contentBase64）" }); return }
+            const parsed = parseEastmoneyCsv(text)
+            const positions = parsed.positions.map((p) => normalizePosition(p, "eastmoney-csv"))
+            writeJson(res, 200, await makeHoldingsDraft("csv", positions, parsed.account, parsed.warnings.concat(parsed.meta && parsed.meta.trades ? ["共解析 " + parsed.meta.trades + " 笔成交流水。"] : [])))
+            return
+          }
+          if (source === "screenshot") {
+            const imageBase64 = String(body.imageBase64 || "").replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "")
+            if (!imageBase64) { writeJson(res, 400, { error: "请提供截图 imageBase64" }); return }
+            const parsed = await recognizeScreenshot(imageBase64, String(body.mimeType || "image/png"))
+            const positions = parsed.positions.map((p) => normalizePosition(p, "screenshot"))
+            writeJson(res, 200, await makeHoldingsDraft("screenshot", positions, parsed.account, ["截图由多模态模型识别，原图未留档；请逐项核对后再确认写入。"]))
+            return
+          }
+          if (source === "manual") {
+            const current = await readHoldingsDoc()
+            const positions = Array.isArray(body.positions) ? body.positions.map((p) => normalizePosition(p, "manual")) : current.positions
+            const account = body.account && typeof body.account === "object" ? body.account : current.account
+            writeJson(res, 200, await makeHoldingsDraft("manual", positions, account, ["手动编辑不会自动写入，请确认差异后保存。"]))
+            return
+          }
+          writeJson(res, 400, { error: "source 必须为 csv / screenshot / manual" })
+        } catch (e) { writeJson(res, 400, { error: String(e).slice(0, 400) }) }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/holdings/draft",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const url = new URL(req.url ?? "/", "http://localhost")
+        const id = queryParam(url, "id") || ""
+        const draft = holdingsDrafts[id]
+        if (!draft) { writeJson(res, 404, { error: "草稿不存在或已过期" }); return }
+        const current = await readHoldingsDoc()
+        writeJson(res, 200, { draftId: id, source: draft.source, positions: draft.positions, account: draft.account, diff: positionsDiff(current.positions, draft.positions), warnings: draft.warnings })
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/holdings/confirm",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          writeJson(res, 200, await confirmHoldingsDraft(String(body.draftId || ""), body.positions, body.account))
+        } catch (e) { writeJson(res, 400, { error: String(e).slice(0, 400) }) }
+      },
+    },
   ]
 
   const tool = defineTool({
@@ -569,7 +815,7 @@ function apply(ctx, config) {
       roles: { type: "array", items: { type: "string" }, description: "可选：自定义角色组合，取值 ['选股','消息','深度','总判断','波段'] 的子集（如 ['深度','总判断']）；省略则按 mode 默认角色。用户问题中明确列出角色时按所列角色执行；用户要求选择角色时用 ask_user_question 询问后再传" },
       context: { type: "string", description: "可选：上一轮分析结论/追问背景，让本轮分析有记忆" },
       routes: { type: "object", additionalProperties: true, description: "可选：按角色覆盖模型路由，形如 {\"总判断\":\"zai-coding-cn/glm-5.3@max\"}；值为 provider/model@effort，可用 \"a|b\" 写备选链，写 \"inherit\" 表示继承宿主模型；省略则用插件默认路由表" },
-      preset: { type: "string", description: "可选：路由预置档 inherit/budget/balanced/deepseek-only/quality，默认 balanced" },
+      preset: { type: "string", description: "可选：路由预置档 inherit/fast/budget/balanced/deepseek-only/quality，默认 inherit（继承宿主）" },
       detail: { type: "string", description: "可选：full=模型侧全量（token 多）/ summary=摘要省 token（默认）。不影响 GUI 卡片，卡片始终显示完整报告与推理" },
     },
     output: {

@@ -38,6 +38,8 @@ function collectCharts(t) {
 function buildGroups(roleCodes, roleMap) {
   const has = (c) => roleCodes.includes(c)
   const groups = []
+  // 早盘异动：消息 → 选股 串行接力；其余模式仍沿用选股∥消息∥波段并行
+  if (roleCodes.length === 2 && has('消息') && has('选股')) return [[roleMap['消息']], [roleMap['选股']]]
   const a = []
   if (has('选股')) a.push(roleMap['选股'])
   if (has('消息')) a.push(roleMap['消息'])
@@ -157,10 +159,105 @@ function parseConclusionBlocks(text) {
   return out
 }
 
+
+// 东财交割单 CSV 解析（成交流水）：取每只股票最新「股份余额」，成本按买入加权均价估算
+function parseEastmoneyCsv(text) {
+  const rows = []
+  let row = [], cell = '', quoted = false
+  const s = String(text || '').replace(/^\uFEFF/, '')
+  for (let i = 0; i <= s.length; i++) {
+    const c = i < s.length ? s[i] : '\n'
+    if (c === '"') {
+      if (quoted && s[i + 1] === '"') { cell += '"'; i++ } else quoted = !quoted
+    } else if (c === ',' && !quoted) { row.push(cell); cell = '' }
+    else if ((c === '\n' || c === '\r') && !quoted) {
+      if (c === '\r' && s[i + 1] === '\n') i++
+      row.push(cell); cell = ''
+      if (row.some((x) => x.trim())) rows.push(row)
+      row = []
+    } else cell += c
+  }
+  const clean = (v) => String(v == null ? '' : v).trim().replace(/^=\s*/, '').replace(/"/g, '').trim()
+  const num = (v) => { const n = Number(clean(v)); return Number.isFinite(n) ? n : null }
+  const codeOf = (v) => {
+    const d = clean(v).replace(/\D/g, '')
+    if (!/^\d{6}$/.test(d)) return ''
+    if (/^[69]/.test(d)) return d + '.SH'
+    if (/^[023]/.test(d)) return d + '.SZ'
+    if (/^[48]/.test(d)) return d + '.BJ'
+    return ''
+  }
+  if (!rows.length) return { positions: [], account: {}, warnings: ['CSV 无有效数据'] }
+  const header = rows[0].map(clean)
+  const col = (names, fallback) => {
+    const i = header.findIndex((h) => names.includes(h))
+    return i >= 0 ? i : fallback
+  }
+  const idx = {
+    date: col(['发生日期', '交收日期', '成交日期'], 0), time: col(['发生时间', '成交时间'], 2),
+    code: col(['证券代码'], 3), name: col(['证券名称'], 4), type: col(['交易类别', '摘要', '业务名称'], 5),
+    qty: col(['成交数量'], 6), price: col(['成交均价'], 7),
+    balance: col(['股份余额', '股票余额'], 14), cash: col(['资金余额'], 15),
+  }
+  const trades = []
+  for (const r of rows.slice(1)) {
+    const code = codeOf(r[idx.code])
+    if (!code) continue
+    const date = clean(r[idx.date])
+    const time = clean(r[idx.time])
+    trades.push({
+      code, name: clean(r[idx.name]), type: clean(r[idx.type]),
+      qty: num(r[idx.qty]) || 0, price: num(r[idx.price]) || 0,
+      balance: num(r[idx.balance]), cash: num(r[idx.cash]),
+      date, time, sortKey: date.replace(/\D/g, '') + time.replace(/\D/g, ''),
+    })
+  }
+  const groups = new Map()
+  for (const t of trades) {
+    if (!groups.has(t.code)) groups.set(t.code, [])
+    groups.get(t.code).push(t)
+  }
+  const positions = []
+  let cash = null
+  let latestSort = ''
+  let latestName = ''
+  for (const t of trades) if (t.cash !== null && t.sortKey >= latestSort) { latestSort = t.sortKey; cash = t.cash; latestName = t.type }
+  for (const [code, list] of groups) {
+    list.sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    let qty = 0, cost = 0
+    for (const t of list) {
+      if (t.type.includes('买入')) {
+        const next = qty + t.qty
+        cost = next > 0 ? (qty * cost + t.qty * t.price) / next : 0
+        qty = next
+      } else if (t.type.includes('卖出')) {
+        qty = Math.max(0, qty - t.qty)
+        if (qty === 0) cost = 0
+      }
+    }
+    const latest = list[list.length - 1]
+    const shares = latest.balance !== null ? latest.balance : qty
+    if (shares > 0) positions.push({
+      code, name: latest.name, pool: '实盘', source: 'eastmoney-csv',
+      shares, weight_pct: null, cost: cost > 0 ? Math.round(cost * 1000) / 1000 : latest.price,
+      status: '持有', stop: null, target: null, note: '',
+    })
+  }
+  const dates = trades.map((t) => t.date).filter(Boolean).sort()
+  const warnings = ['成本价为交割单买入加权均价估算；若导出区间不含完整历史，请在确认页人工修正。']
+  if (latestName) warnings.push('现金取最后一笔「' + latestName + '」后的资金余额。')
+  return {
+    positions,
+    account: cash === null ? {} : { cash },
+    warnings,
+    meta: { trades: trades.length, firstDate: dates[0] || '', lastDate: dates[dates.length - 1] || '' },
+  }
+}
+
 // 工作台静态服务路径校验：必须位于指定根目录内，且拒绝 .. 目录穿越
 function isSafeServePath(p, root) {
   const s = String(p || '')
   return s.length > 0 && !s.includes('..') && s.startsWith(String(root || ''))
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks, isSafeServePath, extractInvestCodes, parseConclusionBlocks }
+if (typeof module !== 'undefined' && module.exports) module.exports = { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv }

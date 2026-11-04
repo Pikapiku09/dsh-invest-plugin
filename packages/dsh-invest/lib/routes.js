@@ -20,6 +20,13 @@ const PRESETS = {
     '总判断': 'inherit',
     '波段': 'inherit',
   },
+  fast: {
+    '选股': 'deepseek-official/deepseek-v4-flash@low',
+    '消息': 'deepseek-official/deepseek-v4-flash@low',
+    '深度': 'deepseek-official/deepseek-v4-flash@low',
+    '总判断': 'deepseek-official/deepseek-v4-flash@low',
+    '波段': 'deepseek-official/deepseek-v4-flash@low',
+  },
   budget: {
     '选股': 'deepseek-official/deepseek-flash@off',
     '消息': 'deepseek-official/deepseek-flash@off',
