@@ -74,6 +74,39 @@ function apply(ctx, config) {
   // 模型路由配置：插件 config（cordis.patch.yml）与工作区覆盖文件
   const PLUGIN_CONFIG = (config && typeof config === "object") ? config : {}
   const ROUTES_FILE = BASE_DIR + "/.dsh-invest/routes.json"
+  // 本地持仓账本（跨会话共享）：由 scripts/holdings.py 维护，invest_run 每次运行注入摘要
+  const HOLDINGS_FILE = BASE_DIR + "/.dsh-invest/持仓.json"
+  const REALTIME_SCRIPT = BASE_DIR + "/scripts/realtime_quote.py"
+
+  // 读取账本 → 紧凑 Markdown 摘要（不存在/损坏时返回空串，绝不阻断流水线）
+  const readHoldingsBlock = async () => {
+    const fs = ctx.get("fs")
+    if (fs === undefined) return ""
+    try {
+      const target = await fs.resolve(HOLDINGS_FILE)
+      const d = JSON.parse(await fs.readText(target))
+      const list = Array.isArray(d.positions) ? d.positions : []
+      const acc = (d.account && typeof d.account === "object") ? d.account : {}
+      if (!list.length && acc.total_asset === undefined && acc.cash === undefined) return ""
+      const f = (v) => (v === null || v === undefined || v === "") ? "-" : (typeof v === "number" ? String(Math.round(v * 100) / 100) : String(v))
+      const out = []
+      out.push("【当前持仓账本（" + HOLDINGS_FILE + "，更新于 " + f(d.updated_at) + "）】")
+      if (acc.total_asset !== undefined || acc.cash !== undefined) {
+        out.push("账户：总资产 " + f(acc.total_asset) + " ｜ 现金 " + f(acc.cash) + (acc.note ? " ｜ " + acc.note : ""))
+      }
+      if (list.length) {
+        out.push("| 代码 | 名称 | 池 | 数量/仓位 | 成本 | 状态 | 止损 | 备注 |")
+        out.push("|---|---|---|---|---|---|---|---|")
+        for (const p of list.slice(0, 20)) {
+          const qty = (p.shares !== undefined && p.shares !== null) ? String(p.shares)
+            : ((p.weight_pct !== undefined && p.weight_pct !== null) ? p.weight_pct + "%" : "-")
+          out.push("| " + p.code + " | " + f(p.name) + " | " + f(p.pool) + " | " + qty + " | " + f(p.cost) + " | " + f(p.status) + " | " + f(p.stop) + " | " + String(p.note || "").replace(/\n/g, " ").slice(0, 60) + " |")
+        }
+      }
+      out.push("【账本使用规则】凡涉及个股/组合/加减仓/复盘，先按上表核对：是否已持有、成本与浮盈亏、止损位、仓位占比（数量×现价÷总资产）。结论必须区分「已持有（加仓/减仓/持有）」与「新建仓」；账本外的标的按空仓处理。账本与用户口述冲突时以用户为准并明确提示差异；严禁编造账本外的持仓数字。")
+      return out.join("\n")
+    } catch (e) { return "" }
+  }
 
   // 读取工作区路由覆盖文件（不存在/损坏 → undefined，绝不阻断流水线）
   const readRoutesFile = async () => {
@@ -314,15 +347,18 @@ function apply(ctx, config) {
       const setProgress = (p) => { progressStore[callId] = Object.assign({ updatedAt: Date.now() }, p) }
       setProgress({ stage: "", index: 0, total: groups.length, status: "init", done: [] })
       const anchor = await readTradeCache()
-      const anchorLine = anchor
+      const realtimeLine = "【实时行情兜底（腾讯财经）】若 TuShare 返回的最新交易日早于今日、且当前处于交易日 09:30–15:00（含午休），必须先用 pwsh 执行 python \"" + REALTIME_SCRIPT + "\" <代码1> <代码2> 取腾讯实时价（JSON），并在正文以 [实时·腾讯 HH:MM] 与 [日线·TuShare YYYYMMDD] 双标注；技术指标（MA/MACD/九转/周线）仍必须用 TuShare 日线收盘计算，实时价只作盘中参考，严禁混用。非交易时段或 TuShare 已是最新交易日时不必调用。"
+      const anchorLine = (anchor
         ? "【已缓存锚定】真实最新交易日 = " + anchor + "（由流水线缓存提供，跳过 index_daily 锚定步骤，直接按此日期取数）"
-        : "【交易日缓存为空】按日期锚定铁律完成 index_daily 锚定后，用 pwsh 执行 node -e 把 JSON {\"date\":\"" + localYmd() + "\",\"trade_date\":\"你的锚定结果YYYYMMDD\"} 写入 " + TRADE_CACHE + "（目录不存在先创建），供本日后续运行复用"
+        : "【交易日缓存为空】按日期锚定铁律完成 index_daily 锚定后，用 pwsh 执行 node -e 把 JSON {\"date\":\"" + localYmd() + "\",\"trade_date\":\"你的锚定结果YYYYMMDD\"} 写入 " + TRADE_CACHE + "（目录不存在先创建），供本日后续运行复用") + "\n" + realtimeLine
       const history = []
+      const holdingsBlock = await readHoldingsBlock()
       const runStage = async (s) => {
         const t0 = Date.now()
         const parts = ["用户问题：" + question]
         if (context) parts.push("【对话上下文（记忆）】" + context + "\n请结合上述上下文继续分析，保持口径一致。")
         parts.push(anchorLine)
+        if (holdingsBlock) parts.push(holdingsBlock)
         if (allCharts.size) {
           parts.push("【上游图表（同类图表直接引用其完整绝对路径，严禁重复生成同类图）】" + Array.from(allCharts).join(" , "))
         }

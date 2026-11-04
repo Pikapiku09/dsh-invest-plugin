@@ -6,6 +6,18 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.20.0（2026-11-04）
+
+- **本地持仓账本（跨会话共享）**：此前每个会话的 invest_run 都看不到别的会话里的持仓，分析前要手工复述一遍。新增 `.dsh-invest/持仓.json` 作为唯一真相，流水线**每次运行自动读取并注入**每个阶段的提示词：
+  - 注入内容：账本更新时间、账户总资产/现金、持仓表（代码/名称/池/数量或仓位/成本/状态/止损/备注）+ **账本使用规则**（先核对是否已持有、成本与浮盈亏、止损、仓位占比；账本外标的按空仓处理；与用户口述冲突以用户为准；严禁编造）；
+  - 维护脚本 `scripts/holdings.py`：`sync`（从短线模拟盘 `paper_state.json` + 波段池台账自动合并，并用腾讯行情补全名称）、`list`/`add`/`update`/`remove`/`set-account`；合并优先级 manual > paper > swing；
+  - 账本缺失/损坏时静默跳过，绝不阻断流水线。
+- **实时行情兜底（腾讯财经）**：TuShare 日线在盘中只有上一交易日数据。新增 `scripts/realtime_quote.py`（qt.gtimg.cn，GBK 解析，自动识别 sh/sz/bj）；锚定提示词改为：若 TuShare 最新交易日早于今日且处于交易时段，先取腾讯实时价，正文用 `[实时·腾讯 HH:MM]` 与 `[日线·TuShare YYYYMMDD]` **双标注**；技术指标（MA/MACD/九转/周线）仍必须用日线收盘计算，实时价仅作盘中参考，严禁混用。
+- **CHECKLIST 口径**：账户与持仓类数据由"只能来自用户提供"改为"**优先取本地账本**，账本未覆盖的字段（本月交易次数/心态/拟投入金额）才标注未知"。
+- 提示词预算：P_SELECT 5067 / P_NEWS 5919 / P_DEEP 6286 / P_FINAL 3254 / P_SWING 5063（均 <8000）；`node --test` 34 项全绿。
+- 生效仍需重启 DSH（宿主进程内模块不热替换）。
+- 说明：README 中标注 v0.20.0 的 `invest_config` 工具与「建议登记闭环」**尚未实现**（文档先行），下一版补齐；本版只交付持仓账本与实时兜底。
+
 ## v0.19.6（2026-10-29）
 
 - **修复 invest_run 彻底不可用（subagents not mounted）——适配宿主“激活式” subagent API**：v0.19.5 已解决服务取值方式（safeGet），但新宿主把 `start(name, request)` 换成了 `startActivation({provider,label,request,signal,delivery})`，旧代码只找 `start()`，故候选对象全都“没有 start”。从 app.asar 解包核对宿主真实实现后完成适配：

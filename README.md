@@ -11,7 +11,7 @@ DSH（DeepSeek Harness）**多角色 A 股投研流水线插件**：`invest_run`
        └─ ④ 总判断师          （综合三份上游 → 最终投资决策建议）
 ```
 
-**当前版本：v0.19.6**
+**当前版本：v0.20.0**
 
 ---
 
@@ -33,6 +33,26 @@ DSH（DeepSeek Harness）**多角色 A 股投研流水线插件**：`invest_run`
 - **三级缓存**：交易日锚点缓存（Host 注入）+ 行情响应文件缓存（跨阶段/跨运行复用，命中标 [缓存命中]）
 - **报告统一归档**：每轮自动输出到 `invest-outputs\<时间戳>_<问题>\`（报告.md + 图表\ 副本），历史分析一目了然
 - 效率纪律：取数合并请求、接口调用上限、输出压缩（全流程约 6-8 分钟，缓存命中更快）
+
+## 本地持仓账本 + 实时行情兜底（v0.20.0）
+
+### 持仓账本（跨会话共享）
+- 文件：`.dsh-invest/持仓.json`（唯一真相；**invest_run 每次运行自动读取并注入**到每个角色提示词，新开会话也能看到持仓）
+- 自动同步：`python scripts/holdings.py sync` —— 合并短线模拟盘 `E:/LihuQuantify/data/paper_state.json` + 波段池台账 `.dsh-invest/波段池_持仓.md`（优先级 manual > paper > swing），并用腾讯行情补全股票名称
+- 手工维护：
+  ```bash
+  python scripts/holdings.py list
+  python scripts/holdings.py add 600519.SH 100 1500 --pool 实盘 --stop 1380 --note "底仓"
+  python scripts/holdings.py update 600519.SH --shares 200 --cost 1480
+  python scripts/holdings.py remove 600519.SH
+  python scripts/holdings.py set-account --cash 50000 --total-asset 300000 --note "实盘账户"
+  ```
+- 注入规则：先核对是否已持有、成本与浮盈亏、止损位、仓位占比；结论区分「已持有（加仓/减仓/持有）」与「新建仓」；账本外按空仓处理；与用户口述冲突时以用户为准
+
+### 实时行情兜底（腾讯财经）
+- 场景：TuShare 日线在盘中只有上一交易日数据
+- 用法：`python scripts/realtime_quote.py 600519 000768.SZ [--human]`
+- 规则：正文用 `[实时·腾讯 HH:MM]` 与 `[日线·TuShare YYYYMMDD]` 双标注；技术指标（MA/MACD/九转/周线）仍必须用日线收盘计算，实时价仅作盘中参考，禁止混算
 
 ## 目录结构
 
