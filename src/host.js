@@ -447,9 +447,15 @@ return {
                   ],
                 },
               }, route ? { agentOptions: route } : {}))
-              const result = await run.result
-              // 新宿主 seam：子代理失败以 {stopReason:'error', output:[]} 返回（不 reject），显式转错误以触发重试
-              if (result && result.stopReason === 'error' && !(Array.isArray(result.output) && result.output.length)) {
+              // 阶段超时兜底：8 分钟未结算则主动 dispose；stopReason=error 一律失败，半截报告不算成功
+              const result = await new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                  try { Promise.resolve(run.dispose ? run.dispose() : null).catch(() => {}) } catch (e) { /* ignore */ }
+                  reject(new Error('阶段执行超时（8 分钟），已主动终止子代理'))
+                }, 480000)
+                Promise.resolve(run.result).then((v) => { clearTimeout(timer); resolve(v) }, (e) => { clearTimeout(timer); reject(e) })
+              })
+              if (result && result.stopReason === 'error') {
                 throw new Error('子代理执行失败（stopReason=error）' + (result.diagnostic ? '：' + String(result.diagnostic).slice(0, 200) : ''))
               }
               const both = extractBoth(result)
@@ -465,7 +471,7 @@ return {
                 continue
               }
               // 失败分类：权限/频率类错误重试无意义，直接失败；其余（网络/超时/模型）重试
-              const nonRetryable = /40203|无权限|权限不足|超限|频率|quota|forbidden|unauthorized|unauthenticated/i.test(lastErr)
+              const nonRetryable = /40203|429|RATE_LIMIT|exceeded_current_quota|credit balance|无权限|权限不足|超限|频率|quota|forbidden|unauthorized|unauthenticated/i.test(lastErr)
               if (nonRetryable || attempt === 2) {
                 return { stage: s.name, code: s.code, ok: false, error: lastErr, elapsedMs: Date.now() - t0, retried: attempt > 1, route: routeLabel }
               }

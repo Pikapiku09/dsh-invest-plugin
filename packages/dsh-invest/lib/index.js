@@ -280,7 +280,7 @@ function apply(ctx, config) {
     const out = {
       id: job.id, templateId: job.templateId, name: job.name, status: job.status,
       question: job.question, createdAt: job.createdAt, startedAt: job.startedAt || 0,
-      elapsedMs: job.elapsedMs || 0, error: job.error || "",
+      elapsedMs: job.status === "running" && job.startedAt ? Date.now() - job.startedAt : (job.elapsedMs || 0), error: job.error || "",
     }
     if (full) {
       out.progress = progressStore[job.id] || null
@@ -302,7 +302,7 @@ function apply(ctx, config) {
       if (!parent) throw new Error("当前没有可用的顶层 Agent；请先打开一个 DSH 会话再启动网页任务")
       const controller = new AbortController()
       job.abort = () => controller.abort()
-      const result = await tool.execute({ mode: job.mode, question: job.question, roles: job.roles, detail: "full" }, { callId: job.id, agent: parent, signal: controller.signal })
+      const result = await tool.execute({ mode: job.mode, question: job.question, roles: job.roles, preset: "balanced", detail: "full" }, { callId: job.id, agent: parent, signal: controller.signal })
       job.result = result
       const outs = Array.isArray(result.outputs) ? result.outputs : []
       job.status = result.error || (outs.length && outs.every((o) => !o.ok)) ? "failed" : "done"
@@ -772,9 +772,16 @@ function apply(ctx, config) {
                 ],
               },
             }, route ? { agentOptions: route } : {}))
-            const result = await run.result
-            // 新宿主 seam：子代理失败以 {stopReason:'error', output:[]} 返回（不 reject），显式转错误以触发重试
-            if (result && result.stopReason === "error" && !(Array.isArray(result.output) && result.output.length)) {
+            // 阶段超时兜底：宿主 activation 若未能结算，8 分钟后主动 dispose 并转入失败/重试，避免网页任务永久运行
+            const result = await new Promise((resolve, reject) => {
+              const timer = setTimeout(() => {
+                try { Promise.resolve(run.dispose ? run.dispose() : null).catch(() => {}) } catch (e) { /* ignore */ }
+                reject(new Error("阶段执行超时（8 分钟），已主动终止子代理"))
+              }, 480000)
+              Promise.resolve(run.result).then((v) => { clearTimeout(timer); resolve(v) }, (e) => { clearTimeout(timer); reject(e) })
+            })
+            // stopReason=error 一律视为失败（即使已有部分输出），防止把被 429/异常打断的半截报告当成功
+            if (result && result.stopReason === "error") {
               throw new Error("子代理执行失败（stopReason=error）" + (result.diagnostic ? "：" + String(result.diagnostic).slice(0, 200) : ""))
             }
             const both = extractBoth(result)
@@ -789,7 +796,7 @@ function apply(ctx, config) {
               route = null
               continue
             }
-            const nonRetryable = /40203|无权限|权限不足|超限|频率|quota|forbidden|unauthorized|unauthenticated/i.test(lastErr)
+            const nonRetryable = /40203|429|RATE_LIMIT|exceeded_current_quota|credit balance|无权限|权限不足|超限|频率|quota|forbidden|unauthorized|unauthenticated/i.test(lastErr)
             if (nonRetryable || attempt === 2) {
               return { stage: s.name, code: s.code, ok: false, error: lastErr, elapsedMs: Date.now() - t0, retried: attempt > 1, route: routeLabel }
             }

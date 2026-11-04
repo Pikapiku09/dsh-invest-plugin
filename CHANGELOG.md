@@ -6,6 +6,16 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.22.1（2026-11-04）
+
+- **真实网页任务联调后的可靠性修复**：子代理实测完成取数/绘图后，最后一步被 Moonshot 429 配额错误打断，宿主 activation 未及时结算，网页任务长期停留在“运行中”。
+  - 网页任务默认使用 **balanced 独立路由**，不再继承当前会话模型（避免继承到欠费/限流账号）；
+  - 每个阶段增加 **8 分钟超时**：到期主动 dispose 子代理并进入既有失败/重试逻辑，杜绝永久等待；
+  - `stopReason=error` 即使已有部分输出也一律判定失败，不把半截报告当成功；
+  - 429/RATE_LIMIT/配额类错误列入**不可重试**，避免无意义排队重试；
+  - 运行中任务的 elapsedMs 改为实时计算，修复一直显示 0 ms。
+- 构建与 node --test 38 项全绿。
+
 ## v0.22.0（2026-11-04）
 
 - **SQLite 主存储**：`tools/index_store.py` 现在生成 `.dsh-invest/store/invest.db`（runs/reports/records/codes/meta 五表与索引），`index.json` 降级为宿主 Node 零依赖读取的只读投影；同时合并 `conclusions.jsonl` 中的 P3 结构化结论。
