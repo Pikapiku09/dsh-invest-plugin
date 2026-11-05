@@ -269,10 +269,17 @@ function apply(ctx, config) {
     }
     return { added, removed, modified, unchanged }
   }
+  const normalizeAccount = (account) => {
+    const a = account && typeof account === "object" ? account : {}
+    const numberOrNull = (v) => v === void 0 || v === null || v === "" ? null : (Number.isFinite(Number(v)) ? Number(v) : null)
+    const total = numberOrNull(a.total_asset ?? a.totalAsset ?? a.assets ?? a.total)
+    const cash = numberOrNull(a.cash ?? a.available_cash ?? a.availableCash ?? a.available)
+    return { ...a, total_asset: total, cash, available_cash: cash }
+  }
   const makeHoldingsDraft = async (source, positions, account, warnings) => {
     const current = await readHoldingsDoc()
     const id = "hd_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7)
-    const draft = { id, source, createdAt: Date.now(), positions, account: account || {}, warnings: warnings || [] }
+    const draft = { id, source, createdAt: Date.now(), positions, account: normalizeAccount(account), warnings: warnings || [] }
     holdingsDrafts[id] = draft
     return { draftId: id, source, positions, account: draft.account, diff: positionsDiff(current.positions, positions), warnings: draft.warnings }
   }
@@ -281,7 +288,7 @@ function apply(ctx, config) {
     if (!draft) throw new Error("草稿不存在或已过期，请重新上传/生成")
     const current = await readHoldingsDoc()
     const positions = (Array.isArray(rawPositions) ? rawPositions : []).map((p) => normalizePosition(p, draft.source)).filter((p) => p.shares > 0)
-    const nextAccount = account && typeof account === "object" ? account : (draft.account || {})
+    const nextAccount = normalizeAccount(account && typeof account === "object" ? account : (draft.account || {}))
     const diff = positionsDiff(current.positions, positions)
     const fs = ctx.get("fs")
     if (fs === void 0) throw new Error("fs unavailable")
@@ -328,7 +335,7 @@ function apply(ctx, config) {
   const recognizeScreenshot = async (imageBase64, mimeType) => {
     const attachments = ctx.get("attachments")
     if (!attachments || typeof attachments.admitPromptContent !== "function") throw new Error("附件服务不可用，无法上传截图")
-    const instruction = "你是持仓截图识别器。只输出一个 JSON 对象，不要任何解释或代码围栏：{\"positions\":[{\"code\":\"600519.SH\",\"name\":\"贵州茅台\",\"shares\":100,\"cost\":1500,\"status\":\"持有\",\"note\":\"\"}],\"account\":{\"cash\":0}}。请真实读取截图中的证券代码、名称、持仓数量、成本价与可用资金；代码转换为 6 位+.SH/.SZ/.BJ，无法辨认的字段填 null，不要编造。"
+    const instruction = "你是持仓截图识别器。只输出一个 JSON 对象，不要任何解释或代码围栏：{\"positions\":[{\"code\":\"600519.SH\",\"name\":\"贵州茅台\",\"shares\":100,\"cost\":1500,\"status\":\"持有\",\"note\":\"\"}],\"account\":{\"total_asset\":200000,\"cash\":50000}}。请真实读取截图中的证券代码、名称、持仓数量、成本价、账户总资产与可用资金；代码转换为 6 位+.SH/.SZ/.BJ，无法辨认的字段填 null，不要编造。"
     const prompt = await attachments.admitPromptContent([
       { type: "text", text: instruction },
       { type: "image", data: imageBase64, mediaType: mimeType || "image/png", name: "holdings-upload" },
@@ -384,6 +391,20 @@ function apply(ctx, config) {
       roles: ROLE_CODES.map((code) => ({ code, name: ROLE_MAP[code].name, route: formatRouteChain(effective[code]) })),
       templates: await Promise.all(TASK_TEMPLATES.map(async (t) => ({ id: t.id, name: t.name, preset: await resolveTemplatePreset(t.id, t.preset) }))),
       presets: Object.keys(PRESETS).map((id) => ({ id, name: id, description: descriptions[id] || id })),
+      modelOptions: await (async () => {
+        const options = [{ value: "inherit", label: "继承宿主（默认）" }]
+        try {
+          const llm = ctx.get("llm")
+          if (!llm || typeof llm.listProviders !== "function" || typeof llm.listModels !== "function") return options
+          for (const provider of llm.listProviders()) {
+            try {
+              const models = await llm.listModels(provider.id)
+              for (const model of models) options.push({ value: provider.id + "/" + model.id, label: (provider.name || provider.id) + " / " + (model.name || model.id), provider: provider.id, model: model.id })
+            } catch (e) { /* 单 provider 目录失败不阻断 */ }
+          }
+        } catch (e) { /* llm 不可用时保留 inherit */ }
+        return options
+      })(),
       routesFile: ROUTES_FILE,
       settingsFile: SETTINGS_FILE,
     }
@@ -447,12 +468,19 @@ function apply(ctx, config) {
   let queueRunning = false
   let reindexPromise = null
 
-  const readRequestJson = async (req) => {
-    let text = ""
+  const readRequestJson = async (req, maxBytes = 1048576) => {
+    const chunks = []
+    let size = 0
     for await (const chunk of req) {
-      text += String(chunk)
-      if (text.length > 65536) throw new Error("request body too large")
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+      size += buf.length
+      if (size > maxBytes) {
+        try { req.resume() } catch (e) { /* ignore */ }
+        throw new Error("上传内容过大（上限 " + Math.round(maxBytes / 1048576) + " MB），请压缩图片后重试")
+      }
+      chunks.push(buf)
     }
+    const text = Buffer.concat(chunks).toString("utf8")
     return text.trim() ? JSON.parse(text) : {}
   }
 
@@ -752,7 +780,12 @@ function apply(ctx, config) {
       handler: async (req, res) => {
         if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
         if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
-        const jobs = jobOrder.slice().reverse().slice(0, 20).map((id) => jobStore[id]).filter(Boolean).map((j) => jobSummary(j, false))
+        const jobs = jobOrder.slice().reverse().slice(0, 20).map((id) => jobStore[id]).filter(Boolean).map((j) => {
+          const out = jobSummary(j, false)
+          // 列表页也要保留报告入口；不必附带完整 outputs 文本
+          if (j.result) out.result = { reports: j.result.reports || [], charts: j.result.charts || [] }
+          return out
+        })
         writeJson(res, 200, { jobs })
       },
     },
@@ -828,7 +861,8 @@ function apply(ctx, config) {
         if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
         if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
         try {
-          const body = await readRequestJson(req)
+          // 持仓截图 base64 通常为数百 KB～数 MB；原先 64KB 上限会中断请求并造成 Failed to fetch
+          const body = await readRequestJson(req, 16 * 1048576)
           const source = String(body.source || "")
           if (source === "csv") {
             let text = ""
@@ -1200,12 +1234,7 @@ function apply(ctx, config) {
             lines.push("## " + o.stage + (o.ok ? "（" + (o.route || "继承宿主") + " ｜ 耗时 " + (o.elapsedMs / 1000).toFixed(1) + "s" + (o.retried ? "，含重试" : "") + "）" : "（失败 ｜ " + (o.route || "继承宿主") + "）"))
             lines.push("")
             lines.push(o.ok ? o.text : ("错误：" + o.error))
-            if (o.ok && o.reasoning) {
-              lines.push("")
-              lines.push("### 推理过程")
-              lines.push("")
-              lines.push(o.reasoning)
-            }
+            // 思考/推理只保留在 GUI 卡片，不写入正式归档报告
           }
           if (allCharts.size) {
             lines.push("")
@@ -1245,12 +1274,7 @@ function apply(ctx, config) {
             outLines.push("## " + o.stage + (o.ok ? "（" + (o.route || "继承宿主") + " ｜ 耗时 " + (o.elapsedMs / 1000).toFixed(1) + "s" + (o.retried ? "，含重试" : "") + "）" : "（失败 ｜ " + (o.route || "继承宿主") + "）"))
             outLines.push("")
             outLines.push(o.ok ? o.text : ("错误：" + o.error))
-            if (o.ok && o.reasoning) {
-              outLines.push("")
-              outLines.push("### 推理过程")
-              outLines.push("")
-              outLines.push(o.reasoning)
-            }
+            // 思考/推理只保留在 GUI 卡片，不写入对外归档报告
           }
           outLines.push("")
           outLines.push("## 图表")
