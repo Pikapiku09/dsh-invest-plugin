@@ -456,7 +456,7 @@ function apply(ctx, config) {
   // P2：一键任务模板（question 中 {code}/{input} 由网页传入）
   const TASK_TEMPLATES = [
     { id: "stock-review", name: "个股体检", description: "消息面 → 技术估值财务 → 综合决策", mode: "个股", roles: ["消息", "深度", "总判断"], preset: "inherit", needsCode: true, placeholder: "600519 或 600519.SH", question: "对 {code} 做深度体检：先取最新消息面，再做技术/估值/财务六维诊断，最后综合给出目标价、止损与失效条件。{input}" },
-    { id: "stock-quick", name: "个股快诊", description: "快速技术估值判断 + 一句话结论", mode: "个股", roles: ["深度", "总判断"], preset: "fast", needsCode: true, placeholder: "600519 或 600519.SH", question: "对 {code} 做快速诊断：用必要行情与关键指标给出300字内结论、支撑/压力位、风险回报比与失效条件。{input}" },
+    { id: "stock-quick", name: "个股快诊", description: "快速技术估值判断 + 一句话结论", mode: "个股", roles: ["深度", "总判断"], preset: "fast", needsCode: true, placeholder: "600519 或 600519.SH", question: "对 {code} 做快速诊断：用必要行情与关键指标给出300字内结论、支撑/压力位、风险回报比与失效条件；结论文字限制300字不包含图表，图表照常生成。{input}" },
     { id: "portfolio-review", name: "组合体检", description: "持仓消息风险 + 逐只诊断 + 调仓建议", mode: "总判断", roles: ["消息", "深度", "总判断"], preset: "inherit", needsCode: false, placeholder: "", question: "复盘当前持仓账本：先排查持仓相关风险消息，再逐只核对成本、趋势、估值与止损，最后给出持有/加仓/减仓/离场及调仓优先级，并明确与上次结论的差异。{input}" },
     { id: "morning-news", name: "早盘异动", description: "隔夜消息与大盘 → 影响标的行情", mode: "消息", roles: ["消息", "选股"], preset: "fast", needsCode: false, placeholder: "", question: "扫描隔夜消息、政策、大盘情绪及持仓/近期关注标的异动，随后补充受影响标的的最新行情与相对强弱，按可信度和影响排序。{input}" },
     { id: "swing-weekly", name: "波段周检", description: "周线共振复核 → 纸面买卖决策", mode: "波段池", roles: ["波段", "总判断"], preset: "inherit", needsCode: false, placeholder: "", question: "执行本周波段池周检：读取台账，复核池内标的三重共振与 v2 出场条件，再由总判断汇总纸面虚拟买卖点并更新台账；暂停实盘纪律不变。{input}" },
@@ -880,7 +880,26 @@ function apply(ctx, config) {
             if (busy) { writeJson(res, 409, { error: "分析任务进行中，模型暂不可用，请稍后再导入截图。" }); return }
             const imageBase64 = String(body.imageBase64 || "").replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "")
             if (!imageBase64) { writeJson(res, 400, { error: "请提供截图 imageBase64" }); return }
-            const parsed = await recognizeScreenshot(imageBase64, String(body.mimeType || "image/png"))
+            let sendBase64 = imageBase64
+    let sendMime = String(body.mimeType || "image/png")
+    if (Buffer.from(sendBase64, "base64").length > 350 * 1024) {
+      try {
+        const { spawn } = await import("node:child_process")
+        const py = BASE_DIR + "/tools/compress_image.py"
+        sendBase64 = await new Promise((resolve, reject) => {
+          const child = spawn("python", [py], { cwd: BASE_DIR, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] })
+          let out = "", err = ""
+          child.stdout.on("data", (d) => out += String(d))
+          child.stderr.on("data", (d) => err += String(d))
+          child.on("close", (code) => code === 0 && out.trim() ? resolve(out.trim()) : reject(new Error("compress_image exit " + code + " " + err.slice(0, 180))))
+          child.on("error", reject)
+          child.stdin.write(JSON.stringify({ base64: imageBase64, mimeType: sendMime }))
+          child.stdin.end()
+        })
+        sendMime = "image/jpeg"
+      } catch (e) { /* 服务端压缩失败则直接用原图，视觉模型若不接受会报具体错 */ }
+    }
+    const parsed = await recognizeScreenshot(sendBase64, sendMime)
             const positions = parsed.positions.map((p) => normalizePosition(p, "screenshot"))
             writeJson(res, 200, await makeHoldingsDraft("screenshot", positions, parsed.account, ["截图由多模态模型识别，原图未留档；请逐项核对后再确认写入。"]))
             return
