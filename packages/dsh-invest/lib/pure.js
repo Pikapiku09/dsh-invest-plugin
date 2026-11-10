@@ -36,8 +36,21 @@ function collectCharts(t) {
 
 // 由角色简码数组构建分组：①选股∥消息∥波段 并行 → ②深度 → ③总判断（缺失角色跳过）
 // roleMap 形如 { '选股': {name, persona}, '消息': {...}, '深度': {...}, '总判断': {...}, '波段': {...} }
-function buildGroups(roleCodes, roleMap) {
+// 显式 sequence 时：每个角色各成一段、严格按该顺序串行；sequence 中不属于本次 roles 的忽略，
+// 未被 sequence 覆盖的角色按默认优先级补在末尾（不丢弃）。
+function buildGroups(roleCodes, roleMap, sequence) {
   const has = (c) => roleCodes.includes(c)
+  const valid = (c) => typeof c === 'string' && has(c) && roleMap[c]
+  const seq = Array.isArray(sequence)
+    ? sequence.filter((c, i) => valid(c) && sequence.indexOf(c) === i)
+    : []
+  if (seq.length) {
+    const groups = seq.map((c) => [roleMap[c]])
+    ;['选股', '消息', '波段', '深度', '总判断'].forEach((c) => {
+      if (valid(c) && !seq.includes(c)) groups.push([roleMap[c]])
+    })
+    return groups
+  }
   const groups = []
   // 早盘异动：消息 → 选股 串行接力；其余模式仍沿用选股∥消息∥波段并行
   if (roleCodes.length === 2 && has('消息') && has('选股')) return [[roleMap['消息']], [roleMap['选股']]]
