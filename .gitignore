@@ -18,3 +18,7 @@ invest-outputs/
 *.tmp
 .idea/
 .vscode/
+
+# 工作台前端：依赖与构建产物（产物实际输出到工作区 .dsh-invest/web/dist，被上面规则忽略）
+web/node_modules/
+web/dist/

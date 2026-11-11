@@ -314,12 +314,19 @@ node tools/build.js               # 生成 dist/
 # cordis_run 激活（Client 半部需 GUI 批准一次）
 ```
 
-### 前端构建
+### 前端构建（工作台）
+
+源码在仓库内 `web/`（v0.40.1 起纳入版本管理）；**产物输出到工作区运行目录** `.dsh-invest/web/dist`，
+插件从那里实时读取（`cache-control: no-store`），改前端只需重新构建 + 刷新页面，不用重启 DSH。
 
 ```powershell
-cd .dsh-invest/web
-pnpm build                        # → ../dist/index.html + workbench.js + workbench.css
+cd web
+pnpm install                      # 首次
+pnpm build                        # = tsc --noEmit && vite build → ../../.dsh-invest/web/dist/
+# 或回到仓库根：pnpm web:build / pnpm web:dev
 ```
+
+产物路径可用 `DSH_INVEST_BASE_DIR`（工作区）或 `DSH_INVEST_WEB_DIST`（精确到 dist）覆盖。
 
 ---
 
@@ -346,14 +353,13 @@ pnpm build                        # → ../dist/index.html + workbench.js + work
 - `major_news` 每日 40 次上限。
 - 所有指标基于日线收盘，非实时盘中；盘中实时价仅作参考（腾讯兜底）。
 - 缓存目录超过 30 天的文件自动清理（宿主 fs 不支持删除则静默跳过）。
-- 工作台前端源码 `.dsh-invest/web` 目前**不在 git 仓库内**（已知缺口）。
 - 图表需要在报告中引用完整绝对路径（提示词已强制）。
 
 ---
 
 ## 十一、版本与变更
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.25.0**（本轮：概览信息入口、标的归因、报告图表与去思考、模型下拉、截图上传与中文输入优化）。上一版 v0.24.0：CSV 支持 ETF、股票名索引与输入、截图忙碌守卫、方案 A 任务隔离、明暗主题、图表脚本化。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.40.1**（本轮：个股分析知识库——报告按股票切段归集、报告追问页改首字母索引；工作台源码 `web/` 纳入版本管理）。
 
 ---
 

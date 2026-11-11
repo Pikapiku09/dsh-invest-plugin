@@ -2,6 +2,18 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.40.1（2026-11-11）
+
+**工程：工作台前端源码纳入 git 仓库**
+
+- 原前端源码住在运行目录 `.dsh-invest/web`（被 `.gitignore` 忽略），等于 7 个页面文件的改动没有任何版本可回退。
+  现整体移入仓库 `web/`：`src/*.ts|css`、`index.html`、`vite.config.ts`、`tsconfig.json`、`package.json`、`pnpm-lock.yaml`。
+- **产物位置不变**：`vite.config.ts` 的 `outDir` 指向工作区运行目录 `.dsh-invest/web/dist`（可用 `DSH_INVEST_BASE_DIR` /
+  `DSH_INVEST_WEB_DIST` 覆盖），插件仍从那里 `no-store` 实时读取，构建完刷新页面即生效。
+- 仓库根新增脚本：`pnpm web:install` / `pnpm web:build` / `pnpm web:dev`；`.gitignore` 补 `web/node_modules/`、`web/dist/`。
+- 移动后 pnpm 的 junction 是绝对路径，已 `pnpm install --offline` 重建链接（1.2s，无网络下载）；构建验证
+  `workbench.js 153.37 kB`，线上 `/dsh-invest/workbench.js` 已返回新包（含 `ask-letter-jump`）。
+
 ## v0.40.0（2026-11-11）
 
 **新增：个股分析知识库——报告按个股切段归集，报告追问页改为「股票名 + 首字母索引」**

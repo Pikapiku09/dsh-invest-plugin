@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="dsh-invest 中文投研工作台：运行记录、标的结论链、一键任务与报告阅读。" />
+    <title>衡知 · 投研工作台</title>
+    <script>
+      (function () {
+        try {
+          var theme = window.localStorage.getItem('workbench-theme');
+          if (theme !== 'light' && theme !== 'dark') {
+            theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          }
+          document.documentElement.classList.add('theme-' + theme);
+        } catch (error) { /* 读取失败时保持默认深色 */ }
+      })();
+    </script>
+    <script type="module" src="/main.ts"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="app-sidebar" id="appSidebar" aria-label="主导航">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="brand-copy"><strong>衡知</strong><small>INVEST WORKBENCH</small></span>
+        </div>
+        <div class="nav-caption">工作空间</div>
+        <nav class="main-nav">
+          <button class="nav-item" data-action="navigate" data-view="overview"><span data-icon="overview"></span><span>概览</span></button>
+          <button class="nav-item" data-action="navigate" data-view="archive"><span data-icon="archive"></span><span>标的档案</span></button>
+          <button class="nav-item" data-action="navigate" data-view="tasks"><span data-icon="sparkles"></span><span>一键任务</span><em>含运行记录</em></button>
+          <button class="nav-item" data-action="navigate" data-view="ask"><span data-icon="chat"></span><span>报告追问</span></button>
+          <button class="nav-item" data-action="navigate" data-view="model-settings"><span data-icon="settings"></span><span>模型设置</span></button>
+          <button class="nav-item" data-action="navigate" data-view="holdings"><span data-icon="wallet"></span><span>持仓工作区</span></button>
+        </nav>
+        <div class="sidebar-spacer"></div>
+        <div class="sidebar-runs" id="sidebarRuns">
+          <div class="runs-ring-wrap">
+            <svg class="runs-ring" viewBox="0 0 64 64" role="img" aria-label="累计运行次数按任务类型分布">
+              <circle class="runs-ring-track" cx="32" cy="32" r="26"></circle>
+              <g id="runsRingSegments"></g>
+            </svg>
+            <div class="runs-ring-center"><strong id="sidebarRunTotal">—</strong><small>累计运行</small></div>
+          </div>
+          <div class="runs-breakdown" id="sidebarRunBreakdown"><span class="muted">统计中…</span></div>
+        </div>
+        <div class="sidebar-note">数据驱动判断，纪律约束风险。<br />本工作台不构成投资建议。</div>
+      </aside>
+      <button class="nav-backdrop" id="navBackdrop" data-action="close-sidebar" aria-label="关闭导航" hidden></button>
+      <div class="app-main">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button class="icon-button mobile-menu" data-action="toggle-sidebar" aria-label="打开导航"><span data-icon="menu"></span></button>
+            <div><div class="topbar-context" id="topbarContext">投研概览</div><div class="topbar-subtitle">DSH INVEST · 本地研究工作区</div></div>
+          </div>
+          <div class="topbar-right">
+            <button class="run-badge" id="topbarRunBadge" data-action="open-active-tasks" hidden aria-label="返回运行中的任务并滚动到任务列表底部" title="返回任务页并查看进度"><span class="run-badge-dot"></span><span id="topbarRunBadgeCount">0</span><span>任务进行中</span></button>
+            <div class="index-meta" title="SQLite 主库索引构建时间"><span data-icon="database"></span><div><small>索引构建</small><strong id="indexBuiltAt">读取中</strong></div></div>
+            <button class="icon-button" id="themeToggle" data-action="toggle-theme" aria-label="切换主题" title="切换主题"><span data-icon="sun"></span></button>
+            <button class="button button-secondary refresh-button" id="refreshButton" data-action="refresh" title="重新读取索引／持仓／标的档案"><span data-icon="refresh"></span><span id="refreshLabel">刷新数据</span></button>
+            <span class="refresh-meta" id="refreshMeta" title="上一次成功刷新数据的时间">尚未刷新</span>
+          </div>
+        </header>
+        <main class="content" id="view" tabindex="-1"></main>
+      </div>
+    </div>
+    <div class="reader" id="reader" hidden>
+      <section class="reader-panel" role="dialog" aria-modal="true" aria-labelledby="readerTitle">
+        <header class="reader-header">
+          <div class="reader-heading"><span class="reader-file-icon" data-icon="file"></span><div><h2 id="readerTitle">报告阅读器</h2><p id="readerMeta">正在读取报告…</p></div></div>
+          <button class="icon-button" id="readerClose" data-action="close-reader" aria-label="关闭报告"><span data-icon="close"></span></button>
+        </header>
+        <div class="reader-content" id="readerContent"></div>
+      </section>
+    </div>
+    <button class="back-to-top" id="backToTop" data-action="back-to-top" hidden aria-label="回到顶部" title="回到顶部"><span data-icon="top"></span></button>
+    <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>

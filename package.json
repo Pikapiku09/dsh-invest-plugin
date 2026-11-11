@@ -6,7 +6,10 @@
   "license": "MIT",
   "scripts": {
     "build": "node tools/build.js",
-    "test": "node --test"
+    "test": "node --test",
+    "web:install": "pnpm --dir web install",
+    "web:build": "npm --prefix web run build",
+    "web:dev": "npm --prefix web run dev"
   },
   "engines": {
     "node": ">=18"
