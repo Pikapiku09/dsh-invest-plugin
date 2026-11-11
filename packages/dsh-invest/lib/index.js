@@ -110,6 +110,8 @@ function apply(ctx, config) {
   const WATCHLIST_FILE = BASE_DIR + "/.dsh-invest/store/watchlist.json"
   // 监控提醒事件日志（每次触发的信号追加，供工作台内提醒与防重复）
   const WATCHLIST_ALERTS = BASE_DIR + "/.dsh-invest/store/watchlist_alerts.jsonl"
+  // 观察仓日检状态：开关、定时时刻、开机/收盘两次跑批的日期标记（各自每天只跑一次）
+  const WATCH_DAILY_FILE = BASE_DIR + "/.dsh-invest/store/watch-daily.json"
   // 证券名称索引（code → 名称）：结论流水不带 name，观察档案建档时用它补全
   const NAMES_FILE = BASE_DIR + "/.dsh-invest/store/names.json"
   const WEB_DIST_DIR = BASE_DIR + "/.dsh-invest/web/dist"
@@ -562,17 +564,26 @@ function apply(ctx, config) {
       if (code) byCode.set(code, p)
     }
     const changes = []
+    const seen = new Set()
     for (const it of doc.items || []) {
       if (!it) continue
       const code = String(it.code || "").toUpperCase().trim()
       const pos = it.position || (it.position = {})
       const p = byCode.get(code)
       if (p) {
+        seen.add(code)
         const shares = numOrNull(p.shares)
         const cost = numOrNull(p.cost)
         const price = numOrNull(p.current_price)
         let touched = false
-        if (it.state === "观察") { it.state = "持有"; touched = true; changes.push(code + " 观察→持有") }
+        // 重新买入：已清仓/已移除/观察的档案都要回到「持有」，
+        // 否则账本里明明有这只票，档案里却显示已清仓（2026-11-11 修复）
+        if (it.state !== "持有") {
+          const from = it.state
+          it.state = "持有"
+          touched = true
+          changes.push(code + " " + from + "→持有")
+        }
         if (shares !== null && pos.shares !== shares) { pos.shares = shares; touched = true; changes.push(code + " 股数 " + shares) }
         if (cost !== null && pos.cost !== cost) { pos.cost = cost; touched = true }
         if (price !== null) it.monitor.current_price = price
@@ -584,8 +595,92 @@ function apply(ctx, config) {
         changes.push(code + " 持有→已清仓")
       }
     }
+    // 账本里有、档案里没有 → 自动建「持有」档案：
+    // 以前只在档案里已有的条目上双向同步，导致持仓工作区新写入的票永远进不了监控
+    for (const [code, p] of byCode) {
+      if (seen.has(code)) continue
+      const shares = numOrNull(p.shares)
+      if (shares === null || shares <= 0) continue
+      const it = emptyWatch(code, String(p.name || ""))
+      it.state = "持有"
+      it.position.shares = shares
+      const cost = numOrNull(p.cost)
+      if (cost !== null) it.position.cost = cost
+      const price = numOrNull(p.current_price)
+      if (price !== null) it.monitor.current_price = price
+      deriveWatch(it)
+      doc.items.push(it)
+      changes.push(code + " 新建档案（持有）")
+    }
     if (changes.length) await writeWatchlist(doc)
     return changes
+  })
+  // 账本 → 档案对账：外部脚本（scripts/holdings.py sync）或手工改 持仓.json 造成的不一致，
+  // 在「刷新现价」「观察仓日检」时自愈。账本缺失/空壳时不对账，避免把「持有」档案误判成已清仓。
+  const reconcileWatchFromHoldings = async () => {
+    const doc = await readHoldingsDoc()
+    if (!doc || !doc.updated_at) return []
+    return await syncWatchlistFromHoldings(Array.isArray(doc.positions) ? doc.positions : [])
+  }
+  // 档案 → 持仓账本的反向同步（与 syncWatchlistFromHoldings 对称）：
+  //   state=已清仓 → 从账本移除该票；state=持有 → 按档案里的成本/股数 upsert 账本
+  // 写入前备份 + 追加审计，与「确认持仓」同一套口径；观察/已移除不动账本，只回一条提示
+  const syncHoldingsFromWatch = async (it) => withLock("holdings", async () => {
+    const fs = ctx.get("fs")
+    if (fs === void 0) return { changed: false, action: "none", warnings: ["fs 不可用，未同步持仓账本"] }
+    const current = await readHoldingsDoc()
+    const list = Array.isArray(current.positions) ? current.positions : []
+    const code = String(it.code || "").toUpperCase().trim()
+    const idx = list.findIndex((p) => p && String(p.code || "").toUpperCase().trim() === code)
+    const st = String(it.state || "")
+    const pos = it.position || {}
+    const shares = numOrNull(pos.shares)
+    const cost = numOrNull(pos.cost)
+    let nextList = list
+    let action = "none"
+    if (st === "已清仓") {
+      if (idx < 0) return { changed: false, action: "none", warnings: [] }
+      nextList = list.filter((_, i) => i !== idx)
+      action = "清仓"
+    } else if (st === "持有") {
+      if (shares === null || shares <= 0) {
+        return { changed: false, action: "skip", warnings: ["档案已置为「持有」，但股数为空或为 0：持仓账本未写入，请补录股数（成本可选）后重新保存"] }
+      }
+      const base = idx >= 0 ? list[idx] : { code, name: it.name || code, pool: "实盘", status: "持有", source: "watch" }
+      // 只改了止损/目标等监控字段时不必重写账本（否则每点一次保存都会多一份备份）
+      if (idx >= 0) {
+        const sameShares = numOrNull(base.shares) === shares
+        const sameCost = cost === null || numOrNull(base.cost) === cost
+        const sameName = !it.name || it.name === code || String(base.name || "") === it.name
+        if (sameShares && sameCost && sameName) return { changed: false, action: "none", warnings: [] }
+      }
+      const merged = Object.assign({}, base, { code, shares })
+      if (it.name && it.name !== code) merged.name = it.name
+      if (cost !== null) merged.cost = cost
+      nextList = idx >= 0 ? list.map((p, i) => (i === idx ? merged : p)) : list.concat([merged])
+      action = idx >= 0 ? "更新持仓" : "建仓"
+    } else {
+      // 观察 / 已移除：不动账本（避免误删真实持仓），但账本里若还持有要明确提示
+      if (idx >= 0) return { changed: false, action: "none", warnings: ["档案已改为「" + st + "」，但持仓账本里仍有该标的；若要真清仓请改用「已清仓」状态，或在持仓工作区删除"] }
+      return { changed: false, action: "none", warnings: [] }
+    }
+    const account = normalizeAccount(current.account && typeof current.account === "object" ? current.account : {})
+    const positions = recalcPositions(nextList, account)
+    const diff = positionsDiff(list, positions)
+    const d = new Date()
+    const stamp = localYmd() + "_" + z2(d.getHours()) + z2(d.getMinutes()) + z2(d.getSeconds())
+    const backup = HOLDINGS_BACKUP_DIR + "/持仓_" + stamp + "_watch.json"
+    try { await fs.writeText(await fs.resolve(backup), JSON.stringify(current, null, 2) + "\n", void 0, void 0, getFsPolicy()) } catch (e) { /* 首次无账本可忽略 */ }
+    const updatedAt = d.toISOString()
+    await writeJsonFile(HOLDINGS_FILE, { version: 1, updated_at: updatedAt, account, positions })
+    try {
+      const auditTarget = await fs.resolve(HOLDINGS_AUDIT)
+      let oldLog = ""
+      try { oldLog = await fs.readText(auditTarget) } catch (e) { /* 首次 */ }
+      const audit = JSON.stringify({ ts: updatedAt, action: "watch-sync", watchAction: action, code, diff, positions, account })
+      await fs.writeText(auditTarget, oldLog + (oldLog && !oldLog.endsWith("\n") ? "\n" : "") + audit + "\n", void 0, void 0, getFsPolicy())
+    } catch (e) { /* 审计失败不阻断 */ }
+    return { changed: true, action, code, updated_at: updatedAt, backup, diff, warnings: [] }
   })
   const confirmHoldingsDraft = async (draftId, rawPositions, account) => {
     const draft = holdingsDrafts[draftId]
@@ -728,6 +823,38 @@ function apply(ctx, config) {
     if (run.spawnUnavailable) return { quotes: await fetchTencentViaNode(codes), fetchedAt: new Date().toISOString() }
     throw new Error(run.reason || "实时行情获取失败")
   }
+  // 批量刷新现价 + 比对信号（观察仓日检与「刷新现价」按钮共用，避免两套逻辑漂移）
+  // 返回 { doc, refreshed, fired, fetchedAt }；无观察/持有标的时 refreshed=0，不抛错
+  const refreshWatchPrices = async () => withLock("watchlist", async () => {
+    const doc = await readWatchlist()
+    // 需要现价的标的：观察 + 持有（已清仓/已移除跳过）
+    const active = doc.items.filter((it) => it && (it.state === "观察" || it.state === "持有"))
+    if (!active.length) return { doc, refreshed: 0, fired: [], fetchedAt: null }
+    const codes = active.map((it) => it.code)
+    const result = await fetchQuotePrices(codes)
+    const byDigits = {}
+    for (const q of result.quotes) {
+      const digits = String(q && q.code != null ? q.code : "").replace(/\D/g, "").slice(0, 6)
+      const price = (q == null || q.price === null || q.price === void 0 || q.price === "") ? null : Number(q.price)
+      if (digits.length === 6 && price !== null && Number.isFinite(price)) byDigits[digits] = price
+    }
+    const fired = []
+    for (const it of active) {
+      const digits = String(it.code).replace(/\D/g, "").slice(0, 6)
+      const p = byDigits[digits]
+      const m = it.monitor || (it.monitor = {})
+      if (p !== undefined) { m.current_price = p } else { m.current_price = null }
+      m.refreshed_at = result.fetchedAt || new Date().toISOString()
+      deriveWatch(it)
+      const sig = evalWatchSignal(it)
+      if (sig) {
+        const rec = await appendAlert(doc, it, sig)
+        if (rec) fired.push(rec)
+      }
+    }
+    await writeWatchlist(doc)
+    return { doc, refreshed: active.length, fired, fetchedAt: result.fetchedAt || new Date().toISOString() }
+  })
   const runVisionSubagent = async (prompt) => runPromptSubagent(prompt, { label: "持仓截图识别", timeoutMs: 120000 })
   // 通用子代理执行（单个阶段式提问）：限流 + 超时 + 禁止递归
   const runPromptSubagent = async (prompt, opts) => {
@@ -798,7 +925,7 @@ function apply(ctx, config) {
       .join("\n")
     const prompt = [
       "你是投研报告答疑助手。用户针对一份已完成的投研报告提问，你只依据报告内容回答。",
-      "规则：① 只使用报告里出现的事实、数字与结论，严禁编造行情、财报数字或评级；② 报告未涉及的内容要明确说「报告未涉及」，并说明可补哪些数据；③ 回答要点化，给依据（引用报告中的段落或数字）；④ 若涉及操作建议，必须区分「报告结论」与「你的补充推理」，补充部分要注明是推理。",
+      "规则：① 只使用报告里出现的事实、数字与结论，严禁编造行情、财报数字或评级；② 报告未涉及的内容要明确说「报告未涉及」，并说明可补哪些数据；③ 回答要点化，给依据（引用报告中的段落或数字）；④ 若涉及操作建议，必须区分「报告结论」与「你的补充推理」，补充部分要注明是推理；⑤ 用 Markdown 输出：一句话结论先行并加粗，对比信息用表格，小标题用 ###，避免大段无结构长文（默认控制在 800 字以内，用户明确要求展开时才写长）。",
       "【报告路径】" + reportPath,
       "【报告全文】\n" + body,
       turns ? "【对话历史】\n" + turns : "",
@@ -1046,7 +1173,7 @@ function apply(ctx, config) {
     { id: "portfolio-review", name: "组合体检", description: "持仓消息风险 + 逐只诊断 + 调仓建议", mode: "总判断", roles: ["消息", "深度", "总判断"], preset: "inherit", needsCode: false, placeholder: "", question: "复盘当前持仓账本：先排查持仓相关风险消息，再逐只核对成本、趋势、估值与止损，最后给出持有/加仓/减仓/离场及调仓优先级，并明确与上次结论的差异。{input}" },
     { id: "morning-news", name: "早盘异动", description: "隔夜消息与大盘 → 影响标的行情", mode: "消息", roles: ["消息", "选股"], preset: "fast", needsCode: false, placeholder: "", question: "扫描隔夜消息、政策、大盘情绪及持仓/近期关注标的异动，随后补充受影响标的的最新行情与相对强弱，按可信度和影响排序。{input}" },
     { id: "swing-weekly", name: "波段周检", description: "双池准入复核 → 纸面决策（v3.0）", mode: "波段池", roles: ["波段", "总判断"], sequence: ["波段", "总判断"], preset: "inherit", needsCode: false, placeholder: "", question: "执行本周波段池周检（纪律 v3.0，状态 S1 纸面前向验证：只记纸面虚拟买卖点，不投入任何资金，输出一律标【纸面】）：\n① 读取 .dsh-invest/波段池_持仓.md 台账；\n② 按**所属池**逐一复核准入——反转池 R：R1 估值分位（近 3 年日历窗 PE/PB ≤30%）/ R2 周线止跌 / R3 基本面不恶化；动量池 M：M1 周收盘站上 30 周线且 20 周线斜率≥0 / M2 突破周量≥前 4 周均量 1.5 倍 / M3 收盘距 30 周线≤+35%；\n③ 逐只给纸面指令（继续持有/加仓≤1次/减仓/清仓/移出观察/换池），并校验高价股硬闸 P_max=单票上限%×总资产÷100（反转池 20%、动量池 15%），股价超限即不可建仓，禁止用\"只买一手\"绕过；\n④ 对拟持有标的给出三行模板（买入理由/失效条件/时间盒）与赔率=(目标−成本)/(成本−止损)，赔率<3:1 一律挂观察；\n⑤ 更新台账，并把本次周检写入「周检记录」；\n⑥ 最后尝试推送 NAS：powershell -File E:\\Dsh_WorkSapce\\Dify_Agents\\scripts\\swing-weekly.ps1（NAS 离线时脚本自动降级为本地镜像，失败不得阻断周检）。\n纪律：出场取「或」——−15% 硬止损 / 动量池周收盘破 30 周线 / 自峰值回撤 20% / 满 126 交易日收割；反转池用逻辑止损+估值止损替代趋势止损；严禁固定百分比移动止盈；持仓合计≤4 只；每月最多 1 次调仓。{input}" },
-    { id: "market-screen", name: "全市场海选", description: "全市场扫描 → 候选交易计划（两阶段，快）", mode: "选股", roles: ["选股", "深度"], preset: "balanced", needsCode: false, placeholder: "", question: "按既定纪律做全市场海选，再对核心候选做必要的技术/估值复核，输出候选名单、评分、入场/止损与失效条件。\n【只要新标的】候选池必须排除账户当前持仓（已持有的不进入候选与评分，加仓/减仓请改用组合体检）。\n【逐层收窄】候选池 ≤8 只；深度复核只针对评分最高的 3-5 只，不要逐只展开全部候选。{input}" },
+    { id: "watch-daily", name: "观察仓日检", description: "观察仓批量刷新 → 触发者逐只判断是否买入（默认每日自动）", mode: "个股", roles: ["深度", "总判断"], sequence: ["深度", "总判断"], preset: "balanced", needsCode: false, placeholder: "", question: "执行观察仓日检：只处理标的档案中 state=观察 的标的，不重跑全市场选股。\n① 用 pwsh 读取台账 " + BASE_DIR + "/.dsh-invest/store/watchlist.json（关键字段：code/name/state、watch.buy_low/buy_high/ideal_buy/stop/invalidate_if/thesis、monitor.current_price）；台账不存在或观察仓为空时，直接说明「观察仓为空」并结束，不要改跑全市场选股。\n② 对每只用 Tushare 日线（daily，最近 60 个交易日）+ 最新价格复核：现价是否已进入买入区间、原买入逻辑（thesis）是否仍成立、失效条件（invalidate_if）是否已被触发。\n③ 每只结论只能三选一：**可买**（给建议买入价、首批股数、止损、赔率=(目标−成本)/(成本−止损)）/ **继续观察**（给等待价与触发条件）/ **放弃**（给理由，建议移出观察）。\n④ 多只可买时按赔率排序，并校验仓位约束：单票≤25%、单日新增≤总仓位 50%；赔率<3:1 一律归入继续观察。\n⑤ 报告按「可买 / 继续观察 / 放弃」三段分组，先给结论表再给理由，全文不超过 1000 字。\n⑥ 每只标的各输出一行【结论结构化】JSON（code/stance/target/stop/buy_low/buy_high/thesis/invalidate_if），stance 取 看多/观察/拒绝。\n{input}" },
     { id: "market-screen-full", name: "海选·全流程", description: "选股 → 消息核验 → 深度 → 总判断（四角色严格串行）", mode: "选股", roles: ["选股", "消息", "深度", "总判断"], sequence: ["选股", "消息", "深度", "总判断"], preset: "balanced", needsCode: false, placeholder: "", question: "全市场海选全流程（四阶段严格串行，每层只做自己那段，不要重复上游已取的数据）：\n【只要新标的】候选池必须排除账户当前持仓（已持有标的不得进入候选、评分与买入计划）。\n① 选股：扫全市场，候选池 ≤8 只，逐只给评分/入场区间/止损/建议仓位（单票≤25%）。\n② 消息：只针对这 ≤8 只候选及其所属主线做定向消息核验（催化、风险、情绪阶段），显式标注「消息面无支撑」的标的；只做信息整理，不给买卖结论。\n③ 深度：只对评分最高的 3-4 只做技术/资金/财务深度诊断，给出失效条件；不要展开未被选中的标的。\n④ 总判断：在组合层面给出最终 ≤3 只的优先级排序、仓位分配、相关性与调仓顺序（结合当前持仓避免重复暴露），并说明与上次结论的差异。{input}" },
   ]
   const jobStore = Object.create(null)
@@ -1352,6 +1479,83 @@ function apply(ctx, config) {
     taskQueue.push(job)
     void pumpJobs()
     return job
+  }
+
+  // ============ 观察仓日检（watch-daily）：规则层天天跑，LLM 层只跑触发者 ============
+  const WATCH_DAILY_DEFAULTS = {
+    enabled: true, at: "15:10",
+    bootYmd: "", closeYmd: "", // 开机补跑 / 收盘定时 各自每天只跑一次的日期标记
+    lastRunAt: "", lastTrigger: "", lastStatus: "", lastTriggered: [], lastJobId: "", lastNote: "",
+  }
+  const readWatchDaily = async () => {
+    const raw = await readJsonFile(WATCH_DAILY_FILE, {})
+    return Object.assign({}, WATCH_DAILY_DEFAULTS, (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {})
+  }
+  const patchWatchDaily = async (patch) => {
+    const next = Object.assign({}, await readWatchDaily(), patch, { updated_at: new Date().toISOString() })
+    await writeJsonFile(WATCH_DAILY_FILE, next)
+    return next
+  }
+  // 本地 HH:MM（日检定时用本机时区，不做 UTC 转换）
+  const localHm = (d) => {
+    const t = d || new Date()
+    return String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0")
+  }
+  // 只做工作日闸：法定节假日照跑，靠「没有新日线」自然降级（Tushare 仍返回上一交易日）
+  const isTradingWeekday = () => { const w = new Date().getDay(); return w >= 1 && w <= 5 }
+  const watchDailyBusy = () => jobOrder.some((id) => {
+    const j = jobStore[id]
+    return Boolean(j && j.templateId === "watch-daily" && (j.status === "running" || j.status === "queued"))
+  })
+
+  const runWatchDaily = async (trigger) => {
+    if (watchDailyBusy()) return { ok: false, skipped: "running", message: "已有观察仓日检任务在跑，本次跳过" }
+    try { await reconcileWatchFromHoldings() } catch (e) { /* 对账失败不阻断日检 */ }
+    const r = await refreshWatchPrices()
+    const watchOnly = (r.doc.items || []).filter((it) => it && it.state === "观察")
+    // 规则层触发集合：只有「进入买区」「跌破失效价」两种需要再做买入判断
+    const hits = r.fired.filter((a) => a && a.state === "观察" && (a.kind === "buy" || a.kind === "invalidate"))
+    const base = { checkedAt: localHm(), watchCount: watchOnly.length, refreshed: r.refreshed, fetchedAt: r.fetchedAt }
+    if (!hits.length) {
+      const st = await patchWatchDaily({ lastRunAt: new Date().toISOString(), lastTrigger: trigger, lastStatus: "no-trigger", lastTriggered: [], lastJobId: "", lastNote: "观察 " + watchOnly.length + " 只，本次无触发" })
+      return Object.assign({ status: "no-trigger" }, base, st)
+    }
+    const template = TASK_TEMPLATES.find((t) => t.id === "watch-daily")
+    if (!template) throw new Error("watch-daily 模板不存在，无法执行日检")
+    const detail = hits.map((a) => "- " + a.code + " " + String(a.name || "") + "：" + String(a.message || "")).join("\n")
+    const custom = "本次日检由规则层筛出 " + hits.length + " 只触发的观察标的，只处理这几只：\n" + detail
+    const job = enqueueJob(template, "", custom)
+    const codes = hits.map((a) => a.code)
+    const st = await patchWatchDaily({ lastRunAt: new Date().toISOString(), lastTrigger: trigger, lastStatus: "fired", lastTriggered: codes, lastJobId: job.id, lastNote: "触发 " + hits.length + " 只：" + codes.join(" / ") })
+    return Object.assign({ status: "fired", jobId: job.id, triggered: codes }, base, st)
+  }
+
+  // 自动调度：开机补跑（启动后 25 秒，等插件与行情脚本就绪）+ 每分钟检查收盘后定时
+  let watchDailyAutoBusy = false
+  const maybeAutoRunWatchDaily = async (phase) => {
+    if (watchDailyAutoBusy) return
+    watchDailyAutoBusy = true
+    try {
+      const st = await readWatchDaily()
+      if (!st.enabled) return
+      if (!isTradingWeekday()) return
+      const today = localYmd()
+      if (phase === "boot") {
+        if (st.bootYmd === today) return
+        // 先落日期标记再跑：宁可当天失败一次（可手动重跑），也不要因异常反复触发 LLM
+        await patchWatchDaily({ bootYmd: today })
+        await runWatchDaily("boot")
+        return
+      }
+      if (st.closeYmd === today) return
+      if (localHm() < String(st.at || "15:10")) return
+      await patchWatchDaily({ closeYmd: today })
+      await runWatchDaily("close")
+    } catch (e) {
+      try { await patchWatchDaily({ lastStatus: "error", lastRunAt: new Date().toISOString(), lastNote: String(e && e.message ? e.message : e).slice(0, 200) }) } catch (e2) { /* ignore */ }
+    } finally {
+      watchDailyAutoBusy = false
+    }
   }
 
   const routes = [
@@ -1662,34 +1866,64 @@ function apply(ctx, config) {
         if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
         if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
         try {
+          // 先对账（账本 → 档案）再刷现价：外部脚本改过账本时，一次刷新即可对齐
+          let watchSync = []
+          let watchSyncError = ""
+          try { watchSync = await reconcileWatchFromHoldings() }
+          catch (e) { watchSyncError = String(e && e.message ? e.message : e).slice(0, 200) }
+          const r = await refreshWatchPrices()
+          if (!r.refreshed) { writeJson(res, 200, { ok: true, refreshed: 0, alerts: [], message: "档案中无观察/持有标的", watchSync, watchSyncError }); return }
+          writeJson(res, 200, { ok: true, refreshed: r.refreshed, fetched_at: r.fetchedAt, alerts: r.fired, updated_at: r.doc.updated_at, watchSync, watchSyncError })
+        } catch (e) { writeJson(res, 400, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 观察仓日检：读状态（开关 / 定时时刻 / 上次结果 / 观察仓只数）
+      kind: "exact",
+      path: "/dsh-invest/api/watch-daily",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const st = await readWatchDaily()
           const doc = await readWatchlist()
-          // 需要现价的标的：观察 + 持有（已清仓/已移除跳过）
-          const active = doc.items.filter((it) => it && (it.state === "观察" || it.state === "持有"))
-          if (!active.length) { writeJson(res, 200, { ok: true, refreshed: 0, alerts: [], message: "档案中无观察/持有标的" }); return }
-          const codes = active.map((it) => it.code)
-          const result = await fetchQuotePrices(codes)
-          const byDigits = {}
-          for (const q of result.quotes) {
-            const digits = String(q && q.code != null ? q.code : "").replace(/\D/g, "").slice(0, 6)
-            const price = (q == null || q.price === null || q.price === void 0 || q.price === "") ? null : Number(q.price)
-            if (digits.length === 6 && price !== null && Number.isFinite(price)) byDigits[digits] = price
+          const watchCount = doc.items.filter((it) => it && it.state === "观察").length
+          writeJson(res, 200, Object.assign({ ok: true, running: watchDailyBusy(), watchCount }, st))
+        } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 观察仓日检：开 / 关 + 改收盘后的定时时刻（HH:MM）
+      kind: "exact",
+      path: "/dsh-invest/api/watch-daily/settings",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const patch = {}
+          if (body && body.enabled !== undefined) patch.enabled = Boolean(body.enabled)
+          if (body && body.at !== undefined) {
+            const at = String(body.at || "").trim()
+            if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) { writeJson(res, 400, { error: "定时时刻需为 HH:MM（24 小时制）" }); return }
+            patch.at = at
           }
-          const fired = []
-          for (const it of active) {
-            const digits = String(it.code).replace(/\D/g, "").slice(0, 6)
-            const p = byDigits[digits]
-            const m = it.monitor || (it.monitor = {})
-            if (p !== undefined) { m.current_price = p } else { m.current_price = null }
-            m.refreshed_at = result.fetchedAt || new Date().toISOString()
-            deriveWatch(it)
-            const sig = evalWatchSignal(it)
-            if (sig) {
-              const rec = await appendAlert(doc, it, sig)
-              if (rec) fired.push(rec)
-            }
-          }
-          await writeWatchlist(doc)
-          writeJson(res, 200, { ok: true, refreshed: active.length, fetched_at: result.fetchedAt, alerts: fired, updated_at: doc.updated_at })
+          if (!Object.keys(patch).length) { writeJson(res, 400, { error: "没有可更新的字段" }); return }
+          const st = await patchWatchDaily(patch)
+          writeJson(res, 200, Object.assign({ ok: true }, st))
+        } catch (e) { writeJson(res, 400, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 观察仓日检：立即跑一次（规则刷新 → 只为触发者入队 LLM 判断）
+      kind: "exact",
+      path: "/dsh-invest/api/watch-daily/run",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const r = await runWatchDaily("manual")
+          writeJson(res, 200, Object.assign({ ok: true }, r))
         } catch (e) { writeJson(res, 400, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
       },
     },
@@ -1742,7 +1976,20 @@ function apply(ctx, config) {
           if (body.notify !== undefined) it.monitor.notify = body.notify === true
           deriveWatch(it)
           await writeWatchlist(doc)
-          writeJson(res, 200, { ok: true, item: it, updated_at: doc.updated_at })
+          // 反向同步持仓账本：已清仓→移除；置为持有/改成本股数→upsert（失败不阻断档案写入，错误带回前端）
+          const touchedPosition = Boolean(body.position && (body.position.shares !== undefined || body.position.cost !== undefined))
+          let holdingSync = null
+          let holdingSyncError = ""
+          if (body.state !== undefined || touchedPosition) {
+            try { holdingSync = await syncHoldingsFromWatch(it) }
+            catch (e) { holdingSyncError = String(e && e.message ? e.message : e).slice(0, 200) }
+          }
+          // 真清仓后把档案股数归零，避免「已清仓」还挂着 200 股的自相矛盾
+          if (holdingSync && holdingSync.changed && holdingSync.action === "清仓") {
+            it.position.shares = 0
+            await writeWatchlist(doc)
+          }
+          writeJson(res, 200, { ok: true, item: it, updated_at: doc.updated_at, holdingSync, holdingSyncError })
         } catch (e) { writeJson(res, 400, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
       },
     },
@@ -2531,6 +2778,17 @@ function apply(ctx, config) {
     if (typeof timer.unref === "function") timer.unref()
     return () => clearTimeout(timer)
   }, "dsh-invest: run-log self-heal")
+
+  ctx.effect(() => {
+    // 观察仓日检自动调度：开机补跑 + 收盘后定时（每分钟轮询一次，容忍睡眠/唤醒漏拍）
+    // node --test 下 effect 会立即执行，这里必须早退，避免定时器在测试中途跑真实行情/LLM
+    if (process.env.NODE_TEST_CONTEXT || process.env.DSH_INVEST_WATCH_DAILY === "0") return () => {}
+    const boot = setTimeout(() => { void maybeAutoRunWatchDaily("boot") }, 25000)
+    const tick = setInterval(() => { void maybeAutoRunWatchDaily("tick") }, 60000)
+    if (typeof boot.unref === "function") boot.unref()
+    if (typeof tick.unref === "function") tick.unref()
+    return () => { clearTimeout(boot); clearInterval(tick) }
+  }, "dsh-invest: watch-daily auto")
 
   ctx.effect(() => {
     const disposers = routes.map((route) => ctx.webServer.register(route))

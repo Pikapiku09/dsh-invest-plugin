@@ -35,7 +35,7 @@
 | 能力 | 入口 | 状态 |
 |---|---|---|
 | 7 种运行模式（个股/选股/消息/深度分析/总判断/all/波段池） | invest_run | ✅ |
-| 6 个一键任务模板 | 工作台 | ✅ |
+| 7 个一键任务模板（含每日观察仓日检） | 工作台 | ✅ |
 | 任务隔离执行（不污染对话上下文） | 工作台 | ✅ |
 | 模型配置（按角色 + 按模板） | 工作台 / invest_config | ✅ |
 | 持仓管理（截图 / 东财CSV / 手动 四入口） | 工作台 | ✅ |
@@ -110,7 +110,7 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 - 前端产物 `dist/index.html + workbench.js + workbench.css`，插件**每次请求实时读取**（`no-store`），
   改前端后 `pnpm build` 即生效，**无需重启**；改插件 JS 需重启。
 
-### 4.2 一键任务（6 模板）
+### 4.2 一键任务（7 模板）
 
 | 模板 | 名称 | 流程 | 预设 | 需代码 |
 |---|---|---|---|---|
@@ -119,9 +119,11 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | `portfolio-review` | 组合体检 | 消息 → 深度 → 总判断 | inherit | 否 |
 | `morning-news` | 早盘异动 | 消息 → 选股 | fast | 否 |
 | `swing-weekly` | 波段周检 | 波段 → 总判断 | inherit | 否 |
-| `market-screen` | 全市场海选 | 选股 → 深度 | balanced | 否 |
+| `watch-daily` | 观察仓日检 | 深度 → 总判断（每日自动） | balanced | 否 |
+| `market-screen-full` | 海选·全流程 | 选股 → 消息 → 深度 → 总判断 | balanced | 否 |
 
-- 任务进入内存队列**串行执行**，页面轮询进度，完成后自动重建索引。
+- **观察仓日检（`watch-daily`）**：针对标的档案里 `state=观察` 的标的，**开机补跑 + 每天 `at`（默认 15:10）收盘后各跑一次**（各自每天一次，工作日闸；节假日靠"没有新日线"自然降级）。两层执行：规则层先刷新观察仓现价并比对买区/失效价（免 token），**只有进入买区或跌破失效价的标的**才入队 LLM 判断，其余只留提醒。开关、定时时刻与上次结果存 `.dsh-invest/store/watch-daily.json`，工作台一键任务页顶部常驻状态条可开关/改时刻/立即运行。
+- 任务进入内存队列**最多并发 2**（超出排队），页面轮询进度，完成后自动重建索引。
 - 支持浏览器通知（任务完成提醒）。
 - `portfolio-review` / `morning-news` / `swing-weekly` 的 question 会注入当前持仓账本摘要。
 
@@ -167,11 +169,22 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 - 落 `.dsh-invest/conclusions.jsonl` + SQLite `records` 表。
 - 同一标的再次分析时，自动注入上次结论/目标/止损/失效条件，并要求说明本次变化。
 
-### 4.7 标的档案（股票名索引）
+### 4.7 标的档案（股票名索引 + 双向同步）
 
 - 索引 `index.codes` 每个标的带 `name`：优先取持仓账本，再取腾讯行情分批补全，缓存到 `store/names.json`。
 - 当前 **198/233** 个标的已有名称，档案列表显示「名称 + 代码」。
 - 个股体检/快诊输入框支持**代码或股票名**：`GET /api/stock/resolve?query=贵州茅台` → `{code:"600519.SH", name:"贵州茅台", found:true}`。
+
+**双向同步**（2026-11-11 补齐）：持仓账本是资金事实，标的档案是监控视图，两边任一改动都会回写另一边。
+
+| 方向 | 触发点 | 行为 |
+|---|---|---|
+| 账本 → 档案 | 确认持仓 / 刷新持仓现价 / 刷新观察仓现价 / 观察仓日检 | 新票自动建「持有」档案；消失的「持有」转「已清仓」；重新买入的「已清仓」回到「持有」；股数/成本/现价回写 |
+| 档案 → 账本 | `POST /watchlist/update`（改状态、填股数成本） | `已清仓` → 从账本移除；`持有` → 按档案股数/成本 upsert；`观察/已移除` 不动账本，只回提示 |
+
+- 档案 → 账本的写入与「确认持仓」同口径：**先备份**（`store/backups/持仓_*_watch.json`）、**再落盘**、**追加审计**（`holdings_audit.jsonl` 的 `watch-sync` 行）。
+- 账本空壳（无 `updated_at`）时跳过对账，避免把全部「持有」档案误判成已清仓。
+- 反击入口在档案编辑表单的「持有期规则」：填成本/股数 + 状态切「持有」＝建仓；状态切「已清仓」＝卖出清账。
 
 ### 4.8 主题切换
 
@@ -209,12 +222,18 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | GET | `/dsh-invest/api/index` | 索引投影 |
 | GET | `/dsh-invest/api/holdings` | 持仓账本 |
 | GET | `/dsh-invest/api/report` | 报告原文（白名单路径） |
-| GET | `/dsh-invest/api/templates` | 6 模板（含生效预设） |
+| GET | `/dsh-invest/api/templates` | 7 模板（含生效预设） |
 | POST | `/dsh-invest/api/run` | 触发一键任务 |
 | GET | `/dsh-invest/api/job` | 单任务详情（进度/结果） |
 | GET | `/dsh-invest/api/jobs` | 任务列表 |
 | POST | `/dsh-invest/api/reindex` | 重建索引 |
 | GET | `/dsh-invest/api/conclusions` | 最近结论 |
+| GET | `/dsh-invest/api/watchlist` | 标的档案（观察+持仓）+ 未读提醒 |
+| POST | `/dsh-invest/api/watchlist/refresh` | 批量刷新现价 + 比对信号 |
+| POST | `/dsh-invest/api/watchlist/update` | 更新监控规则 / 新建档案 |
+| GET | `/dsh-invest/api/watch-daily` | 观察仓日检状态（开关/时刻/上次结果） |
+| POST | `/dsh-invest/api/watch-daily/settings` | 日检开关 + 收盘后时刻（HH:MM） |
+| POST | `/dsh-invest/api/watch-daily/run` | 立即跑一次日检 |
 | GET/POST | `/dsh-invest/api/model-settings` | 读/写角色+模板模型配置 |
 | POST | `/dsh-invest/api/holdings/import` | CSV/截图/手动 → 草稿 |
 | POST | `/dsh-invest/api/holdings/draft` | 手动编辑 → 草稿 |

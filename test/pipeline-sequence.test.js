@@ -99,7 +99,7 @@ test('templates API 暴露「海选·全流程」及其串行顺序与逐层收�
   assert.deepEqual(full.sequence, ['选股', '消息', '深度', '总判断'])
   assert.deepEqual(full.roles, ['选股', '消息', '深度', '总判断'])
   const quick = (json.templates || []).find((item) => item.id === 'market-screen')
-  assert.equal(quick.sequence, null, '快版仍走默认并行分组')
+  assert.equal(quick, undefined, '全市场海选已下线（由观察仓日检取代）')
 
   // C：逐层宽度约束 —— 全流程 question 里写死 8 / 3-4 / 3
   const { json: runJson } = await h.call('POST', '/dsh-invest/api/run', { templateId: 'market-screen-full' })
@@ -112,13 +112,16 @@ test('templates API 暴露「海选·全流程」及其串行顺序与逐层收�
   assert.match(job.question, /最终 ≤3 只/)
 })
 
-test('快版海选 question 也带逐层收窄约束（C）', async (t) => {
+test('观察仓日检 question 锁定观察仓范围，并带三选一与仓位约束', async (t) => {
   const h = makeHarness()
   t.after(h.cleanup)
-  const { json } = await h.call('POST', '/dsh-invest/api/run', { templateId: 'market-screen' })
+  const { json } = await h.call('POST', '/dsh-invest/api/run', { templateId: 'watch-daily' })
   const listed = await h.call('GET', '/dsh-invest/api/jobs')
   const job = listed.json.jobs.find((item) => item.id === json.jobId)
-  assert.equal(job.sequence, null, '快版不应带串行顺序')
-  assert.match(job.question, /候选池 ≤8 只/)
-  assert.match(job.question, /评分最高的 3-5 只/)
+  assert.deepEqual(job.sequence, ['深度', '总判断'], '日检应严格串行：深度 → 总判断')
+  assert.match(job.question, /state=观察/, '只处理观察状态标的')
+  assert.match(job.question, /不重跑全市场选股/, '不得扩展成全市场选股')
+  assert.match(job.question, /可买/)
+  assert.match(job.question, /赔率/)
+  assert.match(job.question, /单票≤25%/)
 })

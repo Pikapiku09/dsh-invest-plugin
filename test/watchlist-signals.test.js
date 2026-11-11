@@ -111,6 +111,14 @@ function makeHarness(seedItems) {
   return { call, readWatchlistFile, cleanup: () => fs.rmSync(base, { recursive: true, force: true }), base }
 }
 
+const HOLDINGS_REL = path.join('.dsh-invest', '持仓.json')
+const writeHoldings = (base, positions, account = { total_asset: 1000000 }) => {
+  fs.writeFileSync(path.join(base, HOLDINGS_REL), JSON.stringify({
+    version: 1, updated_at: new Date().toISOString(), account, positions,
+  }, null, 2))
+}
+const readHoldings = (base) => JSON.parse(fs.readFileSync(path.join(base, HOLDINGS_REL), 'utf8'))
+
 test('提醒标注购买仓位数：止损=持仓股数、止盈=持仓股数、买入=计划买入股数', async (t) => {
   const h = makeHarness([
     watchItem('600001.SH', '止损样例', '持有', {}, { cost: 11, shares: 1000, stop: 10, target: 20 }),
@@ -216,4 +224,100 @@ test('持仓股数被修改后，档案股数随之更新（同日二次确认�
   const mt = h.readWatchlistFile().items.find((item) => item.code === '600519.SH')
   assert.equal(mt.position.shares, 500)
   assert.equal(mt.position.cost, 1480)
+})
+
+// ===== 档案 → 持仓 的反向同步（2026-11-11）=====
+
+test('档案点「已清仓」→ 持仓账本同步移除该票', async (t) => {
+  const h = makeHarness([watchItem('600519.SH', '贵州茅台', '持有', {}, { cost: 1500, shares: 200 })])
+  t.after(h.cleanup)
+  writeHoldings(h.base, [{ code: '600519.SH', name: '贵州茅台', shares: 200, cost: 1500, current_price: 1600 }])
+
+  const saved = await h.call('POST', '/dsh-invest/api/watchlist/update', { code: '600519.SH', state: '已清仓' })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.json.holdingSync.changed, true)
+  assert.equal(saved.json.holdingSync.action, '清仓')
+  assert.equal(saved.json.item.position.shares, 0, '清仓后档案股数应归零')
+  assert.deepEqual(readHoldings(h.base).positions, [], '清仓后账本不应再有该票')
+})
+
+test('档案填买入（观察→持有 + 股数成本）→ 持仓账本自动建仓', async (t) => {
+  const h = makeHarness([watchItem('600519.SH', '贵州茅台', '观察', { buy_low: 1500, buy_high: 1550 }, {})])
+  t.after(h.cleanup)
+  writeHoldings(h.base, [])
+
+  const saved = await h.call('POST', '/dsh-invest/api/watchlist/update', {
+    code: '600519.SH', state: '持有', position: { cost: 1500, shares: 200 },
+  })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.json.holdingSync.changed, true)
+  assert.equal(saved.json.holdingSync.action, '建仓')
+  const pos = readHoldings(h.base).positions.find((p) => p.code === '600519.SH')
+  assert.ok(pos, '账本应新增该票')
+  assert.equal(pos.shares, 200)
+  assert.equal(pos.cost, 1500)
+})
+
+test('档案置为持有但没填股数 → 不写账本，只回提示', async (t) => {
+  const h = makeHarness([watchItem('600519.SH', '贵州茅台', '观察', {}, {})])
+  t.after(h.cleanup)
+  writeHoldings(h.base, [])
+
+  const saved = await h.call('POST', '/dsh-invest/api/watchlist/update', { code: '600519.SH', state: '持有' })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.json.holdingSync.changed, false)
+  assert.match(String(saved.json.holdingSync.warnings[0]), /股数为空/)
+  assert.deepEqual(readHoldings(h.base).positions, [], '缺股数时不得凭空写仓')
+})
+
+test('档案改为观察但账本仍持仓 → 不误删，只回提示', async (t) => {
+  const h = makeHarness([watchItem('600519.SH', '贵州茅台', '持有', {}, { cost: 1500, shares: 200 })])
+  t.after(h.cleanup)
+  writeHoldings(h.base, [{ code: '600519.SH', name: '贵州茅台', shares: 200, cost: 1500, current_price: 1600 }])
+
+  const saved = await h.call('POST', '/dsh-invest/api/watchlist/update', { code: '600519.SH', state: '观察' })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.json.holdingSync.changed, false)
+  assert.match(String(saved.json.holdingSync.warnings[0]), /持仓账本里仍有该标的/)
+  assert.equal(readHoldings(h.base).positions.length, 1, '不得因为改观察就删掉真实持仓')
+})
+
+test('持仓工作区新增股票 → 自动建「持有」档案', async (t) => {
+  const h = makeHarness([watchItem('000001.SZ', '平安银行', '观察', {}, {})])
+  t.after(h.cleanup)
+
+  const imported = await h.call('POST', '/dsh-invest/api/holdings/import', {
+    source: 'manual',
+    positions: [{ code: '600519.SH', name: '贵州茅台', shares: 100, cost: 1500, current_price: 1600 }],
+  })
+  const confirmed = await h.call('POST', '/dsh-invest/api/holdings/confirm', {
+    draftId: imported.json.draftId,
+    positions: [{ code: '600519.SH', name: '贵州茅台', shares: 100, cost: 1500, current_price: 1600 }],
+    account: { total_asset: 1000000 },
+  })
+  assert.equal(confirmed.status, 200)
+  const created = h.readWatchlistFile().items.find((item) => item.code === '600519.SH')
+  assert.ok(created, '账本里的新票应自动建档')
+  assert.equal(created.state, '持有')
+  assert.equal(created.position.shares, 100)
+  assert.ok(confirmed.json.watchSync.some((line) => line.includes('新建档案')), confirmed.json.watchSync.join(' / '))
+})
+
+test('已清仓标的重新买入 → 档案回到持有', async (t) => {
+  const h = makeHarness([watchItem('600519.SH', '贵州茅台', '已清仓', {}, { shares: 0 })])
+  t.after(h.cleanup)
+
+  const imported = await h.call('POST', '/dsh-invest/api/holdings/import', {
+    source: 'manual',
+    positions: [{ code: '600519.SH', name: '贵州茅台', shares: 300, cost: 1400, current_price: 1600 }],
+  })
+  const confirmed = await h.call('POST', '/dsh-invest/api/holdings/confirm', {
+    draftId: imported.json.draftId,
+    positions: [{ code: '600519.SH', name: '贵州茅台', shares: 300, cost: 1400, current_price: 1600 }],
+    account: { total_asset: 1000000 },
+  })
+  assert.equal(confirmed.status, 200)
+  const it = h.readWatchlistFile().items.find((item) => item.code === '600519.SH')
+  assert.equal(it.state, '持有', '重新买入后档案应回到持有')
+  assert.equal(it.position.shares, 300)
 })

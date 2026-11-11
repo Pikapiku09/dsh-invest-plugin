@@ -137,14 +137,14 @@ test('最近任务持久化：任务结束写入 recent，最多保留 5 个', a
   t.after(h.cleanup)
 
   for (let i = 0; i < 7; i += 1) {
-    const res = await h.call('POST', '/dsh-invest/api/run', { templateId: 'market-screen' })
+    const res = await h.call('POST', '/dsh-invest/api/run', { templateId: 'watch-daily' })
     assert.equal(res.status, 202)
     await new Promise((resolve) => setTimeout(resolve, 120))
   }
   const listed = await h.call('GET', '/dsh-invest/api/jobs')
   const recent = listed.json.recent || []
   assert.equal(recent.length, 5, '最近任务只保留 5 个')
-  assert.ok(recent.every((item) => item.id && item.templateId === 'market-screen'))
+  assert.ok(recent.every((item) => item.id && item.templateId === 'watch-daily'))
   assert.equal(recent[0].status, 'failed', '无执行 Agent 时应记录失败状态')
   assert.ok(typeof recent[0].question === 'string' && recent[0].question.length > 0)
 
@@ -159,7 +159,7 @@ test('最近任务持久化：不重复记录同一个任务', async (t) => {
   const h = makeHarness({ agentMode: 'no-agent' })
   t.after(h.cleanup)
 
-  await h.call('POST', '/dsh-invest/api/run', { templateId: 'market-screen' })
+  await h.call('POST', '/dsh-invest/api/run', { templateId: 'watch-daily' })
   await new Promise((resolve) => setTimeout(resolve, 150))
   const listed = await h.call('GET', '/dsh-invest/api/jobs')
   const ids = (listed.json.recent || []).map((item) => item.id)

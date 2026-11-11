@@ -75,7 +75,7 @@ test('默认并发 2：同时提交 3 个任务 → 2 个运行、1 个排队', 
   t.after(h.cleanup)
 
   for (let i = 0; i < 3; i += 1) {
-    const res = await h.call('POST', '/dsh-invest/api/run', { templateId: 'market-screen' })
+    const res = await h.call('POST', '/dsh-invest/api/run', { templateId: 'watch-daily' })
     assert.equal(res.status, 202, '提交应成功：' + JSON.stringify(res.json))
   }
   await new Promise((resolve) => setTimeout(resolve, 200))
@@ -95,7 +95,7 @@ test('DSH_INVEST_JOB_CONCURRENCY=1 时退回串行：1 个运行、2 个排队',
   t.after(h.cleanup)
 
   for (let i = 0; i < 3; i += 1) {
-    const res = await h.call('POST', '/dsh-invest/api/run', { templateId: 'market-screen' })
+    const res = await h.call('POST', '/dsh-invest/api/run', { templateId: 'watch-daily' })
     assert.equal(res.status, 202)
   }
   await new Promise((resolve) => setTimeout(resolve, 200))
@@ -111,7 +111,7 @@ test('并发上限受环境变量钳制（>=1 且 <=6）', async (t) => {
   process.env.DSH_INVEST_JOB_CONCURRENCY = '99'
   t.after(h.cleanup)
 
-  await h.call('POST', '/dsh-invest/api/run', { templateId: 'market-screen' })
+  await h.call('POST', '/dsh-invest/api/run', { templateId: 'watch-daily' })
   const listed = await h.call('GET', '/dsh-invest/api/jobs')
   assert.equal(listed.json.concurrency, 6, '超过 6 应钳制到 6')
 })

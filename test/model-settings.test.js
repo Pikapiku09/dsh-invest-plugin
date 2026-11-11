@@ -107,7 +107,7 @@ test('templates：每个模板回显 preset / 生效模型 / 宿主模型', asyn
   assert.ok(inheritTpl.effectiveModels.length >= 1)
   assert.ok(inheritTpl.effectiveModels.every((m) => m.resolved === SESSION_LABEL), 'inherit 预设应解析到宿主模型')
 
-  const balancedTpl = json.templates.find((item) => item.id === 'market-screen')
+  const balancedTpl = json.templates.find((item) => item.id === 'watch-daily')
   assert.equal(balancedTpl.preset, 'balanced')
   const deep = balancedTpl.effectiveModels.find((m) => m.role === '深度')
   assert.equal(deep.resolved, 'deepseek-official/deepseek-v4-pro@high', 'balanced 深度应为 v4-pro@high')

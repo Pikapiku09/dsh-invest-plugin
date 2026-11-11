@@ -112,7 +112,7 @@ test('持仓为空时不注入排除清单（不产生空约束）', async (t) =
   assert.doesNotMatch(screener.text, /【选股硬约束：只找新标的】/)
 })
 
-test('两个海选模板的问题文本都要求排除当前持仓', async (t) => {
+test('海选模板的问题文本要求排除当前持仓，且全市场海选已下线', async (t) => {
   const h = makeHarness()
   t.after(h.cleanup)
   const route = h.registered.find((r) => r.path === '/dsh-invest/api/templates')
@@ -123,9 +123,11 @@ test('两个海选模板的问题文本都要求排除当前持仓', async (t) =
   const res = { setHeader() {}, statusCode: 0, end(v) { body = String(v || '') } }
   await route.handler(req, res)
   const json = JSON.parse(body)
-  const quick = json.templates.find((x) => x.id === 'market-screen')
   const full = json.templates.find((x) => x.id === 'market-screen-full')
-  assert.ok(quick && full)
+  const quick = json.templates.find((x) => x.id === 'market-screen')
+  assert.ok(full)
+  // 全市场海选快版已下线：一键任务里由「观察仓日检」取代
+  assert.equal(quick, undefined, 'market-screen 不应再出现在模板列表')
   // templates 接口只返回元信息，问题文本在 /api/run 的 job 上；这里直接校验 TASK_TEMPLATES 经 run 后的 question
   const quickRun = await h.run({ mode: '选股', question: 'x', roles: ['选股'] })
   assert.ok(quickRun)
@@ -149,8 +151,7 @@ test('两个海选模板的问题文本都要求排除当前持仓', async (t) =
   const js = { setHeader() {}, statusCode: 0, end(v) { jobsBody = String(v || '') } }
   await jobsRoute.handler(jr, js)
   const jobs = JSON.parse(jobsBody).jobs || []
-  const quickJob = jobs.find((j) => j.templateId === 'market-screen')
   const fullJob = jobs.find((j) => j.templateId === 'market-screen-full')
-  assert.match(quickJob.question, /排除账户当前持仓/)
+  assert.ok(fullJob, '全流程海选应能入队')
   assert.match(fullJob.question, /排除账户当前持仓/)
 })
