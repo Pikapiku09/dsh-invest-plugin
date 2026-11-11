@@ -5,6 +5,7 @@ import { defineTool } from "@deepseek-ai/dsh-tools"
 import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY } from "./prompts.js"
 import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv, z2, localYmd } from "./pure.js"
 import { DEFAULT_PRESET, PRESETS, ROLE_CODES, mergeRoutes, formatRoute, formatRouteChain, parseRoute, parseRouteList, parseRoutesJson } from "./routes.js"
+import { buildStockNotes, normalizeCode, stockFileName } from "./stock-notes.js"
 
 // 插件配置：路由预置档 + 按角色覆盖（写在 profile 的 cordis.patch.yml 的 - id: invest → config）
 const Config = z.object({
@@ -114,6 +115,9 @@ function apply(ctx, config) {
   const WATCH_DAILY_FILE = BASE_DIR + "/.dsh-invest/store/watch-daily.json"
   // 证券名称索引（code → 名称）：结论流水不带 name，观察档案建档时用它补全
   const NAMES_FILE = BASE_DIR + "/.dsh-invest/store/names.json"
+  // 个股分析知识库：报告按「个股」切段归集（清单 + 每只股票一份 Markdown）
+  const STOCK_NOTES_FILE = BASE_DIR + "/.dsh-invest/store/stock-notes.json"
+  const STOCK_NOTES_DIR = BASE_DIR + "/.dsh-invest/store/stocks"
   const WEB_DIST_DIR = BASE_DIR + "/.dsh-invest/web/dist"
   const WEB_DIST_INDEX = WEB_DIST_DIR + "/index.html"
   const WEB_DIST_JS = WEB_DIST_DIR + "/workbench.js"
@@ -1008,6 +1012,72 @@ function apply(ctx, config) {
     const value = settings.templates && settings.templates[templateId]
     return typeof value === "string" && PRESETS[value] ? value : (PRESETS[fallback] ? fallback : "inherit")
   }
+  // ===== 个股分析知识库：报告按「个股」切段归集到 store/stocks/<代码>.md =====
+  // 归因顺序：显式标记 <!--stock:600519.SH|贵州茅台--> → 含代码的小标题 → 行级提及节选
+  let stockNotesCache = null
+  let stockNotesBuilding = null
+  const ensureStockNotes = async (fresh = false, hard = false) => {
+    if (!fresh && stockNotesCache && Date.now() - stockNotesCache.at < 45000) return stockNotesCache.data
+    if (stockNotesBuilding) return stockNotesBuilding
+    stockNotesBuilding = (async () => {
+      const indexDoc = await readJsonFile(STORE_INDEX, {})
+      const names = {}
+      const codeMap = (indexDoc && indexDoc.codes) || {}
+      for (const [code, value] of Object.entries(codeMap)) {
+        const normalized = normalizeCode(code)
+        if (normalized && value && value.name) names[normalized] = String(value.name)
+      }
+      const codesByPath = {}
+      for (const report of ((indexDoc && indexDoc.reports) || [])) {
+        const p = String((report && report.path) || "").replace(/\\/g, "/")
+        const file = p.split("/").pop()
+        if (!file) continue
+        codesByPath[file] = Array.isArray(report.codes) ? report.codes.map(normalizeCode).filter(Boolean) : []
+      }
+      const data = await buildStockNotes({
+        reportsDir: REPORTS_DIR, storeFile: STOCK_NOTES_FILE, stocksDir: STOCK_NOTES_DIR,
+        names, codesByPath, force: hard,
+      })
+      data.names = names
+      stockNotesCache = { data, at: Date.now() }
+      return data
+    })().finally(() => { stockNotesBuilding = null })
+    return stockNotesBuilding
+  }
+  const stockNotesListPayload = (data) => {
+    const names = (data && data.names) || {}
+    const stocks = Array.from(((data && data.stocks) || new Map()).entries()).map(([code, list]) => ({
+      code,
+      name: names[code] || (list[0] && list[0].name) || "",
+      count: list.length,
+      last_ts: (list[0] && list[0].ts) || "",
+      modes: Array.from(new Set(list.map((entry) => entry.mode).filter(Boolean))).slice(0, 4),
+      kinds: Array.from(new Set(list.map((entry) => entry.kind).filter(Boolean))).slice(0, 4),
+    }))
+    stocks.sort((a, b) => String(b.last_ts).localeCompare(String(a.last_ts)))
+    return {
+      built_at: (data.manifest && data.manifest.built_at) || "",
+      stats: data.stats,
+      stocks,
+      orphans: (data.orphans || []).slice(0, 200),
+    }
+  }
+  const stockNotesDetailPayload = (data, code) => {
+    const names = (data && data.names) || {}
+    const list = (data && data.stocks && data.stocks.get(code)) || []
+    return {
+      code,
+      name: names[code] || (list[0] && list[0].name) || "",
+      count: list.length,
+      last_ts: (list[0] && list[0].ts) || "",
+      file: (STOCK_NOTES_DIR + "/" + stockFileName(code)).replace(/\\/g, "/"),
+      entries: list.slice(0, 60).map((entry) => ({
+        id: entry.id, ts: entry.ts, mode: entry.mode, kind: entry.kind, heading: entry.heading,
+        report: entry.report, report_title: entry.report_title, chars: entry.chars,
+        text: String(entry.text || "").slice(0, 3000),
+      })),
+    }
+  }
   // ===== 最近任务持久化（跨 web 关闭 / DSH 重启保留最近 5 个）=====
   const readRecentJobs = async () => {
     const doc = await readJsonFile(RECENT_JOBS_FILE, { jobs: [] })
@@ -1447,6 +1517,10 @@ function apply(ctx, config) {
         try { await taskHandle.dispose() } catch (e) { /* ignore */ }
       }
       try { job.reindexStats = await runReindex() } catch (e) { job.reindexError = String(e).slice(0, 200) }
+      // 报告落盘后刷新个股知识库（增量；失败不影响任务结果）
+      if (process.env.DSH_INVEST_SKIP_STOCK_NOTES !== "1") {
+        try { await ensureStockNotes(true) } catch (e) { /* ignore */ }
+      }
     }
   }
 
@@ -1655,7 +1729,7 @@ function apply(ctx, config) {
         if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
         const url = new URL(req.url ?? "/", "http://localhost")
         const p = queryParam(url, "path") ?? ""
-        const allowed = /.md$/i.test(p) && (isSafeServePath(p, REPORTS_DIR) || isSafeServePath(p, OUTPUT_ROOT))
+        const allowed = /.md$/i.test(p) && (isSafeServePath(p, REPORTS_DIR) || isSafeServePath(p, OUTPUT_ROOT) || isSafeServePath(p, STOCK_NOTES_DIR))
         if (!allowed) { writeJson(res, 400, { error: "denied" }); return }
         const fs = ctx.get("fs")
         if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
@@ -1664,6 +1738,53 @@ function apply(ctx, config) {
           if (text.length > 2000000) { writeJson(res, 413, { error: "too large" }); return }
           writeJson(res, 200, { path: p, text })
         } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 200) }) }
+      },
+    },
+    {
+      // 个股分析知识库：按个股归集的清单（前端按股票名排序 + 首字母索引导航）
+      kind: "exact",
+      path: "/dsh-invest/api/stock-notes",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const data = await ensureStockNotes(false)
+          writeJson(res, 200, stockNotesListPayload(data))
+        } catch (e) { writeJson(res, 500, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 单只个股的全部分析段（含原文摘录）
+      kind: "exact",
+      path: "/dsh-invest/api/stock-note",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const url = new URL(req.url ?? "/", "http://localhost")
+        const code = normalizeCode(queryParam(url, "code") || "")
+        if (!code) { writeJson(res, 400, { error: "缺少或非法的股票代码" }); return }
+        try {
+          const data = await ensureStockNotes(false)
+          const payload = stockNotesDetailPayload(data, code)
+          if (!payload.count) { writeJson(res, 404, { error: "该标的还没有归集的个股分析", code }); return }
+          writeJson(res, 200, payload)
+        } catch (e) { writeJson(res, 500, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 强制重建个股知识库（改了报告或标记格式后手动触发）
+      kind: "exact",
+      path: "/dsh-invest/api/stock-notes/rebuild",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const url = new URL(req.url ?? "/", "http://localhost")
+          // 默认增量重建（未变化的报告复用解析结果）；?full=1 时全量重解析（解析规则变更后用）
+          const full = queryParam(url, "full") === "1"
+          const data = await ensureStockNotes(true, full)
+          writeJson(res, 200, Object.assign({ ok: true }, stockNotesListPayload(data), { stats: data.stats }))
+        } catch (e) { writeJson(res, 500, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
       },
     },
     {

@@ -41,6 +41,7 @@
 | 持仓管理（截图 / 东财CSV / 手动 四入口） | 工作台 | ✅ |
 | 结论链（历史注入 + 差异分析） | 工作台 / 流水线 | ✅ |
 | 标的档案（股票名索引，198/233） | 工作台 | ✅ |
+| 个股分析知识库（报告按股票切段归集 + 首字母索引） | 工作台 | ✅ |
 | 股票名输入（代码或名称） | 工作台 | ✅ |
 | 明暗主题手动切换 | 工作台 | ✅ |
 | SVG 图表（走势图 + MACD 背离） | 流水线 | ✅ |
@@ -192,6 +193,19 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 - localStorage `workbench-theme` 持久化；默认跟随系统 `prefers-color-scheme`，手动切换后以手动为准。
 - 首屏内联脚本防闪烁。
 
+### 4.9 个股分析知识库（报告按股票归集）
+
+「报告追问」页左侧不再是按时间混排的报告清单，而是**按股票名排序的个股列表**：拼音首字母分组（A-Z 可折叠）+ 右缘首字母索引条，
+展开某只股票即见它全部分析段（时间 / 模式 / 分段·整份·节选 + 摘录预览），选中即就该段所在报告追问。
+
+- **生成期定格式**：提示词模板 `KB_MARK` 要求每个角色把个股内容包进 `<!--stock:600519.SH|贵州茅台-->` … `<!--/stock-->`，
+  一行多票时复制行进各股块；二次总结被要求**原样保留标记**（否则总结会抹平分段）。正文渲染时标记行自动隐藏。
+- **归因三级**：① 显式标记 → ② 含代码的小标题（`## 股票深度分析：华能国际（600011.SH）`）→ ③ 行级提及节选（历史报告）。
+  主报告被总结抹掉标记时，回退 `reports/_raw/<同名>.md` 详版里找回分段。
+- **存储**：`.dsh-invest/store/stock-notes.json`（按报告缓存，size+mtime 增量，默认重建 ~300ms）+
+  `.dsh-invest/store/stocks/<代码>.md`（每只股票一份人可读知识库，内容未变不重写）。任务完成自动增量重建。
+- 没有任何个股归属的报告进「综合」分组，仍按报告追问；知识库接口不可用（后端未重启）时列表自动回退为按时间的报告清单。
+
 ---
 
 ## 五、数据层
@@ -234,6 +248,9 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | GET | `/dsh-invest/api/watch-daily` | 观察仓日检状态（开关/时刻/上次结果） |
 | POST | `/dsh-invest/api/watch-daily/settings` | 日检开关 + 收盘后时刻（HH:MM） |
 | POST | `/dsh-invest/api/watch-daily/run` | 立即跑一次日检 |
+| GET | `/dsh-invest/api/stock-notes` | 个股分析知识库清单（每只股票段数/最近时间/孤儿报告） |
+| GET | `/dsh-invest/api/stock-note` | 单只个股的全部分析段（`?code=600519.SH`） |
+| POST | `/dsh-invest/api/stock-notes/rebuild` | 重建知识库（`?full=1` 全量重解析） |
 | GET/POST | `/dsh-invest/api/model-settings` | 读/写角色+模板模型配置 |
 | POST | `/dsh-invest/api/holdings/import` | CSV/截图/手动 → 草稿 |
 | POST | `/dsh-invest/api/holdings/draft` | 手动编辑 → 草稿 |

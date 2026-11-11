@@ -124,6 +124,14 @@ const SWING_RULES = [
   '- 空仓合法：无候选即输出「本轮空仓」，禁降标准；每月≤1次调仓',
 ].join('\n')
 
+// ===== 个股分段标记（归档系统据此把内容归集到每只股票的独立知识库）=====
+const KB_MARK = [
+  '# 个股分段标记（强制格式：归档系统按标记把内容归集到每只股票）',
+  '- 凡针对某一只个股的内容，必须整段包裹：起始行 `<!--stock:600519.SH|贵州茅台-->`，结束行 `<!--/stock-->`，两行各独占一行',
+  '- 一只股票一个块；同一只股票多处出现时合并进同一个块，块内照常用小标题与表格',
+  '- 表格一行含多只股票时，把该行复制进各股对应的块内；不属于任何个股的内容（大盘/消息面/免责声明）放在块外',
+].join('\n')
+
 const P_SELECT = [
   '# 角色',
   KB_SELECT,
@@ -149,6 +157,7 @@ const P_SELECT = [
 ].join('\n')
 
 const P_NEWS = [
+  KB_MARK,
   '# 角色',
   KB_NEWS,
   KB_PSY,
@@ -171,6 +180,7 @@ const P_NEWS = [
 ].join('\n')
 
 const P_DEEP = [
+  KB_MARK,
   '# 角色',
   KB_DEEP,
   KB_PSY,
@@ -195,6 +205,7 @@ const P_DEEP = [
 ].join('\n')
 
 const P_FINAL = [
+  KB_MARK,
   '# 角色',
   KB_FINAL,
   KB_PSY,
@@ -218,6 +229,7 @@ const P_FINAL = [
 
 
 const P_SWING = [
+  KB_MARK,
   '# 角色',
   KB_PSY,
   '你是 A 股波段池管理师「SwingKeeper」，负责中长周期波段池（持有 3 周-6 个月）的建池、跟踪与调仓。**波段池已于 2026-10-20 被扩样本回测证伪（5.7 年 −52.0%、跑不过随机），当前处于 S1 纸面前向验证期：你可以做完整分析与纸面决策，但任何输出都必须标注【纸面】，不得给出可执行的实盘买入/加仓指令。** 铁律：持仓 ≤4 只、分批建仓、非必要可以空仓。',
@@ -261,6 +273,7 @@ const P_SWING = [
 
 // 报告二次总结角色：把多阶段输出压缩成「观点先行」的最终报告（纯文本压缩，不重新取数）
 const P_SUMMARY = [
+  KB_MARK,
   '# 角色：投研报告主编（二次总结）',
   '你只做一件事：把给出的各分析师阶段输出，二次总结为一份清晰明了的最终报告。',
   '严格禁止：调用任何工具、重新取数、联网、编造原文没有的数字或结论、复述取数过程与接口报错。',
@@ -299,7 +312,8 @@ const P_SUMMARY = [
   '- 信息三分标注：公开资料用【公开资料】，推断用【行业经验推断】，未证实/接口受限用【待核实】；只在关键判断处标注，不必逐条加。',
   '- 不写「仅供参考，不构成投资建议」等免责声明（报告页脚已有），不写「作为XX分析师」等角色自述。',
   '- 不替用户做最终决策，用「建议／可考虑／需确认」等措辞。',
+  '- 原样保留输入里的 `<!--stock:代码|名称-->` 与 `<!--/stock-->` 标记行：逐项说明中每只个股的内容写回对应标记内，不得删除、改写或合并标记；标记外的内容（大盘/组合/风险）保持在外。',
   '- 直接输出 Markdown 正文，不要任何前言、说明或代码块包裹。',
 ].join('\n')
 
-export { DATA_BASE, CHECKLIST, KB_PSY, KB_SELECT, KB_NEWS, KB_VERIFIED, KB_DEEP, KB_FINAL, SWING_RULES, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY }
+export { DATA_BASE, CHECKLIST, KB_PSY, KB_SELECT, KB_NEWS, KB_VERIFIED, KB_DEEP, KB_FINAL, SWING_RULES, KB_MARK, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY }
