@@ -18,7 +18,10 @@ const pureCore = pure.split(PURE_EXPORT).join('').trimEnd()
 const ROUTES_EXPORT = "if (typeof module !== 'undefined' && module.exports) module.exports = { ROLE_CODES, PRESETS, DEFAULT_PRESET, parseRoute, parseRouteList, mergeRoutes, formatRoute, formatRouteChain, routeShort, parseRoutesJson }"
 const routesCore = routes.split(ROUTES_EXPORT).join('').trimEnd()
 
-const banner = '// 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改\n// 用法：将本文件内容作为 cordis_define 的 code.host 函数体\n// 生成时间：' + new Date().toISOString() + '\n'
+// 2026-11-11：banner 去掉"生成时间"——时间戳会让每次构建的 dist 都变化，
+// 导致 `git diff --exit-code` 永远失败、无法在 CI 里校验构建产物是否最新。
+// 构建应当可重复：同样的 src 产出同样的字节。
+const banner = '// 本文件由 tools/build.js 自动生成（node tools/build.js），请勿手动修改\n// 用法：将本文件内容作为 cordis_define 的 code.host 函数体\n'
 
 // ---- 1) dist：动态插件形态 ----
 const hostBody = banner + '\nconst PROMPTS = ' + JSON.stringify(prompts, null, 2) + ';\n\n' +

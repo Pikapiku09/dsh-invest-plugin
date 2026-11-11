@@ -11,7 +11,11 @@
 - NAS 推送步骤改为「尝试推送、离线自动降级为本地镜像、失败不阻断周检」，与 `scripts/swing-weekly.ps1` 的离线改造对齐。
 - 说明：`TASK_TEMPLATES` 只存在于 profile bundle（`packages/dsh-invest/lib/index.js`），`dist/` 动态插件形态不含模板，故只改一处。**已运行的 DSH 进程需重启后才会加载新模板**（profile 以 `link:` 指向该目录，文件已更新，但 Node ESM 有模块缓存）。
 
-**测试**：全量 `node --test` **77/77**；`node tools/build.js` 提示词预算全绿。
+**修复：构建产物不可重复（dist banner 含时间戳）**
+
+- `tools/build.js` 的 banner 里带 `new Date().toISOString()`，导致**同样的 src 每次构建都产出不同字节**，`git diff --exit-code` 永远失败，无法在 CI 校验"构建产物是否最新"。已移除时间戳行；现在连续两次构建 SHA256 完全一致，可在预提交/CI 里做「改完 src 必须 build」的硬校验。
+
+**测试**：全量 `node --test` **77/77**；`node tools/build.js` 提示词预算全绿；连续两次构建 `dist/invest-run.host.js` SHA256 相同。
 
 ## v0.38.0（2026-11-10）
 
