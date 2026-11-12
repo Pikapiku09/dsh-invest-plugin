@@ -1,90 +1,13 @@
 import { emptyState, pageHeader } from './components';
-import { escapeHtml, formatDateTime, truncate } from './format';
+import { escapeHtml } from './format';
 import { icon } from './icons';
 import { renderMarkdown } from './markdown';
-import { parseReportPath } from './run-history';
 import { groupStocks } from './stock-index';
 import type { AppState } from './state';
-import type { StockNoteEntry, StockNoteMeta } from './types';
+import type { StockNoteDetail, StockNoteEntry, StockNoteMeta } from './types';
 
-export interface AskReportOption {
-  key: string;
-  path: string;
-  ts: string;
-  title: string;
-  codes: string[];
-}
-
-const normPath = (value: string): string => String(value || '').replace(/\\/g, '/').toLowerCase();
-
-/** 标的名称：优先索引名称，其次代码本身 */
-function codeLabel(state: AppState, code: string): string {
-  const name = state.index?.codes?.[code]?.name;
-  return name ? `${name} ${code}` : code;
-}
-
-/**
- * 可追问的报告清单（「综合」分组与「个股知识库」不可用时的兜底列表）。
- * 索引里同一次运行会挂两份报告（`.dsh-invest/reports/*.md` 与 `invest-outputs/…/报告.md`），
- * 这里按 run_id / 时间戳去重，优先保留 reports 下的主报告，避免同一份报告出现两次。
- */
-export function reportOptions(state: AppState): AskReportOption[] {
-  const runsById = new Map((state.index?.runs || []).map((run) => [String(run.id), run]));
-  const buckets = new Map<string, AskReportOption & { primary: boolean }>();
-  const put = (option: AskReportOption & { primary: boolean }): void => {
-    const prev = buckets.get(option.key);
-    if (!prev || (option.primary && !prev.primary)) buckets.set(option.key, option);
-  };
-  (state.index?.reports || []).forEach((report) => {
-    const path = String(report.path || '').replace(/\\/g, '/');
-    const { ts, title } = parseReportPath(path);
-    if (!ts) return;
-    const run = report.run_id !== undefined && report.run_id !== null ? runsById.get(String(report.run_id)) : undefined;
-    const question = String(run?.question || '').trim();
-    const codes = report.codes || run?.codes || [];
-    const leadName = codes.length ? codeLabel(state, codes[0]).split(' ')[0] : '';
-    const titleParts = [run?.mode || '报告'];
-    if (leadName) titleParts.push(leadName);
-    titleParts.push(truncate(question || title || '未命名任务', 30));
-    put({
-      key: report.run_id ? `run:${report.run_id}` : `ts:${ts}`,
-      path,
-      ts,
-      title: titleParts.filter(Boolean).join(' · '),
-      codes,
-      primary: /\/\.dsh-invest\/reports\//i.test(path),
-    });
-  });
-  (state.jobs || []).forEach((job) => {
-    const path = String((job.result?.reports || [])[0] || job.reportPath || '').replace(/\\/g, '/');
-    if (!path || job.status !== 'done') return;
-    const { ts, title } = parseReportPath(path);
-    const leadCode = String(job.code || '').trim();
-    const leadName = leadCode ? codeLabel(state, leadCode).split(' ')[0] : '';
-    put({
-      key: `${job.id}`,
-      path,
-      ts: ts || formatDateTime(job.createdAt),
-      title: [job.mode || job.name || '任务', leadName, truncate(job.question || title || job.templateName || '任务报告', 30)].filter(Boolean).join(' · '),
-      codes: leadCode ? [leadCode] : [],
-      primary: true,
-    });
-  });
-  const list = Array.from(buckets.values()).map(({ primary, ...option }) => option);
-  // 跨来源去重：同一次任务可能同时出现在 index.reports 与当前任务列表里（同一 path）
-  const byPath = new Map<string, AskReportOption>();
-  list.forEach((option) => {
-    const key = normPath(option.path);
-    if (!byPath.has(key)) byPath.set(key, option);
-  });
-  const unique = Array.from(byPath.values());
-  // 当前选中的报告若不在清单里（例如历史路径解析不出时间），也要保留，避免出现空白
-  if (state.askPath && !unique.some((option) => option.path === state.askPath)) {
-    const { ts, title } = parseReportPath(state.askPath);
-    unique.push({ key: 'selected', path: state.askPath, ts, title: title || '所选报告', codes: [] });
-  }
-  return unique.sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
-}
+/** 追问线程按股票代码分组存（localStorage）：换报告不影响，同一只股票的对话始终连续 */
+export const stockThreadKey = (code: string): string => 'stock:' + String(code || '').toUpperCase();
 
 /** 预设提问：普通态显示为可点气泡；编辑态可逐条改名/删除/新增/恢复默认（localStorage 持久化） */
 function suggestionsHtml(state: AppState): string {
@@ -103,10 +26,12 @@ function suggestionsHtml(state: AppState): string {
   return `<div class="ask-suggestions">${chips}<button class="ask-chip ask-chip-edit" data-action="ask-suggest-edit" title="编辑这些预设提问">${icon('edit', 13)}编辑</button></div>`;
 }
 
-function threadHtml(state: AppState, path: string, stockName: string): string {
-  const thread = state.askThreads[path] || [];
+function threadHtml(state: AppState, code: string, name: string): string {
+  const key = stockThreadKey(code);
+  const thread = state.askThreads[key] || [];
+  const updated = state.askNote && state.askNote.updated_at ? state.askNote.updated_at : '';
   if (!thread.length) {
-    return `<div class="ask-hint">${icon('chat', 20)}<div><strong>${stockName ? `就 ${escapeHtml(stockName)} 的分析提问` : '就这份报告提问'}</strong><p>回答只依据归档报告内容；报告没写的会明确说「报告未涉及」。支持连续追问，历史轮次会一起带上；下次打开页面会话仍在。</p></div></div>
+    return `<div class="ask-hint">${icon('chat', 20)}<div><strong>就 ${escapeHtml(name || code)} 的知识库提问</strong><p>回答只依据这份知识库${updated ? `（更新于 ${escapeHtml(updated)}）` : ''}；知识库没写的会明确说「未涉及」，涉及更晚的行情会提示你跑任务更新。支持连续追问，历史轮次会一起带上。</p></div></div>
       ${suggestionsHtml(state)}`;
   }
   return thread.map((turn) => `<div class="ask-turn ask-${turn.role}">
@@ -115,57 +40,43 @@ function threadHtml(state: AppState, path: string, stockName: string): string {
     </div>`).join('') + suggestionsHtml(state);
 }
 
-/** 分析段的类型标签：分段原文 / 整份报告 / 历史节选 */
 function kindLabel(kind: string): string {
   if (kind === 'mention') return '节选';
   if (kind === 'report') return '整份';
   return '分段';
 }
 
-/** 时间戳只显示 MM-DD HH:MM，列表里更紧凑 */
 function entryDate(ts: string): string {
   const m = String(ts || '').match(/^\d{4}-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
   return m ? `${m[1]}-${m[2]} ${m[3]}:${m[4]}` : (String(ts || '') || '—');
 }
 
-/** 摘录预览：去掉标记与 Markdown 符号，只留一句话 */
-function entrySnippet(entry: StockNoteEntry): string {
-  const plain = String(entry.text || '')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/[#>*`|~]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return truncate(plain.replace(/^\d{4}-\d{2}-\d{2}\s*/, ''), 52);
+/** 距今天数：知识库太久没整理时提示去跑任务 */
+function daysSince(stamp: string): number {
+  const m = String(stamp || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!m) return 0;
+  const then = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])).getTime();
+  if (!Number.isFinite(then)) return 0;
+  return Math.floor((Date.now() - then) / 86400000);
 }
 
-function entryRow(state: AppState, stock: StockNoteMeta, entry: StockNoteEntry): string {
-  const selected = normPath(state.askPath) === normPath(entry.report);
-  return `<button class="ask-entry${selected ? ' selected' : ''}" data-action="ask-select" data-path="${escapeHtml(entry.report)}" data-code="${escapeHtml(stock.code)}">
-    <span class="ask-entry-line"><b>${escapeHtml(entryDate(entry.ts))}</b><em>${escapeHtml(entry.mode || '投研')}</em><i>${escapeHtml(kindLabel(entry.kind))}</i></span>
-    <span class="ask-entry-title">${escapeHtml(truncate(entry.heading || entry.report_title || '分析', 42))}</span>
-    ${entrySnippet(entry) ? `<span class="ask-entry-snippet">${escapeHtml(entrySnippet(entry))}</span>` : ''}
-  </button>`;
+function stockBadge(stock: StockNoteMeta): string {
+  if (stock.kb_status === 'running' || stock.kb_status === 'queued') {
+    return '<span class="ask-stock-flag running" title="知识库整理中">整理中</span>';
+  }
+  if ((stock.new_entries || 0) > 0) {
+    return `<span class="ask-stock-flag new" title="${stock.new_entries} 段新分析待并入">${stock.new_entries}</span>`;
+  }
+  return `<span class="ask-stock-count" title="${stock.count} 段分析">${stock.count}</span>`;
 }
 
 function stockRow(state: AppState, stock: StockNoteMeta): string {
-  const open = Boolean(state.askStockOpen[stock.code]);
-  const detail = state.askStockData[stock.code];
-  const loading = Boolean(state.askStockLoading[stock.code]);
-  const entries = open
-    ? `<div class="ask-stock-entries">${loading
-      ? '<p class="ask-entry-hint">正在读取该股分析…</p>'
-      : (detail && detail.entries.length
-        ? detail.entries.map((entry) => entryRow(state, stock, entry)).join('')
-        : '<p class="ask-entry-hint">该股暂无可展开的分析段。</p>')}</div>`
-    : '';
-  return `<div class="ask-stock${open ? ' open' : ''}">
-    <button class="ask-stock-row" data-action="ask-stock-toggle" data-code="${escapeHtml(stock.code)}" aria-expanded="${open ? 'true' : 'false'}">
-      <span class="ask-stock-name">${escapeHtml(stock.name || stock.code)}</span>
-      <span class="ask-stock-code">${escapeHtml(stock.code)}</span>
-      <span class="ask-stock-count" title="${stock.count} 段分析">${stock.count}</span>
-    </button>
-    ${entries}
-  </div>`;
+  const selected = String(state.askStock || '').toUpperCase() === stock.code;
+  return `<button class="ask-stock-row${selected ? ' selected' : ''}" data-action="ask-stock-select" data-code="${escapeHtml(stock.code)}" title="${escapeHtml(stock.name || stock.code)} · ${stock.count} 段分析${stock.curated_at ? ' · 更新于 ' + escapeHtml(stock.curated_at) : ' · 尚未整理'}">
+    <span class="ask-stock-name">${escapeHtml(stock.name || stock.code)}</span>
+    <span class="ask-stock-code">${escapeHtml(stock.code)}</span>
+    ${stockBadge(stock)}
+  </button>`;
 }
 
 function groupHead(letter: string, count: number, collapsed: boolean): string {
@@ -176,23 +87,7 @@ function groupHead(letter: string, count: number, collapsed: boolean): string {
   </button>`;
 }
 
-/** 「综合」分组：没有任何个股归属的报告（大盘/组合/消息类），仍按报告追问 */
-function orphansHtml(state: AppState, options: AskReportOption[]): string {
-  const wanted = new Set(state.askStocksOrphans.map(normPath));
-  const list = options.filter((option) => wanted.has(normPath(option.path)));
-  if (!list.length) return '';
-  const collapsed = Boolean(state.askLetterCollapsed['综合']);
-  const rows = list.map((option) => `<button class="ask-report-item ${normPath(state.askPath) === normPath(option.path) ? 'selected' : ''}" data-action="ask-select" data-path="${escapeHtml(option.path)}">
-      <strong>${escapeHtml(truncate(option.title, 30))}</strong>
-      <small>${escapeHtml(option.ts || '—')}</small>
-    </button>`).join('');
-  return `<section class="ask-group" data-letter="综合" id="ask-group-misc">
-    ${groupHead('综合', list.length, collapsed)}
-    ${collapsed ? '' : `<div class="ask-group-body">${rows}</div>`}
-  </section>`;
-}
-
-function stockListHtml(state: AppState, options: AskReportOption[]): string {
+function stockListHtml(state: AppState): string {
   const query = state.askQuery.trim().toLowerCase();
   const match = (stock: StockNoteMeta): boolean => (
     !query || `${stock.name} ${stock.code}`.toLowerCase().includes(query)
@@ -200,17 +95,14 @@ function stockListHtml(state: AppState, options: AskReportOption[]): string {
   const groups = groupStocks(state.askStocks)
     .map((group) => ({ letter: group.letter, items: group.items.filter(match) }))
     .filter((group) => group.items.length);
-  const orphans = orphansHtml(state, options);
   const total = state.askStocks.length;
   const segments = state.askStocks.reduce((sum, stock) => sum + stock.count, 0);
 
   if (!groups.length) {
-    return `<div class="ask-report-list"><p class="muted compact">${query ? '没有匹配的标的' : '还没有按个股归集的分析，跑一次任务后再刷新。'}</p></div>
-      ${orphans}`;
+    return `<div class="ask-report-list"><p class="muted compact">${query ? '没有匹配的标的' : '还没有按个股归集的分析，跑一次任务后再刷新。'}</p></div>`;
   }
 
-  const rail = groups.map((group) => `<button class="ask-letter${state.askLetterCollapsed[group.letter] ? ' collapsed' : ''}" data-action="ask-letter-jump" data-letter="${escapeHtml(group.letter)}" title="${group.letter} 组 ${group.items.length} 只">${escapeHtml(group.letter)}</button>`).join('')
-    + (orphans ? `<button class="ask-letter ask-letter-misc" data-action="ask-letter-jump" data-letter="综合" title="综合（无个股归属的报告）">综</button>` : '');
+  const rail = groups.map((group) => `<button class="ask-letter${state.askLetterCollapsed[group.letter] ? ' collapsed' : ''}" data-action="ask-letter-jump" data-letter="${escapeHtml(group.letter)}" title="${group.letter} 组 ${group.items.length} 只">${escapeHtml(group.letter)}</button>`).join('');
 
   const body = groups.map((group) => {
     const collapsed = Boolean(state.askLetterCollapsed[group.letter]);
@@ -218,7 +110,7 @@ function stockListHtml(state: AppState, options: AskReportOption[]): string {
       ${groupHead(group.letter, group.items.length, collapsed)}
       ${collapsed ? '' : `<div class="ask-group-body">${group.items.map((stock) => stockRow(state, stock)).join('')}</div>`}
     </section>`;
-  }).join('') + orphans;
+  }).join('');
 
   return `<div class="ask-list-body">
     <div class="ask-report-list">${body}</div>
@@ -227,69 +119,104 @@ function stockListHtml(state: AppState, options: AskReportOption[]): string {
   <p class="ask-list-foot">${total} 只标的 · ${segments} 段分析${state.askStocksBuiltAt ? ` · 归集于 ${escapeHtml(state.askStocksBuiltAt)}` : ''} · <button class="text-button inline" data-action="ask-stocks-rebuild">重建索引</button></p>`;
 }
 
-/** 个股知识库不可用（后端未重启/接口 404）时的兜底：按时间的报告列表 */
-function fallbackListHtml(state: AppState, options: AskReportOption[]): string {
-  const query = state.askQuery.trim().toLowerCase();
-  const visible = query
-    ? options.filter((option) => {
-      const names = (option.codes || []).map((code) => codeLabel(state, code)).join(' ');
-      return `${option.title} ${option.path} ${(option.codes || []).join(' ')} ${names}`.toLowerCase().includes(query);
-    })
-    : options;
-  if (!visible.length) return `<p class="muted compact">${options.length ? '没有匹配的报告' : '还没有可追问的报告，先跑一次分析任务。'}</p>`;
-  return visible.slice(0, 60).map((option) => {
-    const labels = (option.codes || []).slice(0, 2).map((code) => codeLabel(state, code));
-    const more = (option.codes || []).length > 2 ? ` 等 ${option.codes.length} 只` : '';
-    return `<button class="ask-report-item ${state.askPath === option.path ? 'selected' : ''}" data-action="ask-select" data-path="${escapeHtml(option.path)}">
-      <strong>${escapeHtml(truncate(option.title, 30))}</strong>
-      <small>${escapeHtml(option.ts || '—')}${labels.length ? ' · ' + escapeHtml(labels.join(' / ')) + escapeHtml(more) : ''}</small>
-    </button>`;
-  }).join('');
+function kbStateBanner(note: StockNoteDetail): string {
+  const code = note.code;
+  if (note.status === 'running') {
+    return `<div class="ask-kb-state running"><span class="spinner"></span><span>正在整理知识库…（首次整理约 10-30 秒，完成后自动刷新）</span></div>`;
+  }
+  if (note.status === 'queued') {
+    return `<div class="ask-kb-state running">${icon('clock', 14)}<span>已排队整理，稍后自动刷新</span></div>`;
+  }
+  if (note.status === 'error') {
+    return `<div class="ask-kb-state error">${icon('alert', 14)}<span>整理失败：${escapeHtml(note.error || '未知错误')}（当前展示上一次结果）</span><button class="text-button" data-action="ask-curate" data-code="${escapeHtml(code)}">重试</button></div>`;
+  }
+  if ((note.new_entries || 0) > 0) {
+    return `<div class="ask-kb-state info">${icon('clock', 14)}<span>有 ${note.new_entries} 段新分析待并入知识库。</span><button class="text-button" data-action="ask-curate" data-code="${escapeHtml(code)}">立即整理</button></div>`;
+  }
+  if (note.updated_at && daysSince(note.updated_at) >= 3) {
+    return `<div class="ask-kb-state info">${icon('clock', 14)}<span>知识库更新于 ${escapeHtml(note.updated_at)}，行情可能已变化。</span><button class="text-button" data-action="ask-run" data-code="${escapeHtml(code)}">跑一次个股快检</button></div>`;
+  }
+  return '';
 }
 
-export function renderAsk(state: AppState): string {
-  const options = reportOptions(state);
-  const selected = options.find((option) => option.path === state.askPath) || options[0];
-  const stocksReady = state.askStocks.length > 0;
-  const listBody = stocksReady
-    ? stockListHtml(state, options)
-    : `<div class="ask-list-body"><div class="ask-report-list">${fallbackListHtml(state, options)}</div></div>
-      ${state.askStocksError ? `<p class="ask-list-foot">个股知识库暂不可用：${escapeHtml(state.askStocksError)}</p>` : ''}`;
-  const list = `<aside class="panel ask-list">
-    <div class="search-field">${icon('search', 16)}<input data-field="ask-query" value="${escapeHtml(state.askQuery)}" placeholder="搜索股票名称或代码" aria-label="搜索标的" /></div>
-    ${listBody}
-  </aside>`;
+function rawEntryRow(entry: StockNoteEntry): string {
+  return `<div class="ask-raw-item">
+    <div class="ask-raw-line"><b>${escapeHtml(entryDate(entry.ts))}</b><em>${escapeHtml(entry.mode || '投研')}</em><i>${escapeHtml(kindLabel(entry.kind))}</i></div>
+    <div class="ask-raw-text">${escapeHtml(entry.snippet || '（无摘录）')}</div>
+  </div>`;
+}
 
-  if (!selected) {
-    return pageHeader('报告追问', '按个股归档的投研分析知识库：左侧选股票，右侧就对应报告追问。')
-      + `<div class="ask-layout">${list}<section class="panel ask-main">${emptyState('还没有可追问的报告', '先在一键任务里跑一次分析，完成后即可针对报告追问。', 'chat')}</section></div>`;
+function mainPane(state: AppState): string {
+  const code = state.askStock;
+  const stock = state.askStocks.find((item) => item.code === String(code).toUpperCase());
+  const note = state.askNote;
+  if (!code) {
+    return `<section class="panel ask-main">${emptyState('选择一只股票', '左侧按名称或首字母索引找到标的，右侧会显示它的知识库与追问。', 'chat')}</section>`;
+  }
+  if (state.askNoteLoading && !note) {
+    return `<section class="panel ask-main"><div class="ask-kb-loading"><span class="spinner"></span><span>正在读取 ${escapeHtml(stock?.name || code)} 的知识库…</span></div></section>`;
+  }
+  if (state.askNoteError && !note) {
+    return `<section class="panel ask-main">${emptyState('知识库读取失败', state.askNoteError, 'alert')}</section>`;
+  }
+  if (!note) {
+    return `<section class="panel ask-main">${emptyState('暂无内容', '该标的还没有可展示的知识库。', 'chat')}</section>`;
   }
 
-  const thread = state.askThreads[selected.path] || [];
-  const code = state.askCode || (selected.codes || [])[0] || '';
-  const stock = code ? state.askStocks.find((item) => item.code === code) : undefined;
-  const labels = (selected.codes || []).slice(0, 4).map((item) => codeLabel(state, item));
+  const name = note.name || (stock && stock.name) || code;
   const meta = [
-    escapeHtml(selected.ts || ''),
-    labels.length ? escapeHtml(labels.join(' / ')) : '',
-    stock ? `该股共 ${stock.count} 段分析` : '',
-    thread.length ? `${thread.length} 轮对话` : '尚无提问',
+    note.updated_at ? `知识库更新于 ${escapeHtml(note.updated_at)}` : '尚未整理',
+    `${note.count} 段分析`,
+    `整理模型 ${escapeHtml(shortModel(note.model))}`,
+    daysSince(note.updated_at) >= 3 ? '可能滞后' : '',
   ].filter(Boolean).join(' · ');
+
   const body = `<section class="panel ask-main">
     <header class="ask-head">
-      <div><div class="ask-title">${escapeHtml(selected.title)}</div><div class="ask-meta">${meta}</div></div>
+      <div>
+        <div class="ask-title">${escapeHtml(name)}<span class="ask-code">${escapeHtml(code)}</span></div>
+        <div class="ask-meta">${meta}</div>
+      </div>
       <div class="ask-head-actions">
-        ${stock ? `<button class="button button-secondary" data-action="open-stock-kb" data-code="${escapeHtml(stock.code)}">${icon('book', 15)}个股知识库</button>` : ''}
-        <button class="button button-secondary" data-action="open-ask-report" data-path="${escapeHtml(selected.path)}">${icon('file', 15)}阅读全文</button>
+        <button class="button button-secondary" data-action="ask-curate" data-code="${escapeHtml(code)}">${icon('refresh', 15)}重新整理</button>
+        <button class="button button-secondary" data-action="ask-run" data-code="${escapeHtml(code)}">${icon('sparkles', 15)}更新数据</button>
       </div>
     </header>
-    <div class="ask-thread" id="ask-thread">${threadHtml(state, selected.path, stock ? (stock.name || stock.code) : '')}</div>
+    ${kbStateBanner(note)}
+    <div class="ask-kb-wrap">
+      <button class="ask-kb-expand" data-action="ask-kb-expand" title="放大查看知识库" aria-label="放大查看知识库">${icon('external', 15)}</button>
+      <div class="ask-kb markdown-body" id="ask-kb">${renderMarkdown(note.markdown)}</div>
+    </div>
+    ${note.entries.length ? `<details class="ask-raw"><summary>原始记录（${note.count} 段分析，点开看每份来源）</summary><div class="ask-raw-list">${note.entries.map(rawEntryRow).join('')}</div></details>` : ''}
+    <div class="ask-thread" id="ask-thread">${threadHtml(state, code, name)}</div>
     ${state.askError ? `<div class="inline-warning">${icon('alert', 15)}${escapeHtml(state.askError)}</div>` : ''}
     <div class="ask-compose">
-      <textarea data-field="ask-input" rows="2" placeholder="就这份报告提问，例如：这个结论在什么情况下会失效？（Ctrl/⌘ + Enter 发送）">${escapeHtml(state.askDraft || '')}</textarea>
+      <textarea data-field="ask-input" rows="2" placeholder="就这只股票的知识库提问，例如：这个结论在什么情况下会失效？（Ctrl/⌘ + Enter 发送）">${escapeHtml(state.askDraft || '')}</textarea>
       <button class="button button-primary" data-action="ask-send" ${state.askLoading ? 'disabled' : ''}>${state.askLoading ? '<span class="spinner"></span>思考中' : `${icon('play', 15)}发送`}</button>
     </div>
   </section>`;
+  return body;
+}
 
-  return pageHeader('报告追问', '按个股归档：左侧按股票名/首字母索引，右侧就该股的报告追问；回答只依据报告内容。') + `<div class="ask-layout">${list}${body}</div>`;
+function shortModel(model: string): string {
+  const raw = String(model || '').trim();
+  if (!raw || raw === 'inherit') return '继承宿主';
+  const at = raw.lastIndexOf('@');
+  const base = at > 0 ? raw.slice(0, at) : raw;
+  const effort = at > 0 ? raw.slice(at + 1) : '';
+  const parts = base.split('/');
+  const tail = parts[parts.length - 1] || base;
+  return effort ? `${tail}@${effort}` : tail;
+}
+
+export function renderAsk(state: AppState): string {
+  const list = `<aside class="panel ask-list">
+    <div class="search-field">${icon('search', 16)}<input data-field="ask-query" value="${escapeHtml(state.askQuery)}" placeholder="搜索股票名称或代码" aria-label="搜索标的" /></div>
+    ${state.askStocks.length
+      ? stockListHtml(state)
+      : `<div class="ask-list-body"><div class="ask-report-list"><p class="muted compact">${state.askStocksLoading ? '正在读取知识库清单…' : '还没有可展示的个股知识库，先跑一次任务。'}</p></div></div>
+        ${state.askStocksError ? `<p class="ask-list-foot">知识库不可用：${escapeHtml(state.askStocksError)}</p>` : ''}`}
+  </aside>`;
+  const head = pageHeader('个股知识库', '按股票归档：左侧按名称/首字母索引，右侧是这只股票的整理后知识库，可直接就知识库追问。');
+  return head + `<div class="ask-layout">${list}${mainPane(state)}</div>`;
 }

@@ -164,8 +164,7 @@ export interface AppState {
   runQuery: string;
   runStatus: 'all' | 'success' | 'failed';
   runMode: string;
-  /** 报告追问：当前选中的报告路径、报告列表搜索词、每份报告的对话线程 */
-  askPath: string;
+  /** 报告追问：报告列表搜索词、每只股票的对话线程 */
   askQuery: string;
   askThreads: Record<string, AskTurn[]>;
   /** 当前输入框草稿（重渲染不丢） */
@@ -176,21 +175,18 @@ export interface AppState {
   askSuggestions: string[];
   /** 预设编辑面板是否展开 */
   askSuggestionsEditing: boolean;
-  // ===== 个股分析知识库：按个股归集的分析段（报告追问左侧按名称/首字母索引）=====
-  /** 有归集内容的个股清单（含段数、最近时间） */
+  // ===== 个股知识库：按股票归集 + 二次整理，追问直接对着知识库 =====
+  /** 有归集内容的个股清单（含段数、整理状态、未并入段数） */
   askStocks: StockNoteMeta[];
-  /** 没有任何个股归属的报告（「综合」分组，按报告追问） */
-  askStocksOrphans: string[];
   askStocksBuiltAt: string;
   askStocksLoading: boolean;
   askStocksError: string;
-  /** 当前选中段所属个股（决定头部「个股知识库」入口） */
-  askCode: string;
-  /** 展开的个股 → 是否展开 */
-  askStockOpen: Record<string, boolean>;
-  /** 已加载的个股分析段（按 code 缓存） */
-  askStockData: Record<string, StockNoteDetail>;
-  askStockLoading: Record<string, boolean>;
+  /** 当前选中的个股代码 */
+  askStock: string;
+  /** 当前个股的知识库详情（整理稿 + 原始记录摘要） */
+  askNote: StockNoteDetail | null;
+  askNoteLoading: boolean;
+  askNoteError: string;
   /** 折叠的首字母分组（默认全展开） */
   askLetterCollapsed: Record<string, boolean>;
   /** 运行记录页：隐藏「报告归档」回填条目，只看真实运行日志 */
@@ -208,6 +204,12 @@ export interface AppState {
   modelTemplatePresets: Record<string, string>;
   /** 宿主模型选择器草稿：'inherit' = 跟随会话宿主；其余为 provider/model（保存前） */
   modelHostDraft: string;
+  /** 知识库整理模型草稿（保存前） */
+  modelStockKbDraft: string;
+  /** 知识库「后台自动整理」草稿（null = 未改过） */
+  modelStockKbAutoDraft: boolean | null;
+  /** 知识库整理并发数草稿（null = 未改过） */
+  modelStockKbConcurrencyDraft: number | null;
   holdingsDraft: HoldingsDraftResponse | null;
   holdingsDraftLoading: boolean;
   holdingsImporting: string;
@@ -249,13 +251,13 @@ export const state: AppState = {
   indexError: '', holdingsError: '', templatesError: '', jobsError: '',
   selectedCode: null, archiveQuery: '', archiveRecords: [], archiveLoading: false,
   archiveError: '', archiveNotice: '', runQuery: '', runStatus: 'all', runMode: 'all', runHideBackfill: false,
-  askPath: '', askQuery: '', askThreads: readAskThreads(), askDraft: '', askLoading: false, askError: '',
+  askQuery: '', askThreads: readAskThreads(), askDraft: '', askLoading: false, askError: '',
   askSuggestions: readAskSuggestions(), askSuggestionsEditing: false,
-  askStocks: [], askStocksOrphans: [], askStocksBuiltAt: '', askStocksLoading: false, askStocksError: '',
-  askCode: '', askStockOpen: {}, askStockData: {}, askStockLoading: {}, askLetterCollapsed: {},
+  askStocks: [], askStocksBuiltAt: '', askStocksLoading: false, askStocksError: '',
+  askStock: '', askNote: null, askNoteLoading: false, askNoteError: '', askLetterCollapsed: {},
   taskDrafts: {}, templateOrder: readTemplateOrder(), startingTemplates: {}, sidebarOpen: false,
   modelSettings: null, modelSettingsLoading: false, modelSettingsSaving: false,
-  modelSettingsError: '', modelRoleRoutes: {}, modelTemplatePresets: {}, modelHostDraft: '',
+  modelSettingsError: '', modelRoleRoutes: {}, modelTemplatePresets: {}, modelHostDraft: '', modelStockKbDraft: '', modelStockKbAutoDraft: null, modelStockKbConcurrencyDraft: null,
   holdingsDraft: null, holdingsDraftLoading: false, holdingsImporting: '',
   holdingsConfirming: false, holdingsQuotesLoading: false, refreshing: false, lastRefreshAt: '', holdingsQuotesInfo: '', holdingsActionError: '',
   manualPosition: emptyManualPosition(),

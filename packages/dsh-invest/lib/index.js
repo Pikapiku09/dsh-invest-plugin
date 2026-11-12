@@ -2,10 +2,12 @@
 // 常规 Cordis 插件（profile bundle 挂载），所有会话可见
 import z from "@deepseek-ai/schemastery"
 import { defineTool } from "@deepseek-ai/dsh-tools"
+import { promises as fsp } from "node:fs"
 import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY } from "./prompts.js"
 import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv, z2, localYmd } from "./pure.js"
 import { DEFAULT_PRESET, PRESETS, ROLE_CODES, mergeRoutes, formatRoute, formatRouteChain, parseRoute, parseRouteList, parseRoutesJson } from "./routes.js"
 import { buildStockNotes, normalizeCode, stockFileName } from "./stock-notes.js"
+import { buildCuratePrompt, sanitizeCurated, validateCurated, rawTimelineMarkdown } from "./stock-curator.js"
 
 // 插件配置：路由预置档 + 按角色覆盖（写在 profile 的 cordis.patch.yml 的 - id: invest → config）
 const Config = z.object({
@@ -885,6 +887,7 @@ function apply(ctx, config) {
       label, prompt: promptContent, parent, signal,
       toolFilter: { deny: ["invest_run", "subagent_fork", "send_message", "interrupt_agent", "list_agents"] },
     }
+    if (options.agentOptions) spec.agentOptions = options.agentOptions
     let run
     if (native) run = await native.start("spawn", spec)
     else if (activation) {
@@ -1044,37 +1047,300 @@ function apply(ctx, config) {
     })().finally(() => { stockNotesBuilding = null })
     return stockNotesBuilding
   }
-  const stockNotesListPayload = (data) => {
+  // ===== 个股知识库「二次整理」：把散落节选合并成一篇可读文档（LLM 完成）=====
+  // 状态落盘在 store/stocks/_curation.json；整理稿写 <代码>.md，原始记录仍在 <代码>.raw.md（buildStockNotes 维护）
+  const STOCK_KB_STATE = STOCK_NOTES_DIR + "/_curation.json"
+  const STOCK_KB_DEFAULT_MODEL = process.env.DSH_INVEST_KB_MODEL || "opencode-go/deepseek-v4.1-flash@low"
+  const STOCK_KB_TIMEOUT_MS = Number(process.env.DSH_INVEST_KB_TIMEOUT_MS) > 0 ? Number(process.env.DSH_INVEST_KB_TIMEOUT_MS) : 180000
+  const CURATION_VERSION = 1
+  let curationCache = null
+  const nowStamp = () => {
+    const d = new Date()
+    const p = (n) => String(n).padStart(2, "0")
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes())
+  }
+  const readCurationDoc = async () => {
+    if (curationCache) return curationCache
+    try {
+      const raw = JSON.parse(await fsp.readFile(STOCK_KB_STATE, "utf8"))
+      if (raw && raw.stocks && typeof raw.stocks === "object") { curationCache = raw; return curationCache }
+    } catch (e) { /* 首次整理 */ }
+    curationCache = { version: CURATION_VERSION, stocks: {} }
+    return curationCache
+  }
+  const saveCurationDoc = async () => {
+    const doc = curationCache
+    if (!doc) return
+    await withLock("stock-kb-state", async () => {
+      try {
+        await fsp.mkdir(STOCK_NOTES_DIR, { recursive: true })
+        await fsp.writeFile(STOCK_KB_STATE, JSON.stringify(doc), "utf8")
+      } catch (e) { /* 状态落盘失败不阻断整理 */ }
+    })
+  }
+  const curatedFile = (code) => (STOCK_NOTES_DIR + "/" + stockFileName(code)).replace(/\\/g, "/")
+  const readCurated = async (code) => { try { return await fsp.readFile(curatedFile(code), "utf8") } catch (e) { return "" } }
+  const kbModelLabel = async () => {
+    const settings = await readJsonFile(SETTINGS_FILE, {})
+    const fromFile = settings && typeof settings.stockKbModel === "string" ? settings.stockKbModel.trim() : ""
+    return fromFile || STOCK_KB_DEFAULT_MODEL
+  }
+  const pendingEntries = (doc, code, list) => {
+    const item = (doc && doc.stocks && doc.stocks[code]) || {}
+    const covered = new Set(Array.isArray(item.ids) ? item.ids : [])
+    return (list || []).filter((entry) => !covered.has(entry.id))
+  }
+  const plainSnippet = (text, limit) => String(text || "")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/[#>*`|~]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit)
+
+  // 单只整理：读既有整理稿 + 未收录的新材料 → LLM 重写整篇 → 结构校验后落盘
+  const curateStock = async (code, options = {}) => {
+    const data = await ensureStockNotes(false)
+    const list = (data.stocks && data.stocks.get(code)) || []
+    if (!list.length) return { skipped: "empty" }
+    const doc = await readCurationDoc()
+    const prev = doc.stocks[code] || {}
+    if (prev.status === "running" && Date.now() - (prev.attemptAt || 0) < 10 * 60 * 1000) return { skipped: "running" }
+    const fresh = options.full ? list.slice() : pendingEntries(doc, code, list)
+    if (!fresh.length && !options.full && !options.rewrite) return { skipped: "no-new" }
+    // 一次喂给模型的材料有上限：只把「真正喂进去的」记为已收录，剩余的下次继续（避免旧段被静默丢掉）
+    const feed = fresh.slice(0, options.full ? 20 : 12)
+    const oldKb = options.full ? "" : (prev.at ? await readCurated(code) : "")
+    const name = (data.names && data.names[code]) || (list[0] && list[0].name) || ""
+    const modelLabel = await kbModelLabel()
+    const route = parseRoute(modelLabel)
+    const started = Date.now()
+    doc.stocks[code] = Object.assign({}, prev, { status: "running", attemptAt: started, model: modelLabel, error: "" })
+    await saveCurationDoc()
+    try {
+      const prompt = buildCuratePrompt({
+        code, name, oldKb, entries: feed,
+        reports: new Set(list.map((entry) => entry.report)).size,
+        now: nowStamp().slice(0, 10),
+      })
+      let answer = ""
+      try {
+        answer = await runPromptSubagent(prompt, { label: "知识库整理 " + code, timeoutMs: STOCK_KB_TIMEOUT_MS, agentOptions: route || void 0 })
+      } catch (e) {
+        if (!route) throw e
+        // 配置的整理模型不可用（未注册/无权限）时回退宿主模型，整理不中断
+        answer = await runPromptSubagent(prompt, { label: "知识库整理 " + code + "（回退宿主）", timeoutMs: STOCK_KB_TIMEOUT_MS })
+      }
+      const purified = sanitizeCurated(answer, { code, name })
+      const invalid = validateCurated(purified)
+      if (invalid) throw new Error(invalid)
+      await fsp.mkdir(STOCK_NOTES_DIR, { recursive: true })
+      await fsp.writeFile(curatedFile(code), purified, "utf8")
+      doc.stocks[code] = {
+        status: "done", at: nowStamp(), model: modelLabel,
+        ids: Array.from(new Set([...(prev.ids || []), ...feed.map((entry) => entry.id)])).slice(-500),
+        chars: purified.length, error: "", reports: new Set(list.map((entry) => entry.report)).size, ms: Date.now() - started,
+      }
+      await saveCurationDoc()
+      return { ok: true, chars: purified.length, model: modelLabel }
+    } catch (e) {
+      doc.stocks[code] = Object.assign({}, prev, {
+        status: "error", error: String((e && e.message) || e).slice(0, 300), model: modelLabel, attemptAt: Date.now(),
+        ids: prev.ids || [], at: prev.at || "",
+      })
+      await saveCurationDoc()
+      return { ok: false, error: String((e && e.message) || e).slice(0, 300) }
+    }
+  }
+  // 串行队列：同时只整理一只股票，避免一次任务把模型额度打满
+  const curateQueue = []
+  let curateRunning = 0
+  let curateFailStreak = 0
+  let curateCooldownUntil = 0
+  // 并发整理：每只股票一个子代理，默认 3 个同时跑；遇到连续失败自动冷却 60 秒再继续
+  const kbConcurrency = async () => {
+    const settings = await readJsonFile(SETTINGS_FILE, {})
+    const n = Number(settings.stockKbConcurrency)
+    if (Number.isFinite(n) && n >= 1) return Math.min(6, Math.floor(n))
+    return 3
+  }
+  const drainCuration = async () => {
+    const limit = await kbConcurrency()
+    if (Date.now() < curateCooldownUntil) {
+      const wait = Math.max(500, curateCooldownUntil - Date.now())
+      const timer = setTimeout(() => { void drainCuration() }, wait)
+      if (typeof timer.unref === "function") timer.unref()
+      return
+    }
+    while (curateRunning < limit && curateQueue.length) {
+      const job = curateQueue.shift()
+      curateRunning += 1
+      void (async () => {
+        try {
+          const result = await curateStock(job.code, job.options)
+          if (result && result.ok === false) curateFailStreak += 1
+          else curateFailStreak = 0
+        } catch (e) {
+          curateFailStreak += 1
+        } finally {
+          curateRunning -= 1
+          // 连续失败（多半是限流/额度）先停 60 秒，别把队列一路撞穿
+          if (curateFailStreak >= 3) {
+            curateFailStreak = 0
+            curateCooldownUntil = Date.now() + 60000
+          }
+          void drainCuration()
+        }
+      })()
+    }
+  }
+  const requestCuration = (code, options) => {
+    if (!code) return
+    if (curateQueue.some((job) => job.code === code)) return
+    const item = { code, options: options || {} }
+    // 任务刚结束的（priority）排在最前，后台补历史时不能把新内容挤到几百条后面
+    if (item.options.priority) curateQueue.unshift(item)
+    else curateQueue.push(item)
+    void drainCuration()
+  }
+  // 后台自动整理：落地页不点开也能把历史知识库慢慢整理完（默认开启，settings.json 的 stockKbAuto=false 可关）
+  const kbAutoEnabled = async () => {
+    const settings = await readJsonFile(SETTINGS_FILE, {})
+    return settings.stockKbAuto !== false
+  }
+  const sweepCuration = async () => {
+    try {
+      if (process.env.DSH_INVEST_AUTO_CURATE === "0") return
+      if (!(await kbAutoEnabled())) return
+      const data = await ensureStockNotes(true)
+      const doc = await readCurationDoc()
+      const need = []
+      for (const [code, list] of (((data && data.stocks) || new Map())).entries()) {
+        if (!pendingEntries(doc, code, list).length) continue
+        if (doc.stocks[code] && doc.stocks[code].status === "running") continue
+        if (curateQueue.some((job) => job.code === code)) continue
+        need.push({ code, newest: (list[0] && list[0].ts) || "" })
+      }
+      need.sort((a, b) => String(b.newest).localeCompare(String(a.newest)))
+      need.forEach((item) => requestCuration(item.code))
+    } catch (e) { /* 后台补整理失败不抛出 */ }
+  }
+  // 任务结束后：把受影响的股票排进整理队列（最多 6 只，优先最近的）
+  const requestCurationForTouched = async (data) => {
+    if (process.env.DSH_INVEST_AUTO_CURATE === "0") return
+    const doc = await readCurationDoc()
+    const touched = []
+    for (const [code, list] of ((data && data.stocks) || new Map()).entries()) {
+      if (!pendingEntries(doc, code, list).length) continue
+      touched.push({ code, newest: (list[0] && list[0].ts) || "" })
+    }
+    touched.sort((a, b) => String(b.newest).localeCompare(String(a.newest)))
+    touched.slice(0, 6).forEach((item) => requestCuration(item.code, { priority: true }))
+  }
+
+  // 追问个股知识库：只依据整理稿（+未并入的最新材料）回答，知识库之后的变化明确说「可能滞后」
+  const askStock = async (code, question, history) => {
+    const q = String(question || "").trim()
+    if (!q) throw new Error("请输入要追问的问题")
+    const normalized = normalizeCode(code)
+    if (!normalized) throw new Error("股票代码不合法")
+    const data = await ensureStockNotes(false)
+    const list = (data.stocks && data.stocks.get(normalized)) || []
+    if (!list.length) throw new Error("该标的还没有知识库内容，先跑一次个股任务")
+    const doc = await readCurationDoc()
+    const item = doc.stocks[normalized] || {}
+    const kb = (item.at ? await readCurated(normalized) : "") || rawTimelineMarkdown({
+      code: normalized, name: (data.names && data.names[normalized]) || "", entries: list, updatedAt: nowStamp().slice(0, 10),
+    })
+    const fresh = pendingEntries(doc, normalized, list).slice(0, 5)
+    const freshBlock = fresh.map((entry) => "### " + String(entry.ts || "").slice(0, 16) + " · " + (entry.mode || "投研") + "\n" + String(entry.text || "").slice(0, 1800)).join("\n\n")
+    const turns = (Array.isArray(history) ? history : []).slice(-6)
+      .map((turn) => (turn && turn.role === "assistant" ? "助手：" : "用户：") + String((turn && turn.text) || "").slice(0, 1200))
+      .join("\n")
+    const updatedAt = item.at || "尚未整理"
+    const prompt = [
+      "你是个股知识库的答疑助手。用户针对一只股票的「知识库」提问，你只依据知识库内容回答。",
+      "规则：① 只用知识库里的事实、数字与结论，严禁编造行情、财报数字或评级；② 知识库没涉及的，明确说「知识库未涉及」并说明可以补哪些数据；" +
+        "③ 知识库更新时间为 " + updatedAt + "，若问题涉及更晚的行情/事件，直接说明「知识库截至 " + updatedAt + "，可能滞后」，并建议用户跑一次个股任务更新，不要猜测；" +
+        "④ 涉及操作建议时区分「知识库结论」与「你的补充推理」，补充部分注明是推理；⑤ 不要调用任何工具，只依据给定知识库；⑥ 用 Markdown 输出：一句话结论先行并加粗，对比信息用表格，默认 700 字以内。",
+      "【标的】" + ((data.names && data.names[normalized]) || normalized) + "（" + normalized + "）",
+      "【知识库更新于】" + updatedAt + (item.model ? " ｜ 整理模型：" + item.model : ""),
+      "【知识库全文】\n" + String(kb).slice(0, 26000),
+      freshBlock ? "【尚未并入知识库的最新材料】\n" + freshBlock : "",
+      turns ? "【对话历史】\n" + turns : "",
+      "【本轮问题】" + q.slice(0, 1500),
+    ].filter(Boolean).join("\n\n")
+    const started = Date.now()
+    const answer = await runPromptSubagent(prompt, { label: "个股知识库追问", timeoutMs: 180000 })
+    return {
+      answer: String(answer || "").trim(), elapsedMs: Date.now() - started,
+      kbUpdatedAt: item.at || "", kbStatus: item.status || "none", newEntries: fresh.length,
+    }
+  }
+
+  const stockNotesListPayload = async (data) => {
     const names = (data && data.names) || {}
-    const stocks = Array.from(((data && data.stocks) || new Map()).entries()).map(([code, list]) => ({
-      code,
-      name: names[code] || (list[0] && list[0].name) || "",
-      count: list.length,
-      last_ts: (list[0] && list[0].ts) || "",
-      modes: Array.from(new Set(list.map((entry) => entry.mode).filter(Boolean))).slice(0, 4),
-      kinds: Array.from(new Set(list.map((entry) => entry.kind).filter(Boolean))).slice(0, 4),
-    }))
+    const doc = await readCurationDoc()
+    const stocks = Array.from(((data && data.stocks) || new Map()).entries()).map(([code, list]) => {
+      const item = doc.stocks[code] || {}
+      return {
+        code,
+        name: names[code] || (list[0] && list[0].name) || "",
+        count: list.length,
+        last_ts: (list[0] && list[0].ts) || "",
+        modes: Array.from(new Set(list.map((entry) => entry.mode).filter(Boolean))).slice(0, 4),
+        kinds: Array.from(new Set(list.map((entry) => entry.kind).filter(Boolean))).slice(0, 4),
+        curated_at: item.at || "",
+        kb_status: item.status || "none",
+        new_entries: pendingEntries(doc, code, list).length,
+      }
+    })
     stocks.sort((a, b) => String(b.last_ts).localeCompare(String(a.last_ts)))
     return {
       built_at: (data.manifest && data.manifest.built_at) || "",
       stats: data.stats,
       stocks,
       orphans: (data.orphans || []).slice(0, 200),
+      pending_curation: stocks.filter((stock) => stock.new_entries > 0).length,
+      curating: curateRunning > 0 || curateQueue.length > 0,
+      curating_count: curateRunning,
     }
   }
-  const stockNotesDetailPayload = (data, code) => {
+  const stockNotesDetailPayload = async (data, code) => {
     const names = (data && data.names) || {}
     const list = (data && data.stocks && data.stocks.get(code)) || []
+    const doc = await readCurationDoc()
+    const item = doc.stocks[code] || {}
+    // 只有真正整理过（有 at）才用 <代码>.md；旧版本留下的「报告拼接稿」一律忽略，等二次整理覆盖
+    const saved = item.at ? await readCurated(code) : ""
+    const markdown = saved || rawTimelineMarkdown({
+      code, name: names[code] || (list[0] && list[0].name) || "", entries: list, updatedAt: nowStamp().slice(0, 10),
+    })
+    const pending = pendingEntries(doc, code, list)
+    const cooling = item.status === "error" && Date.now() - (item.attemptAt || 0) < 5 * 60 * 1000
+    const autoCurate = process.env.DSH_INVEST_AUTO_CURATE !== "0"
+    if (pending.length && item.status !== "running" && !cooling && autoCurate) requestCuration(code)
+    // 状态要反映「真实在跑」：没有整理过、也没排队的，就是 raw（前端据此显示「待并入」而不是假装排队）
+    const queued = curateQueue.some((job) => job.code === code) || item.status === "running"
+    const status = item.status === "error" ? "error"
+      : (queued || (pending.length && autoCurate && !cooling)) ? "queued"
+        : item.at ? "done" : "raw"
     return {
       code,
       name: names[code] || (list[0] && list[0].name) || "",
       count: list.length,
       last_ts: (list[0] && list[0].ts) || "",
-      file: (STOCK_NOTES_DIR + "/" + stockFileName(code)).replace(/\\/g, "/"),
+      updated_at: item.at || "",
+      status: item.status === "running" ? "running" : status,
+      model: item.model || (await kbModelLabel()),
+      error: item.error || "",
+      new_entries: pending.length,
+      chars: markdown.length,
+      file: curatedFile(code),
+      markdown,
       entries: list.slice(0, 60).map((entry) => ({
         id: entry.id, ts: entry.ts, mode: entry.mode, kind: entry.kind, heading: entry.heading,
-        report: entry.report, report_title: entry.report_title, chars: entry.chars,
-        text: String(entry.text || "").slice(0, 3000),
+        report: entry.report, report_name: String(entry.report || "").split("/").pop(), chars: entry.chars,
+        snippet: plainSnippet(entry.text, 260),
       })),
     }
   }
@@ -1171,6 +1437,14 @@ function apply(ctx, config) {
     return {
       hostModel,
       sessionModel,
+      // 个股知识库二次整理模型（settings.json 的 stockKbModel 覆盖；默认便宜的 flash 低思考档）
+      stockKb: {
+        model: await kbModelLabel(),
+        default: STOCK_KB_DEFAULT_MODEL,
+        auto: await kbAutoEnabled(),
+        concurrency: await kbConcurrency(),
+        description: "把个股的历史分析节选整理成可读知识库时使用的模型",
+      },
       roles: ROLE_CODES.map((code) => ({ code, name: ROLE_MAP[code].name, route: formatRouteChain(effective[code]) })),
       templates: await Promise.all(TASK_TEMPLATES.map(async (t) => ({ id: t.id, name: t.name, preset: await resolveTemplatePreset(t.id, t.preset) }))),
       presets: Object.keys(PRESETS).map((id) => ({ id, name: presetNames[id] || id, description: descriptions[id] || id })),
@@ -1517,9 +1791,12 @@ function apply(ctx, config) {
         try { await taskHandle.dispose() } catch (e) { /* ignore */ }
       }
       try { job.reindexStats = await runReindex() } catch (e) { job.reindexError = String(e).slice(0, 200) }
-      // 报告落盘后刷新个股知识库（增量；失败不影响任务结果）
+      // 报告落盘后刷新个股知识库（增量），并把有新材料的股票排进「二次整理」队列
       if (process.env.DSH_INVEST_SKIP_STOCK_NOTES !== "1") {
-        try { await ensureStockNotes(true) } catch (e) { /* ignore */ }
+        try {
+          const notes = await ensureStockNotes(true)
+          await requestCurationForTouched(notes)
+        } catch (e) { /* ignore */ }
       }
     }
   }
@@ -1749,12 +2026,12 @@ function apply(ctx, config) {
         if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
         try {
           const data = await ensureStockNotes(false)
-          writeJson(res, 200, stockNotesListPayload(data))
+          writeJson(res, 200, await stockNotesListPayload(data))
         } catch (e) { writeJson(res, 500, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
       },
     },
     {
-      // 单只个股的全部分析段（含原文摘录）
+      // 单只个股的知识库：整理稿 Markdown + 整理状态 + 原始记录摘要
       kind: "exact",
       path: "/dsh-invest/api/stock-note",
       handler: async (req, res) => {
@@ -1765,10 +2042,40 @@ function apply(ctx, config) {
         if (!code) { writeJson(res, 400, { error: "缺少或非法的股票代码" }); return }
         try {
           const data = await ensureStockNotes(false)
-          const payload = stockNotesDetailPayload(data, code)
+          const payload = await stockNotesDetailPayload(data, code)
           if (!payload.count) { writeJson(res, 404, { error: "该标的还没有归集的个股分析", code }); return }
           writeJson(res, 200, payload)
         } catch (e) { writeJson(res, 500, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 手动触发知识库二次整理（全量重写，忽略增量判断）
+      kind: "exact",
+      path: "/dsh-invest/api/stock-note/curate",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const code = normalizeCode(String(body.code || ""))
+          if (!code) { writeJson(res, 400, { error: "缺少或非法的股票代码" }); return }
+          requestCuration(code, { rewrite: true, full: body.full === true })
+          writeJson(res, 202, { ok: true, queued: true, code })
+        } catch (e) { writeJson(res, 400, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 个股知识库追问：只依据整理稿回答，滞后内容明确提示更新
+      kind: "exact",
+      path: "/dsh-invest/api/stock-ask",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const result = await askStock(String(body.code || ""), String(body.question || ""), body.history)
+          writeJson(res, 200, Object.assign({ ok: true }, result))
+        } catch (e) { writeJson(res, 400, { error: String(e && e.message ? e.message : e).slice(0, 400) }) }
       },
     },
     {
@@ -1783,7 +2090,7 @@ function apply(ctx, config) {
           // 默认增量重建（未变化的报告复用解析结果）；?full=1 时全量重解析（解析规则变更后用）
           const full = queryParam(url, "full") === "1"
           const data = await ensureStockNotes(true, full)
-          writeJson(res, 200, Object.assign({ ok: true }, stockNotesListPayload(data), { stats: data.stats }))
+          writeJson(res, 200, Object.assign({ ok: true }, await stockNotesListPayload(data), { stats: data.stats }))
         } catch (e) { writeJson(res, 500, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
       },
     },
@@ -2189,7 +2496,28 @@ function apply(ctx, config) {
             writeJson(res, 200, { ok: true, scope: "template", templateId: template.id, preset, settings: await modelSettingsPayload() })
             return
           }
-          writeJson(res, 400, { error: "scope 必须为 host / role / template" })
+          if (body.scope === "stockKb") {
+            const value = String(body.model || "").trim()
+            const settings = await readJsonFile(SETTINGS_FILE, {})
+            if (!value || value === "default") {
+              delete settings.stockKbModel
+            } else if (value === "inherit") {
+              settings.stockKbModel = "inherit"
+            } else {
+              if (!parseRoute(value)) { writeJson(res, 400, { error: "模型格式应为 provider/model（可选 @effort）" }); return }
+              settings.stockKbModel = value
+            }
+            if (typeof body.auto === "boolean") settings.stockKbAuto = body.auto
+            if (body.concurrency !== void 0) {
+              const n = Number(body.concurrency)
+              if (!Number.isFinite(n) || n < 1 || n > 6) { writeJson(res, 400, { error: "并发数应为 1-6" }); return }
+              settings.stockKbConcurrency = Math.floor(n)
+            }
+            await writeJsonFile(SETTINGS_FILE, settings)
+            writeJson(res, 200, { ok: true, scope: "stockKb", model: await kbModelLabel(), auto: await kbAutoEnabled(), concurrency: await kbConcurrency(), settings: await modelSettingsPayload() })
+            return
+          }
+          writeJson(res, 400, { error: "scope 必须为 host / role / template / stockKb" })
         } catch (e) { writeJson(res, 400, { error: String(e).slice(0, 300) }) }
       },
     },
@@ -2899,6 +3227,17 @@ function apply(ctx, config) {
     if (typeof timer.unref === "function") timer.unref()
     return () => clearTimeout(timer)
   }, "dsh-invest: run-log self-heal")
+
+  ctx.effect(() => {
+    // 个股知识库后台自动整理：启动 20 秒后扫一遍未整理的股票，之后每 10 分钟补一次。
+    // 串行队列 + 每条之间 1.5 秒间隔，慢慢把历史补齐；测试环境/显式关闭时不调度。
+    if (process.env.NODE_TEST_CONTEXT || process.env.DSH_INVEST_AUTO_CURATE === "0") return () => {}
+    const boot = setTimeout(() => { void sweepCuration() }, 20000)
+    const tick = setInterval(() => { void sweepCuration() }, 10 * 60 * 1000)
+    if (typeof boot.unref === "function") boot.unref()
+    if (typeof tick.unref === "function") tick.unref()
+    return () => { clearTimeout(boot); clearInterval(tick) }
+  }, "dsh-invest: stock-kb curation")
 
   ctx.effect(() => {
     // 观察仓日检自动调度：开机补跑 + 收盘后定时（每分钟轮询一次，容忍睡眠/唤醒漏拍）

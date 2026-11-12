@@ -18,6 +18,21 @@ export function closeReader(): void {
   previousFocus = null;
 }
 
+/** 直接渲染一段 Markdown（不读文件）：用于「放大查看」知识库这类已有内容的场景 */
+export function openMarkdown(title: string, markdown: string, meta = ''): void {
+  requestSerial += 1;
+  const reader = readerElement();
+  const content = document.getElementById('readerContent')!;
+  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  document.getElementById('readerTitle')!.textContent = title;
+  document.getElementById('readerMeta')!.textContent = meta;
+  content.innerHTML = `<article class="markdown-body">${renderMarkdown(markdown) || '<p>内容为空。</p>'}</article>`;
+  reader.hidden = false;
+  document.body.classList.add('reader-open');
+  document.getElementById('readerClose')!.focus({ preventScroll: true });
+  void hydrateCharts(content);
+}
+
 export async function openReport(path: string, charts: string[] = []): Promise<void> {
   const serial = ++requestSerial;
   const reader = readerElement();

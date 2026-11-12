@@ -2,24 +2,25 @@ import './style.css';
 import './page-updates.css';
 import { api } from './api';
 import { renderArchive } from './archive';
-import { renderAsk } from './ask';
+import { renderAsk, stockThreadKey } from './ask';
 import { escapeHtml, formatBytes, formatDateTime } from './format';
 import { hydrateStaticIcons, icon } from './icons';
 import { renderOverview } from './overview';
-import { closeReader, initialiseReader, openReport } from './reader';
+import { closeReader, initialiseReader, openMarkdown, openReport } from './reader';
 import { hydrateCharts } from './markdown';
 import { recordsForCode, reportForRun } from './selectors';
-import { allRunRows, latestReportForCode } from './run-history';
+import { allRunRows } from './run-history';
 import { emptyManualPosition, DEFAULT_ASK_SUGGESTIONS, persistAskSuggestions, persistAskThreads, state, TEMPLATE_ORDER_STORE } from './state';
 import type { TaskDraft } from './state';
 import { NAME_INPUT_TEMPLATES, orderedTemplates, primaryJobReport, renderTasks } from './tasks';
 import { renderRuns } from './runs';
-import { renderModelSettings, modelRouteFor, modelPresetFor, isValidModelRoute, serverHostValue } from './model-settings';
+import { renderModelSettings, modelRouteFor, modelPresetFor, isValidModelRoute, serverHostValue, modelStockKb, modelStockKbAuto, modelStockKbConcurrency, splitStockKbRoute } from './model-settings';
 import { ensureNotifyPermission, notifyEnabled, notifyPermission, pushAlertsToSystem, setNotifyEnabled } from './notify';
 import type { SystemNotice } from './notify';
 import { fileToBase64, positionsForConfirm, prepareScreenshotForUpload, renderHoldings, validateHoldingsDraft } from './holdings';
 import type { PreparedScreenshot } from './holdings';
 import { LEDGER_DEFAULT_COLUMNS } from './types';
+import { compareStockName } from './stock-index';
 import type { ConclusionRecord, HoldingPosition, HoldingsImportInput, Job, ModelSettingsSaveInput, TaskTemplate, WatchAlert, WorkbenchView, WatchlistUpdateInput, LedgerColKey } from './types';
 
 const viewElement = document.getElementById('view')!;
@@ -174,7 +175,7 @@ function render(): void {
   if (state.view === 'ask') void hydrateCharts(viewElement);
   const labels: Record<WorkbenchView, string> = {
     overview: '投研概览', archive: '标的档案', runs: '运行记录', tasks: '一键任务',
-    ask: '报告追问', 'model-settings': '模型设置', holdings: '持仓工作区',
+    ask: '个股知识库', 'model-settings': '模型设置', holdings: '持仓工作区',
   };
   document.getElementById('topbarContext')!.textContent = labels[state.view];
   document.querySelectorAll<HTMLElement>('.nav-item').forEach((item) => {
@@ -509,6 +510,22 @@ async function loadModelSettings(): Promise<void> {
     if (!previous || !state.modelHostDraft || state.modelHostDraft === previousHost) {
       state.modelHostDraft = nextHost;
     }
+    // 知识库整理模型草稿：同理，服务器值变化或首次加载才覆盖
+    const previousKb = previous?.stockKb?.model;
+    const nextKb = response.stockKb?.model || '';
+    if (!previous || !state.modelStockKbDraft || state.modelStockKbDraft === previousKb) {
+      state.modelStockKbDraft = nextKb;
+    }
+    const previousAuto = previous?.stockKb?.auto !== false;
+    const nextAuto = response.stockKb?.auto !== false;
+    if (!previous || state.modelStockKbAutoDraft === null || state.modelStockKbAutoDraft === previousAuto) {
+      state.modelStockKbAutoDraft = nextAuto;
+    }
+    const previousConcurrency = previous?.stockKb?.concurrency || 3;
+    const nextConcurrency = response.stockKb?.concurrency || 3;
+    if (!previous || state.modelStockKbConcurrencyDraft === null || state.modelStockKbConcurrencyDraft === previousConcurrency) {
+      state.modelStockKbConcurrencyDraft = nextConcurrency;
+    }
     (response.roles || []).forEach((role) => {
       const old = previous?.roles.find((item) => item.code === role.code);
       const draft = state.modelRoleRoutes[role.code];
@@ -552,6 +569,19 @@ async function saveModelSettings(): Promise<void> {
   // 宿主模型：草稿与服务器值不同才提交
   const hostValue = state.modelHostDraft || 'inherit';
   if (hostValue !== serverHostValue(settings)) updates.push({ scope: 'host', value: hostValue });
+  // 知识库整理：模型/推理强度 + 并发数 + 后台自动整理开关
+  const kbModel = modelStockKb(state);
+  const kbAuto = modelStockKbAuto(state);
+  const kbConcurrency = modelStockKbConcurrency(state);
+  if (kbModel !== (settings.stockKb?.model || '')
+    || kbAuto !== (settings.stockKb?.auto !== false)
+    || kbConcurrency !== (settings.stockKb?.concurrency || 3)) {
+    if (kbModel !== 'inherit' && !isValidModelRoute(kbModel)) {
+      toast('知识库整理模型的格式不正确（应为 provider/model，可选 @effort）。', 'error');
+      return;
+    }
+    updates.push({ scope: 'stockKb', model: kbModel, auto: kbAuto, concurrency: kbConcurrency });
+  }
   if (!updates.length) { toast('当前没有需要保存的修改。', 'info'); return; }
 
   state.modelSettingsSaving = true;
@@ -568,6 +598,11 @@ async function saveModelSettings(): Promise<void> {
       } else if (input.scope === 'host') {
         state.modelHostDraft = input.value;
         // 后端回传整份最新设置：直接用服务器值刷新（预设描述内嵌宿主模型名，避免本地拼装失同步）
+        if (response.settings) state.modelSettings = response.settings;
+      } else if (input.scope === 'stockKb') {
+        state.modelStockKbDraft = input.model;
+        if (typeof input.auto === 'boolean') state.modelStockKbAutoDraft = input.auto;
+        if (typeof input.concurrency === 'number') state.modelStockKbConcurrencyDraft = input.concurrency;
         if (response.settings) state.modelSettings = response.settings;
       } else {
         const template = settings.templates.find((item) => item.id === input.templateId);
@@ -908,36 +943,34 @@ function moveTemplate(id: string, dir: number): void {
   render();
 }
 
-/** 报告追问：把本轮问题追加进线程，带上最近几轮历史请求后端（只依据报告回答） */
-async function askAboutReport(path: string, presetQuestion?: string): Promise<void> {
-  const reportPath = String(path || state.askPath || '');
+/** 个股知识库追问：把本轮问题追加进线程，带上最近几轮历史请求后端（只依据整理稿回答） */
+async function askAboutStock(code: string, presetQuestion?: string): Promise<void> {
+  const target = String(code || state.askStock || '').toUpperCase();
   const question = String(presetQuestion ?? state.askDraft ?? '').trim();
-  if (!reportPath || !question || state.askLoading) return;
-  const history = (state.askThreads[reportPath] || []).slice(-6).map((turn) => ({ role: turn.role, text: turn.text }));
-  state.askThreads[reportPath] = [...(state.askThreads[reportPath] || []), { role: 'user', text: question, ts: Date.now() }];
+  if (!target || !question || state.askLoading) return;
+  const key = stockThreadKey(target);
+  const history = (state.askThreads[key] || []).slice(-6).map((turn) => ({ role: turn.role, text: turn.text }));
+  state.askThreads[key] = [...(state.askThreads[key] || []), { role: 'user', text: question, ts: Date.now() }];
   persistAskThreads(state.askThreads);
   state.askDraft = '';
   state.askLoading = true;
   state.askError = '';
   render();
   try {
-    const response = await api.askReport({ path: reportPath, question, history });
+    const response = await api.stockAsk({ code: target, question, history });
     const answer = String(response.answer || '').trim() || '（模型没有返回内容，请重试）';
-    state.askThreads[reportPath] = [...(state.askThreads[reportPath] || []), { role: 'assistant', text: answer, ts: Date.now() }];
+    state.askThreads[key] = [...(state.askThreads[key] || []), { role: 'assistant', text: answer, ts: Date.now() }];
     persistAskThreads(state.askThreads);
   } catch (error) {
     state.askError = `追问失败：${errorMessage(error)}`;
   } finally {
     state.askLoading = false;
     render();
-    requestAnimationFrame(() => {
-      const thread = document.getElementById('ask-thread');
-      if (thread) thread.scrollTop = thread.scrollHeight;
-    });
+    scrollAskThreadToBottom();
   }
 }
 
-/** 追问会话滚到最新一轮（切换报告 / 刚收到回答时用；普通重绘不调用，避免打断阅读位置） */
+/** 追问会话滚到最新一轮（切换标的 / 刚收到回答时用；普通重绘不调用，避免打断阅读位置） */
 function scrollAskThreadToBottom(): void {
   window.requestAnimationFrame(() => {
     const thread = document.getElementById('ask-thread');
@@ -945,8 +978,17 @@ function scrollAskThreadToBottom(): void {
   });
 }
 
-// ===== 个股分析知识库（报告按个股归集 → 追问页左侧按名称/首字母索引）=====
+// ===== 个股知识库（按股票归集 + 二次整理，追问直接对着知识库）=====
 let askStocksAt = 0;
+let askNotePolling = 0;
+let askNotePollTimer = 0;
+
+/** 从索引里找某份报告的个股归属：运行记录/概览的「追问」按钮只带报告路径 */
+function codeForReportPath(reportPath: string): string {
+  const key = String(reportPath || '').replace(/\\/g, '/').toLowerCase();
+  const report = (state.index?.reports || []).find((item) => String(item.path || '').replace(/\\/g, '/').toLowerCase() === key);
+  return String((report && report.codes && report.codes[0]) || '');
+}
 
 async function loadAskStocks(force = false): Promise<void> {
   if (state.askStocksLoading) return;
@@ -955,11 +997,14 @@ async function loadAskStocks(force = false): Promise<void> {
   try {
     const data = await api.stockNotes();
     state.askStocks = data.stocks || [];
-    state.askStocksOrphans = data.orphans || [];
     state.askStocksBuiltAt = data.built_at || '';
     askStocksAt = Date.now();
+    // 首次进入且没有选中标的：按名称排序取第一只，右侧不留空白
+    if (!state.askStock && state.askStocks.length) {
+      const first = [...state.askStocks].sort((a, b) => compareStockName(a.name || a.code, b.name || b.code))[0];
+      if (first) void selectAskStock(first.code);
+    }
   } catch (error) {
-    // 后端尚未重启时新接口是 404：只记录错误，列表自动回退为按时间的报告清单
     state.askStocksError = errorMessage(error);
   } finally {
     state.askStocksLoading = false; render();
@@ -972,12 +1017,11 @@ async function rebuildAskStocks(): Promise<void> {
   try {
     const data = await api.stockNotesRebuild();
     state.askStocks = data.stocks || [];
-    state.askStocksOrphans = data.orphans || [];
     state.askStocksBuiltAt = data.built_at || '';
-    state.askStockData = {}; state.askStockLoading = {};
     askStocksAt = Date.now();
     const stats = data.stats || {};
     toast(`个股知识库已重建：${stats.stocks ?? state.askStocks.length} 只标的 / ${stats.entries ?? '—'} 段分析`, 'info');
+    if (state.askStock) await loadAskNote(state.askStock, true);
   } catch (error) {
     toast(`重建个股知识库失败：${errorMessage(error)}`, 'error');
   } finally {
@@ -985,49 +1029,88 @@ async function rebuildAskStocks(): Promise<void> {
   }
 }
 
-/** 确保某只个股的分析段已加载（不动展开状态） */
-async function ensureAskStockLoaded(code: string): Promise<void> {
-  if (!code || state.askStockData[code] || state.askStockLoading[code]) return;
-  state.askStockLoading = { ...state.askStockLoading, [code]: true };
-  render();
+/** 读取某只股票的知识库；整理中/排队时自动轮询，完成后刷新 */
+async function loadAskNote(code: string, silent = false): Promise<void> {
+  if (!code) return;
+  if (!silent) { state.askNoteLoading = true; state.askNoteError = ''; render(); }
   try {
-    const detail = await api.stockNote(code);
-    state.askStockData = { ...state.askStockData, [code]: detail };
+    const note = await api.stockNote(code);
+    if (String(state.askStock || '').toUpperCase() !== String(code).toUpperCase()) return;
+    state.askNote = note;
+    state.askNoteError = '';
+    if (note.status === 'running' || note.status === 'queued') scheduleAskNotePoll(code);
+    else askNotePolling = 0;
   } catch (error) {
-    toast(`读取该股分析失败：${errorMessage(error)}`, 'error');
+    if (!silent) state.askNoteError = errorMessage(error);
   } finally {
-    state.askStockLoading = { ...state.askStockLoading, [code]: false };
-    render();
+    state.askNoteLoading = false; render();
   }
 }
 
-/** 展开/收起某只个股的分析段；首次展开时自动选中该股最新一段，右侧立即可读 */
-async function toggleAskStock(code: string): Promise<void> {
-  if (!code) return;
-  const open = !state.askStockOpen[code];
-  state.askStockOpen = { ...state.askStockOpen, [code]: open };
-  render();
-  if (!open) return;
-  await ensureAskStockLoaded(code);
-  const entries = state.askStockData[code]?.entries || [];
-  if (entries.length && !entries.some((entry) => entry.report === state.askPath)) {
-    state.askPath = entries[0].report;
-    state.askCode = code;
-    state.askError = '';
-    state.askSuggestionsEditing = false;
+/** 整理是异步的：每 2.5 秒轮询一次，最多 80 次（200 秒）；同一时刻只留一个定时器 */
+function scheduleAskNotePoll(code: string): void {
+  if (askNotePollTimer || askNotePolling >= 80) return;
+  askNotePolling += 1;
+  askNotePollTimer = window.setTimeout(() => {
+    askNotePollTimer = 0;
+    if (state.view !== 'ask' || String(state.askStock || '').toUpperCase() !== String(code).toUpperCase()) return;
+    void loadAskNote(code, true).then(() => {
+      if (state.askNote && (state.askNote.status === 'running' || state.askNote.status === 'queued')) scheduleAskNotePoll(code);
+      else if (state.askNote) void refreshAskStocksQuietly();
+    });
+  }, 2500);
+}
+
+/** 列表里的整理状态要跟着更新，但不打断右侧阅读（静默刷新） */
+async function refreshAskStocksQuietly(): Promise<void> {
+  try {
+    const data = await api.stockNotes();
+    state.askStocks = data.stocks || [];
+    state.askStocksBuiltAt = data.built_at || '';
+    askStocksAt = Date.now();
     render();
-    scrollAskThreadToBottom();
+  } catch { /* 静默失败 */ }
+}
+
+async function selectAskStock(code: string): Promise<void> {
+  const target = String(code || '').toUpperCase();
+  if (!target) return;
+  askNotePolling = 0;
+  if (askNotePollTimer) { window.clearTimeout(askNotePollTimer); askNotePollTimer = 0; }
+  state.askStock = target;
+  state.askNote = null;
+  state.askNoteError = '';
+  state.askDraft = '';
+  state.askError = '';
+  state.askSuggestionsEditing = false;
+  if (state.view !== 'ask') navigate('ask');
+  else render();
+  await loadAskNote(target);
+  scrollAskThreadToBottom();
+}
+
+/** 手动触发二次整理（后端异步跑，前端轮询状态） */
+async function curateAskStock(code: string): Promise<void> {
+  const target = String(code || state.askStock || '').toUpperCase();
+  if (!target) return;
+  try {
+    await api.stockCurate({ code: target });
+    if (state.askNote) state.askNote = { ...state.askNote, status: 'queued', error: '' };
+    render();
+    toast('已提交知识库整理，完成后自动刷新。', 'info');
+    window.setTimeout(() => { void loadAskNote(target, true); }, 1200);
+  } catch (error) {
+    toast(`提交整理失败：${errorMessage(error)}`, 'error');
   }
 }
 
-/** 从别处跳进来时展开指定个股（不改变右侧选中项） */
-async function openAskStock(code: string): Promise<void> {
-  if (!code) return;
-  if (!state.askStockOpen[code]) {
-    state.askStockOpen = { ...state.askStockOpen, [code]: true };
-    render();
-  }
-  await ensureAskStockLoaded(code);
+/** 知识库需要更新：直接发起个股快诊任务（完成后后端会自动二次整理） */
+async function updateAskStock(code: string): Promise<void> {
+  const target = String(code || state.askStock || '').toUpperCase();
+  if (!target) return;
+  await runQuickCheck(target);
+  navigate('tasks');
+  void loadJobs();
 }
 
 function toggleAskLetter(letter: string): void {
@@ -1045,28 +1128,11 @@ function jumpToAskLetter(letter: string): void {
   }
   window.requestAnimationFrame(() => {
     const list = document.querySelector<HTMLElement>('.ask-report-list');
-    const target = document.getElementById(`ask-group-${letter}`)
-      || (letter === '综合' ? document.getElementById('ask-group-misc') : null);
+    const target = document.getElementById(`ask-group-${letter}`);
     if (!list || !target) return;
     const top = target.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
     list.scrollTop = Math.max(0, top - 2);
   });
-}
-
-/** 打开该股的知识库 Markdown（纯文本归档，可当作长期笔记读） */
-async function openStockKb(code: string): Promise<void> {
-  if (!code) return;
-  try {
-    let detail = state.askStockData[code];
-    if (!detail) {
-      detail = await api.stockNote(code);
-      state.askStockData = { ...state.askStockData, [code]: detail };
-    }
-    if (!detail.file) { toast('该股知识库文件尚未生成，点左侧「重建索引」再试。', 'info'); return; }
-    void openReport(detail.file);
-  } catch (error) {
-    toast(`打开个股知识库失败：${errorMessage(error)}`, 'error');
-  }
 }
 
 /** 一键任务页内跳转：先保证在任务页，再滚动到锚点 */
@@ -1467,6 +1533,11 @@ function syncAfterJobDone(): Promise<void> {
           await loadWatchlist();
         })(),
       ];
+      // 个股知识库：报告更新后清单会变；若用户正开着某只股票，重读它的整理状态
+      if (state.view === 'ask') {
+        syncs.push(loadAskStocks(true));
+        if (state.askStock) syncs.push(loadAskNote(state.askStock, true));
+      }
       if (state.selectedCode) syncs.push(reloadArchiveConclusions(state.selectedCode));
       await Promise.all(syncs);
     } catch (error) { toast(`任务完成后的数据同步失败：${errorMessage(error)}`, 'error'); }
@@ -1509,42 +1580,29 @@ document.addEventListener('click', (event) => {
   if (action === 'navigate' && target.dataset.view) navigate(target.dataset.view as WorkbenchView);
   else if (action === 'back-to-top') window.scrollTo({ top: 0, behavior: 'smooth' });
   else if (action === 'ask-latest-report' && target.dataset.code) {
-    const code = target.dataset.code;
-    const reportPath = latestReportForCode(state.index, code);
-    state.askCode = code;
-    state.askError = '';
-    if (reportPath) state.askPath = reportPath;
-    navigate('ask');
-    void openAskStock(code);
-    scrollAskThreadToBottom();
+    // 标的档案的「追问」入口：直接进这只股票的知识库
+    void selectAskStock(target.dataset.code);
   }
-  else if (action === 'ask-stock-toggle' && target.dataset.code) void toggleAskStock(target.dataset.code);
+  else if (action === 'ask-report' && target.dataset.path) {
+    // 运行记录/概览/任务卡的「追问」只带报告路径：解析出个股后进知识库
+    const code = codeForReportPath(target.dataset.path) || String(target.dataset.code || '');
+    if (!code) { toast('该报告没有个股归属，无法进入个股知识库。', 'info'); return; }
+    void selectAskStock(code);
+  }
+  else if (action === 'ask-stock-select' && target.dataset.code) void selectAskStock(target.dataset.code);
   else if (action === 'ask-letter-toggle' && target.dataset.letter) toggleAskLetter(target.dataset.letter);
   else if (action === 'ask-letter-jump' && target.dataset.letter) jumpToAskLetter(target.dataset.letter);
   else if (action === 'ask-stocks-rebuild') void rebuildAskStocks();
-  else if (action === 'open-stock-kb' && target.dataset.code) void openStockKb(target.dataset.code);
-  else if (action === 'ask-select' && target.dataset.path) {
-    state.askPath = target.dataset.path;
-    state.askCode = target.dataset.code || '';
-    state.askError = ''; state.askDraft = '';
-    state.askSuggestionsEditing = false;
-    render();
-    // 切到另一份报告：历史会话直接定位到最新一轮
-    scrollAskThreadToBottom();
+  else if (action === 'ask-curate' && target.dataset.code) void curateAskStock(target.dataset.code);
+  else if (action === 'ask-run' && target.dataset.code) void updateAskStock(target.dataset.code);
+  else if (action === 'ask-kb-expand') {
+    const note = state.askNote;
+    if (!note) return;
+    openMarkdown(`${note.name || note.code} · 知识库`, note.markdown,
+      `更新于 ${note.updated_at || '尚未整理'} ｜ ${note.count} 段分析 ｜ 整理模型 ${note.model || '继承宿主'}`);
   }
-  else if (action === 'ask-report' && target.dataset.path) {
-    const path = target.dataset.path;
-    // 从索引里找该报告的首个标的：追问页左侧顺带展开这只股票，导航不落在空白处
-    const report = (state.index?.reports || []).find((item) => String(item.path || '').replace(/\\/g, '/').toLowerCase() === String(path).replace(/\\/g, '/').toLowerCase());
-    const code = String((report && report.codes && report.codes[0]) || '') || String(target.dataset.code || '');
-    state.askPath = path; state.askCode = code; state.askError = ''; state.askDraft = '';
-    state.askSuggestionsEditing = false;
-    navigate('ask');
-    if (code) void openAskStock(code);
-    scrollAskThreadToBottom();
-  }
-  else if (action === 'ask-ask' && target.dataset.question) void askAboutReport(state.askPath, target.dataset.question);
-  else if (action === 'ask-send') void askAboutReport(state.askPath);
+  else if (action === 'ask-ask' && target.dataset.question) void askAboutStock(state.askStock, target.dataset.question);
+  else if (action === 'ask-send') void askAboutStock(state.askStock);
   else if (action === 'ask-suggest-edit') {
     if (state.askSuggestionsEditing) finishAskSuggestionEdit();
     else { state.askSuggestionsEditing = true; render(); }
@@ -1564,7 +1622,6 @@ document.addEventListener('click', (event) => {
     toast('预设提问已恢复默认。', 'info');
     render();
   }
-  else if (action === 'open-ask-report' && target.dataset.path) void openReport(target.dataset.path);
   else if (action === 'toggle-theme') toggleTheme();
   else if (action === 'toggle-sidebar') { state.sidebarOpen = !state.sidebarOpen; render(); }
   else if (action === 'close-sidebar') { state.sidebarOpen = false; render(); }
@@ -1711,6 +1768,12 @@ document.addEventListener('change', (event) => {
     render();
     return;
   }
+  // 知识库：后台自动整理开关（只改草稿，保存后生效）
+  if (target instanceof HTMLInputElement && target.dataset.stockkbAuto !== undefined) {
+    state.modelStockKbAutoDraft = target.checked;
+    render();
+    return;
+  }
   if (target instanceof HTMLInputElement && target.dataset.watchDailyAt !== undefined) {
     void saveWatchDailyAt(target.value);
     return;
@@ -1727,6 +1790,11 @@ document.addEventListener('change', (event) => {
     return;
   }
   if (!(target instanceof HTMLSelectElement)) return;
+  if (target.dataset.stockkbConcurrency !== undefined) {
+    state.modelStockKbConcurrencyDraft = Number(target.value) || 3;
+    render();
+    return;
+  }
   if (target.hasAttribute('data-watch-state') && target.dataset.code) {
     void changeWatchState(target.dataset.code, target.value);
     return;
@@ -1734,6 +1802,14 @@ document.addEventListener('change', (event) => {
   // 宿主模型选择：只改草稿，点「保存设置」才提交
   if (target.hasAttribute('data-host-model')) {
     state.modelHostDraft = target.value;
+    render();
+    return;
+  }
+  if (target.dataset.roleModel === 'stockKb' || target.dataset.roleEffort === 'stockKb') {
+    const current = splitStockKbRoute(state.modelStockKbDraft || state.modelSettings?.stockKb?.model || '');
+    const model = target.dataset.roleModel ? target.value : current.model;
+    const effort = target.dataset.roleEffort ? target.value : current.effort;
+    state.modelStockKbDraft = model === 'inherit' ? 'inherit' : model + (effort === 'default' ? '' : '@' + effort);
     render();
     return;
   }
@@ -1767,7 +1843,7 @@ document.addEventListener('keydown', (event) => {
     if (askInput) {
       event.preventDefault();
       state.askDraft = askInput.value;
-      void askAboutReport(state.askPath);
+      void askAboutStock(state.askStock);
       return;
     }
   }

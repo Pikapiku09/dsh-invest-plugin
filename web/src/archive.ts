@@ -216,13 +216,13 @@ function archiveDetail(state: AppState): string {
   const runRows = runs.slice(0, 12).map((run) => {
     const reportPath = reportForRun(state.index, run)?.path || '';
     const askButton = reportPath
-      ? `<button class="icon-button small" data-action="ask-report" data-path="${escapeHtml(reportPath)}" title="针对这份报告追问" aria-label="针对这份报告追问">${icon('chat', 15)}</button>`
+      ? `<button class="icon-button small" data-action="ask-report" data-path="${escapeHtml(reportPath)}" title="查看该报告所属个股的知识库" aria-label="查看该报告所属个股的知识库">${icon('chat', 15)}</button>`
       : '<span class="muted" title="该次运行没有归档报告">—</span>';
     return `<tr data-action="open-run" data-id="${escapeHtml(run.id)}" tabindex="0" class="clickable-row"><td class="table-date">${formatDateTime(run.ts_local || run.created_at, true)}</td><td><span class="mode-tag">${escapeHtml(run.mode || '—')}</span></td><td>${escapeHtml(truncate(run.question || '—', 42))}</td><td>${formatDuration(run.elapsed_ms)}</td><td>${runStatusBadge(run)}</td><td class="table-action"><span class="row-actions">${askButton}<button class="icon-button small" data-action="open-run" data-id="${escapeHtml(run.id)}" title="打开报告全文" aria-label="打开报告全文">${icon('external', 14)}</button></span></td></tr>`;
   }).join('');
   const latestReport = latestReportForCode(state.index, code);
   return `<div class="archive-detail"><section class="panel symbol-summary"><div><div class="symbol-code">${escapeHtml(displayName)} <small>${escapeHtml(code)}</small></div><p>${position ? `${escapeHtml(displayName)} · ${position.shares !== undefined ? `持仓 ${formatNumber(position.shares)} 股` : '在持仓账本中'} · 成本 ${escapeHtml(position.cost ?? '—')}` : '当前不在实时持仓账本中'}</p></div><div class="symbol-metrics"><span><b>${records.length}</b> 条结论</span><span><b>${runs.length}</b> 次相关运行</span>${records[0] ? '<span class="symbol-stance">' + stanceBadge(records[0].stance) + '</span><div class="symbol-levels"><span>目标 <b>' + escapeHtml(records[0].target ?? '—') + '</b></span><span>止损 <b>' + escapeHtml(records[0].stop ?? '—') + '</b></span></div>' : ''}</div>
-    <div class="symbol-actions"><button class="button button-secondary" data-action="ask-latest-report" data-code="${escapeHtml(code)}" ${latestReport ? '' : 'disabled title="该标的还没有归档报告"'}>${icon('chat', 15)}追问最近报告</button></div></section>
+    <div class="symbol-actions"><button class="button button-secondary" data-action="ask-latest-report" data-code="${escapeHtml(code)}" ${latestReport ? '' : 'disabled title="该标的还没有归档报告"'}>${icon('chat', 15)}个股知识库</button></div></section>
     ${monitorPanel(state, code)}
     ${state.archiveNotice ? `<div class="inline-warning">${icon('alert', 15)}${escapeHtml(state.archiveNotice)}</div>` : ''}
     <section class="panel timeline-panel">${sectionHeading('结论链时间线', '最新判断在前 · 跟踪目标、风险线及观点变化')}${state.archiveLoading ? loadingBlock('正在读取结构化结论链') : state.archiveError && !records.length ? errorState('结论链读取失败', state.archiveError) : conclusionTimeline(records)}</section>

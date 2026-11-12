@@ -3,7 +3,7 @@ import type {
   HoldingsQuotesResponse, HoldingsRefreshQuotesResponse, HoldingsResponse, IndexResponse, Job, ModelSettingsResponse, ModelSettingsSaveInput,
   HoldingPosition, HoldingsAccount, StockResolveResponse, TaskTemplate,
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
-  StockNotesResponse, StockNoteDetail,
+  StockNotesResponse, StockNoteDetail, StockAskResponse,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -64,10 +64,16 @@ export const api = {
   report: (path: string) => request<{ path: string; text: string }>(
     `${BASE}/report?path=${encodeURIComponent(path)}`,
   ),
-  // ===== 个股分析知识库（报告按个股切段归集）=====
+  // ===== 个股分析知识库（报告按个股切段归集 + 二次整理）=====
   stockNotes: () => request<StockNotesResponse>(`${BASE}/stock-notes`),
   stockNote: (code: string) => request<StockNoteDetail>(`${BASE}/stock-note?code=${encodeURIComponent(code)}`),
   stockNotesRebuild: () => post<StockNotesResponse & { ok: true }>(`${BASE}/stock-notes/rebuild`, {}),
+  /** 触发某只股票的二次整理（异步，完成后轮询 stockNote 取结果） */
+  stockCurate: (input: { code: string; full?: boolean }) =>
+    post<{ ok: boolean; queued: boolean; code: string }>(`${BASE}/stock-note/curate`, input),
+  /** 针对个股知识库追问 */
+  stockAsk: (input: { code: string; question: string; history?: Array<{ role: 'user' | 'assistant'; text: string }> }) =>
+    post<StockAskResponse>(`${BASE}/stock-ask`, input),
   chart: (path: string) => request<{ path: string; svg: string }>(
     `${CHART_BASE}?path=${encodeURIComponent(path)}`,
   ),

@@ -216,6 +216,8 @@ export interface ModelSettingsResponse {
   hostModel?: HostModelInfo | null;
   /** 当前会话根 Agent 的模型（只读对照） */
   sessionModel?: HostModelInfo | null;
+  /** 个股知识库二次整理使用的模型 */
+  stockKb?: { model: string; default: string; auto?: boolean; concurrency?: number; description: string };
   roles: ModelRoleSetting[];
   templates: ModelTemplateSetting[];
   presets: ModelPresetDefinition[];
@@ -225,7 +227,8 @@ export interface ModelSettingsResponse {
 export type ModelSettingsSaveInput =
   | { scope: 'role'; role: string; route: string }
   | { scope: 'template'; templateId: string; preset: string }
-  | { scope: 'host'; value: string };
+  | { scope: 'host'; value: string }
+  | { scope: 'stockKb'; model: string; auto?: boolean; concurrency?: number };
 
 export interface TaskTemplate {
   id: string;
@@ -414,7 +417,7 @@ export interface WatchlistRefreshResponse {
   watchSyncError?: string;
 }
 
-// ===== 个股分析知识库（报告按个股切段归集）=====
+// ===== 个股分析知识库（报告按个股切段 → 二次整理成可读文档）=====
 export interface StockNoteMeta {
   code: string;
   name: string;
@@ -422,6 +425,12 @@ export interface StockNoteMeta {
   last_ts: string;
   modes: string[];
   kinds: string[];
+  /** 最近一次二次整理的时间（空 = 还没整理过） */
+  curated_at?: string;
+  /** done / running / queued / error / none */
+  kb_status?: string;
+  /** 尚未并入知识库的新分析段数 */
+  new_entries?: number;
 }
 
 export interface StockNoteEntry {
@@ -432,17 +441,9 @@ export interface StockNoteEntry {
   kind: string;
   heading: string;
   report: string;
-  report_title: string;
+  report_name: string;
   chars: number;
-  text: string;
-}
-
-export interface StockNotesResponse {
-  built_at: string;
-  stats: { reports?: number; stocks?: number; entries?: number; parsed?: number; reused?: number; ms?: number };
-  stocks: StockNoteMeta[];
-  /** 没有任何个股归属的报告（大盘/组合类），在「综合」分组里按报告追问 */
-  orphans: string[];
+  snippet: string;
 }
 
 export interface StockNoteDetail {
@@ -450,9 +451,41 @@ export interface StockNoteDetail {
   name: string;
   count: number;
   last_ts: string;
-  /** 该股知识库 Markdown 文件的绝对路径（可阅读/追问） */
+  /** 知识库最近整理时间（空 = 尚未整理） */
+  updated_at: string;
+  /** done / running / queued / error / raw */
+  status: string;
+  model: string;
+  error: string;
+  new_entries: number;
+  chars: number;
   file: string;
+  /** 整理后的知识库 Markdown（未整理时为兜底时间线） */
+  markdown: string;
   entries: StockNoteEntry[];
+}
+
+export interface StockNotesResponse {
+  built_at: string;
+  stats: { reports?: number; stocks?: number; entries?: number; parsed?: number; reused?: number; ms?: number };
+  stocks: StockNoteMeta[];
+  /** 有多少只股票还有未并入知识库的新材料 */
+  pending_curation?: number;
+  /** 后台整理队列是否有活 */
+  curating?: boolean;
+  /** 当前并发整理的只数 */
+  curating_count?: number;
+  /** 没有任何个股归属的报告（综合类），仅作统计展示 */
+  orphans: string[];
+}
+
+export interface StockAskResponse {
+  ok: boolean;
+  answer: string;
+  elapsedMs: number;
+  kbUpdatedAt: string;
+  kbStatus: string;
+  newEntries: number;
 }
 
 // ===== 持仓工作区「当前账本」列偏好 =====

@@ -213,8 +213,8 @@ export function isStockCode(code) {
   return /^(43|83|87|88|92)\d{4}$/.test(digits)
 }
 
-/** 单只个股的知识库 Markdown（人可读；每次重建覆盖，改它没用） */
-export function stockFileMarkdown(code, name, entries, builtAt) {
+/** 单只个股的「原始记录」Markdown（人可读；每次重建覆盖，改它没用） */
+export function stockRawMarkdown(code, name, entries, builtAt) {
   const head = [
     `# ${name || code}（${code}）· 个股分析知识库`,
     '',
@@ -237,9 +237,14 @@ export function stockFileMarkdown(code, name, entries, builtAt) {
   return head.concat(body).join('\n')
 }
 
-/** 代码 → 稳定文件名（去掉路径非法字符） */
+/** 代码 → 稳定文件名（二次整理后的知识库：<代码>.md） */
 export function stockFileName(code) {
   return String(code || '').replace(/[^0-9A-Za-z.]/g, '_') + '.md'
+}
+
+/** 原始记录文件名：<代码>.raw.md（与整理后的 <代码>.md 分开存，重建只覆盖 raw） */
+export function stockRawFileName(code) {
+  return String(code || '').replace(/[^0-9A-Za-z.]/g, '_') + '.raw.md'
 }
 
 const MANIFEST_VERSION = 2
@@ -352,25 +357,27 @@ export async function buildStockNotes(opts = {}) {
   }
   stocks.forEach((list) => list.sort((a, b) => String(b.ts).localeCompare(String(a.ts))))
 
-  // 写单只个股知识库文件（内容哈希未变则跳过，避免 235 个文件反复重写）
+  // 写单只个股的「原始记录」文件（<代码>.raw.md；整理后的 <代码>.md 由 curator 维护，这里绝不覆盖）
   const hashes = {}
   try { await fs.mkdir(stocksDir, { recursive: true }) } catch (e) { /* ignore */ }
   for (const [code, list] of stocks) {
     const name = names[code] || (list[0] && list[0].name) || ''
-    const md = stockFileMarkdown(code, name, list.slice(0, 80), builtAt)
+    const md = stockRawMarkdown(code, name, list.slice(0, 80), builtAt)
     const hash = String(md.length) + ':' + hashCode(md)
     hashes[code] = hash
     if (!force && manifest.hashes && manifest.hashes[code] === hash) continue
-    try { await fs.writeFile(path.join(stocksDir, stockFileName(code)), md, 'utf8') } catch (e) { /* 写失败不阻断 */ }
+    try { await fs.writeFile(path.join(stocksDir, stockRawFileName(code)), md, 'utf8') } catch (e) { /* 写失败不阻断 */ }
   }
 
-  // 清理已不在清单里的旧知识库文件（例如早先把行业指数误当个股留下的 801053.BJ.md）；
-  // 报告目录为空时跳过，避免 BASE_DIR 配错把整目录清空
+  // 清理已不在清单里的旧文件（原始记录与整理稿都清）；报告目录为空时跳过，避免 BASE_DIR 配错把整目录清空
   if (files.length && stocks.size) {
-    const keep = new Set(Array.from(stocks.keys()).map(stockFileName))
+    const keepRaw = new Set(Array.from(stocks.keys()).map(stockRawFileName))
+    const keepCurated = new Set(Array.from(stocks.keys()).map(stockFileName))
     try {
       for (const name of await fs.readdir(stocksDir)) {
-        if (!/\.md$/i.test(name) || keep.has(name)) continue
+        if (!/\.md$/i.test(name)) continue
+        const isRaw = /\.raw\.md$/i.test(name)
+        if (isRaw ? keepRaw.has(name) : keepCurated.has(name)) continue
         try { await fs.unlink(path.join(stocksDir, name)) } catch (e) { /* 单个删除失败不阻断 */ }
       }
     } catch (e) { /* 目录不存在等 */ }

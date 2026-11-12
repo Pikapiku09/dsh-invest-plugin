@@ -8,7 +8,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { apply } from '../packages/dsh-invest/lib/index.js'
-import { splitReport, parseMarkedSections, parseHeadingSections, stockFileName, isStockCode } from '../packages/dsh-invest/lib/stock-notes.js'
+import { splitReport, parseMarkedSections, parseHeadingSections, stockFileName, stockRawFileName, isStockCode } from '../packages/dsh-invest/lib/stock-notes.js'
+import { buildCuratePrompt, sanitizeCurated, validateCurated, rawTimelineMarkdown } from '../packages/dsh-invest/lib/stock-curator.js'
 
 const MARKED_REPORT = [
   '# 投研流水线报告',
@@ -55,7 +56,7 @@ const MULTI_REPORT = [
   '| 603606.SH | 东方电缆 | B | 海风订单落地 |',
 ].join('\n')
 
-function makeHarness() {
+function makeHarness(options = {}) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'invest-stock-notes-'))
   const reportsDir = path.join(base, '.dsh-invest', 'reports')
   const storeDir = path.join(base, '.dsh-invest', 'store')
@@ -90,16 +91,25 @@ function makeHarness() {
   fs.writeFileSync(path.join(storeDir, 'index.json'), JSON.stringify(index), 'utf8')
 
   const registered = []
+  const calls = []
+  const parentAgent = { session: { append() {} }, options: { provider: 'p', model: 'm' } }
+  const subagents = options.curatorText ? {
+    start: (kind, spec) => {
+      calls.push(spec)
+      return { result: Promise.resolve({ stopReason: 'stop', output: [{ type: 'text', text: options.curatorText }] }) }
+    },
+  } : undefined
   const fakeFs = {
     resolve: async (p) => p,
     readText: async (p) => fs.readFileSync(p, 'utf8'),
     writeText: async (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text) },
   }
   const ctx = {
+    subagents,
     get(name) {
       if (name === 'fs') return fakeFs
       if (name === 'sandboxPolicy') return { resolve: () => ({}) }
-      if (name === 'agents') return { roots: () => [], create: async () => ({ agent: null, dispose: async () => {} }) }
+      if (name === 'agents') return { roots: () => [parentAgent], create: async () => ({ agent: null, dispose: async () => {} }) }
       return undefined
     },
     effect(fn) { fn() },
@@ -130,7 +140,7 @@ function makeHarness() {
   }
 
   return {
-    base, reportsDir, storeDir, call,
+    base, reportsDir, storeDir, call, calls,
     cleanup: () => fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
   }
 }
@@ -214,7 +224,7 @@ test('个股知识库：清单按股票聚合段数，详情返回摘录与知�
   const detail = await h.call('GET', '/dsh-invest/api/stock-note?code=600519.SH')
   assert.equal(detail.status, 200)
   assert.equal(detail.json.entries.length, 1)
-  assert.match(detail.json.entries[0].text, /现价 1500/)
+  assert.match(detail.json.entries[0].snippet, /现价 1500/)
   assert.equal(detail.json.file, path.join(h.storeDir, 'stocks', stockFileName('600519.SH')).replace(/\\/g, '/'))
 })
 
@@ -251,7 +261,7 @@ test('个股知识库：主报告被二次总结抹掉标记时，回退 _raw �
   const fromRaw = detail.json.entries.find((entry) => entry.report.includes('_d.md'))
   assert.ok(fromRaw, '新报告应归入该股')
   assert.equal(fromRaw.kind, 'marker')
-  assert.match(fromRaw.text, /RAW 分段原文/)
+  assert.match(fromRaw.snippet, /RAW 分段原文/)
 })
 
 test('个股知识库：非法代码 400，未归集的标的不返回条目', async (t) => {
@@ -270,16 +280,141 @@ test('个股知识库：非法代码 400，未归集的标的不返回条目', a
   assert.equal(rebuild.json.stats.reused, 3, '报告没变时重建应复用解析结果')
   assert.equal(rebuild.json.stats.entries, 5)
 
-  const khFile = path.join(h.storeDir, 'stocks', stockFileName('600519.SH'))
-  assert.ok(fs.existsSync(khFile), '重建应写出单只股票的知识库文件')
-  const md = fs.readFileSync(khFile, 'utf8')
+  const rawFile = path.join(h.storeDir, 'stocks', stockRawFileName('600519.SH'))
+  assert.ok(fs.existsSync(rawFile), '重建应写出单只股票的原始记录（<代码>.raw.md）')
+  const md = fs.readFileSync(rawFile, 'utf8')
   assert.match(md, /贵州茅台/)
-  assert.match(md, /个股分析知识库/)
+  assert.match(md, /原始记录|分段原文/)
   assert.match(md, /现价 1500/)
+  assert.ok(!fs.existsSync(path.join(h.storeDir, 'stocks', stockFileName('600519.SH'))), '整理稿只在二次整理后生成，重建不写')
 
   // 再建一次：报告没变 → 复用解析结果（不再读文件正文）
   const again = await h.call('POST', '/dsh-invest/api/stock-notes/rebuild')
   assert.equal(again.status, 200)
   assert.equal(again.json.stats.parsed, 0)
   assert.equal(again.json.stats.reused, 3, '增量重建应复用未变化的报告解析结果')
-  assert.equal(again.json.stats.entries, 5, '复用后条目总数不变')})
+  assert.equal(again.json.stats.entries, 5, '复用后条目总数不变')
+})
+
+// ===== 二次整理（curated KB）=====
+
+const CURATED_DOC = [
+  '# 贵州茅台（600519.SH）· 个股知识库',
+  '> 覆盖 2026-11-10 至 2026-11-11 ｜ 来源 2 份报告 ｜ 更新 2026-11-12',
+  '',
+  '## 一句话结论',
+  '**维持持有**，支撑 1450，止损 1420。',
+  '',
+  '## 核心逻辑',
+  '- 现价 1500 位于支撑上方',
+  '',
+  '## 关键价位',
+  '| 项目 | 数值 |',
+  '|---|---|',
+  '| 现价 | 1500 |',
+  '| 止损 | 1420 |',
+  '',
+  '## 持仓与纪律',
+  '未涉及',
+  '',
+  '## 分歧与变化',
+  '无实质变化',
+  '',
+  '## 时间线',
+  '- 11-11 · 个股 · 现价 1500，支撑 1450',
+  '',
+  '## 待核实',
+  '无',
+].join('\n')
+
+test('二次整理：提示词包含固定结构、既有知识库与新增材料', () => {
+  const prompt = buildCuratePrompt({
+    code: '600519.SH', name: '贵州茅台', oldKb: '# 旧知识库\n一句话：持有',
+    entries: [{ ts: '2026-11-11 10:00:00', mode: '个股', report: 'reports/a.md', text: '现价 1500，止损 1420。' }],
+    reports: 3, now: '2026-11-12',
+  })
+  assert.match(prompt, /## 一句话结论/)
+  assert.match(prompt, /## 时间线/)
+  assert.match(prompt, /【既有知识库】/)
+  assert.match(prompt, /一句话：持有/)
+  assert.match(prompt, /【新增材料（按时间倒序）】/)
+  assert.match(prompt, /现价 1500，止损 1420/)
+  assert.match(prompt, /600519\.SH/)
+  assert.match(prompt, /禁止补充你自己的行情判断/)
+})
+
+test('二次整理：清洗与校验（去代码围栏、补标题、拒收劣质输出）', () => {
+  assert.match(sanitizeCurated('```markdown\n# 贵州茅台（600519.SH）· 个股知识库\n## 一句话结论\n持有\n```', { code: '600519.SH', name: '贵州茅台' }), /^# 贵州茅台/)
+  assert.match(sanitizeCurated('## 一句话结论\n持有', { code: '600519.SH', name: '贵州茅台' }), /^# 贵州茅台（600519\.SH）/)
+  assert.match(validateCurated(CURATED_DOC), /^$/)
+  assert.match(validateCurated('太短'), /过短/)
+  assert.match(validateCurated('## 一句话结论\n' + 'x'.repeat(400)), /缺少一级标题/)
+  assert.match(rawTimelineMarkdown({ code: '600519.SH', name: '贵州茅台', entries: [] }), /时间线/)
+})
+
+test('二次整理：模型与后台自动整理开关可保存，可切回继承宿主', async (t) => {
+  const h = makeHarness()
+  t.after(h.cleanup)
+
+  const saved = await h.call('POST', '/dsh-invest/api/model-settings', {
+    scope: 'stockKb', model: 'deepseek-official/deepseek-v4-flash@low', auto: false, concurrency: 2,
+  })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.json.scope, 'stockKb')
+  assert.equal(saved.json.settings.stockKb.model, 'deepseek-official/deepseek-v4-flash@low')
+  assert.equal(saved.json.settings.stockKb.auto, false)
+  assert.equal(saved.json.settings.stockKb.concurrency, 2)
+
+  const read = await h.call('GET', '/dsh-invest/api/model-settings')
+  assert.equal(read.json.stockKb.auto, false)
+  assert.equal(read.json.stockKb.model, 'deepseek-official/deepseek-v4-flash@low')
+  assert.equal(read.json.stockKb.concurrency, 2)
+
+  const badConcurrency = await h.call('POST', '/dsh-invest/api/model-settings', { scope: 'stockKb', model: 'inherit', concurrency: 9 })
+  assert.equal(badConcurrency.status, 400, '并发数超出 1-6 应拒绝')
+
+  const inherit = await h.call('POST', '/dsh-invest/api/model-settings', { scope: 'stockKb', model: 'inherit' })
+  assert.equal(inherit.status, 200)
+  assert.equal(inherit.json.settings.stockKb.model, 'inherit')
+})
+
+test('二次整理：手动触发后写入整理稿，追问改用知识库内容', async (t) => {
+  const h = makeHarness({ curatorText: CURATED_DOC })
+  t.after(h.cleanup)
+
+  // 整理前：详情返回兜底文档（原始时间线），不是整理稿
+  const before = await h.call('GET', '/dsh-invest/api/stock-note?code=600519.SH')
+  assert.equal(before.status, 200)
+  assert.match(before.json.markdown, /## 时间线/)
+  assert.ok(!before.json.markdown.includes('## 关键价位'), '未整理前不应出现整理稿结构')
+
+  const queued = await h.call('POST', '/dsh-invest/api/stock-note/curate', { code: '600519.SH' })
+  assert.equal(queued.status, 202)
+  assert.equal(queued.json.queued, true)
+
+  // 等队列跑完（整理是异步的，轮询详情）
+  let detail = null
+  for (let i = 0; i < 60; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    detail = await h.call('GET', '/dsh-invest/api/stock-note?code=600519.SH')
+    if (detail.json.status === 'done' || detail.json.status === 'error') break
+  }
+  assert.equal(detail && detail.json.status, 'done', '整理应完成：' + (detail && detail.json.error))
+  assert.match(detail.json.markdown, /## 关键价位/)
+  assert.match(detail.json.model, /deepseek-v4\.1-flash/)
+
+  const curatedFile = path.join(h.storeDir, 'stocks', stockFileName('600519.SH'))
+  assert.ok(fs.existsSync(curatedFile), '整理稿应落盘为 <代码>.md')
+  assert.match(fs.readFileSync(curatedFile, 'utf8'), /维持持有/)
+  assert.ok(h.calls.length >= 1, '应调用一次整理模型')
+  assert.match(h.calls[0].prompt[0].text, /【既有知识库】/, '首次整理也走同一套提示词')
+
+  // 追问：上下文是整理稿，且告知知识库更新时间
+  const asked = await h.call('POST', '/dsh-invest/api/stock-ask', { code: '600519.SH', question: '现在该不该买？' })
+  assert.equal(asked.status, 200)
+  assert.match(asked.json.answer, /知识库/)
+  const askPrompt = h.calls[h.calls.length - 1].prompt[0].text
+  assert.match(askPrompt, /【知识库全文】/)
+  assert.match(askPrompt, /维持持有/)
+  assert.match(askPrompt, /知识库截至/)
+})

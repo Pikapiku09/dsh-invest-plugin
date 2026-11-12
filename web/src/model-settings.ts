@@ -58,7 +58,39 @@ export function modelSettingsDirtyCount(state: AppState): number {
   const roles = state.modelSettings.roles.filter((role) => modelRouteFor(role, state).trim() !== (role.route || 'inherit')).length;
   const templates = state.modelSettings.templates.filter((template) => modelPresetFor(template, state) !== (template.preset || 'inherit')).length;
   const host = (state.modelHostDraft || 'inherit') !== serverHostValue(state.modelSettings) ? 1 : 0;
-  return roles + templates + host;
+  const stockKbModel = modelStockKb(state) !== (state.modelSettings.stockKb?.model || '') ? 1 : 0;
+  const stockKbAuto = modelStockKbAuto(state) !== (state.modelSettings.stockKb?.auto !== false) ? 1 : 0;
+  const stockKbConcurrency = modelStockKbConcurrency(state) !== (state.modelSettings.stockKb?.concurrency || 3) ? 1 : 0;
+  return roles + templates + host + stockKbModel + stockKbAuto + stockKbConcurrency;
+}
+
+/** 知识库整理模型草稿：没改过就用服务器值 */
+export function modelStockKb(state: AppState): string {
+  const current = state.modelSettings?.stockKb?.model || '';
+  const draft = (state.modelStockKbDraft || '').trim();
+  return draft || current;
+}
+
+/** 「后台自动整理」开关：没改过就用服务器值（默认开） */
+export function modelStockKbAuto(state: AppState): boolean {
+  if (typeof state.modelStockKbAutoDraft === 'boolean') return state.modelStockKbAutoDraft;
+  return state.modelSettings?.stockKb?.auto !== false;
+}
+
+/** 整理并发数：没改过就用服务器值（默认 3） */
+export function modelStockKbConcurrency(state: AppState): number {
+  const value = state.modelStockKbConcurrencyDraft;
+  if (typeof value === 'number' && value >= 1) return value;
+  const server = Number(state.modelSettings?.stockKb?.concurrency);
+  return Number.isFinite(server) && server >= 1 ? server : 3;
+}
+
+/** 把路由串拆成 模型 / 推理强度（default = 不带 @） */
+export function splitStockKbRoute(route: string): { model: string; effort: string } {
+  const first = String(route || '').split('|')[0].trim();
+  if (!first || first === 'inherit') return { model: 'inherit', effort: 'default' };
+  const at = first.lastIndexOf('@');
+  return { model: at > 0 ? first.slice(0, at) : first, effort: at > 0 ? first.slice(at + 1) : 'default' };
 }
 
 /** 服务器当前生效的宿主模型取值：'inherit'（跟随会话）或 provider/model（自定义覆盖） */
@@ -138,6 +170,38 @@ function roleCard(role: ModelRoleSetting, state: AppState): string {
     + '<div class="effective-config"><span>当前生效</span><code title="' + escapeHtml(effectiveDisplay) + '">' + escapeHtml(effectiveDisplay) + '</code></div></article>';
 }
 
+function stockKbCard(state: AppState): string {
+  const settings = state.modelSettings!;
+  const info = settings.stockKb;
+  const current = info?.model || '';
+  const currentLabel = current === 'inherit' ? '继承宿主' : (current || '未设置');
+  const draft = modelStockKb(state);
+  const parts = splitStockKbRoute(draft);
+  const auto = modelStockKbAuto(state);
+  const concurrency = modelStockKbConcurrency(state);
+  const dirty = draft !== current || auto !== (info?.auto !== false) || concurrency !== (info?.concurrency || 3);
+  const options = [...(settings.modelOptions || [])].filter((option) => option.value !== 'inherit');
+  if (parts.model !== 'inherit' && !options.some((option) => option.value === parts.model)) {
+    options.push({ value: parts.model, label: '当前自定义 / ' + parts.model });
+  }
+  options.unshift({ value: 'inherit', label: '继承宿主模型（默认）' });
+  const modelSelect = `<select class="model-route-input" data-role-model="stockKb" aria-label="知识库整理模型">${options.map((option) => `<option value="${escapeHtml(option.value)}" ${parts.model === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`;
+  const effortSelect = `<select class="model-effort-input" data-role-effort="stockKb" aria-label="知识库整理推理强度" ${parts.model === 'inherit' ? 'disabled' : ''}>${EFFORT_OPTIONS.map((option) => `<option value="${escapeHtml(option.value)}" ${parts.effort === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`;
+  return `<section class="panel host-model-card ${dirty ? 'is-dirty' : ''}">
+    <div class="model-card-head"><span class="model-role-icon">${icon('book', 18)}</span>
+      <div><h3>知识库整理</h3><span class="mono">stock kb curation</span></div>
+      <span class="config-badge ${dirty ? 'dirty' : 'custom'}">${dirty ? '未保存' : '已生效'}</span></div>
+    <p class="host-model-current">当前整理模型 <code>${escapeHtml(currentLabel)}</code></p>
+    <div class="model-route-row">
+      <label class="model-route-label" for="stockkb-model">模型${modelSelect}</label>
+      <label class="model-route-label" for="stockkb-effort">推理强度${effortSelect}</label>
+      <label class="model-route-label" for="stockkb-concurrency">并发数<select id="stockkb-concurrency" class="model-route-input" data-stockkb-concurrency aria-label="知识库整理并发数">${[1, 2, 3, 4, 6].map((n) => `<option value="${n}" ${concurrency === n ? 'selected' : ''}>${n} 只同时整理</option>`).join('')}</select></label>
+    </div>
+    <label class="field-check"><input type="checkbox" data-stockkb-auto ${auto ? 'checked' : ''} /> 后台自动整理（启动后自动把未整理的股票排队整理，无需逐只点开）</label>
+    <p class="field-help">${escapeHtml(info?.description || '把个股的历史分析节选整理成可读知识库时使用的模型')}；每只股票只在有新分析时整理一次，建议用便宜的 flash 低思考档。</p>
+  </section>`;
+}
+
 function templateCard(template: ModelTemplateSetting, presets: ModelPresetDefinition[], state: AppState): string {
   const selected = modelPresetFor(template, state);
   const effective = template.preset || 'inherit';
@@ -175,6 +239,7 @@ export function renderModelSettings(state: AppState): string {
     + (state.modelSettingsError ? `<div class="inline-warning">${icon('alert', 15)}刷新失败，当前显示上次读取的配置：${escapeHtml(state.modelSettingsError)}</div>` : '')
     + incomplete
     + hostModelCard(state)
+    + stockKbCard(state)
     + `<section class="settings-guide"><span>${icon('database', 19)}</span><div><strong>路由与预设分离管理</strong><p>宿主模型决定「继承宿主」与一键任务的默认执行模型；角色路由直接选择已注册模型与推理强度；推理强度默认 <code>default</code>（不下发，由模型自身决定）。模板预设提供继承宿主、经济快速、均衡、高质量、快速五档。</p></div></section>
      <section class="settings-section">${sectionHeading('分析师角色', '5 个角色均可独立设置，默认继承宿主；推理强度默认 default')}
        <div class="model-role-grid">${roles.map((role) => roleCard(role, state)).join('')}</div></section>
