@@ -1061,20 +1061,28 @@ function codeForReportPath(reportPath: string): string {
   return String((report && report.codes && report.codes[0]) || '');
 }
 
+/** 知识库页：没有选中标的时自动选第一只（按名称排序），避免右侧空白。
+ *  必须在确认「当前确实在知识库页」后调用，否则会触发 navigate('ask') 覆盖默认首页。 */
+function ensureAskSelection(): void {
+  if (state.view !== 'ask' || state.askStock || !state.askStocks.length) return;
+  const first = [...state.askStocks].sort((a, b) => compareStockName(a.name || a.code, b.name || b.code))[0];
+  if (first) void selectAskStock(first.code);
+}
+
 async function loadAskStocks(force = false): Promise<void> {
   if (state.askStocksLoading) return;
-  if (!force && state.askStocks.length && Date.now() - askStocksAt < 60_000) return;
+  if (!force && state.askStocks.length && Date.now() - askStocksAt < 60_000) {
+    // 命中缓存：不重新拉取，但仍要保证当前页有选中标的（否则右侧空白）
+    ensureAskSelection();
+    return;
+  }
   state.askStocksLoading = true; state.askStocksError = ''; render();
   try {
     const data = await api.stockNotes();
     state.askStocks = data.stocks || [];
     state.askStocksBuiltAt = data.built_at || '';
     askStocksAt = Date.now();
-    // 首次进入且没有选中标的：按名称排序取第一只，右侧不留空白
-    if (!state.askStock && state.askStocks.length) {
-      const first = [...state.askStocks].sort((a, b) => compareStockName(a.name || a.code, b.name || b.code))[0];
-      if (first) void selectAskStock(first.code);
-    }
+    ensureAskSelection();
   } catch (error) {
     state.askStocksError = errorMessage(error);
   } finally {
