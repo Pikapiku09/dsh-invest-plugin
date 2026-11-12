@@ -118,7 +118,12 @@ test('运行日志自愈：把有报告无日志的历史任务补写进 runs.js
   assert.equal(rec.recovered, true, '补写行应标记 recovered')
   assert.equal(rec.mode, '选股')
   assert.equal(rec.reportPath, reportPath)
-  assert.ok(rec.ts.startsWith('2026-11-09T02:10:10'), '时间应取自报告文件名（本地 10:10:10 → UTC 02:10:10）')
+  // 报告文件名里的时间戳是「本地时间」，实现按本地解释后转 ISO(UTC)。
+  // 断言必须用同一语义推导期望值：不能硬编码 UTC+8——GitHub runner 默认 TZ=UTC，
+  // 会把 10:10:10 原样当成 UTC，导致这条用例只在 Asia/Shanghai 下通过（v0.44.2 CI 踩到）。
+  const expectedTs = new Date(2026, 10, 9, 10, 10, 10).toISOString().slice(0, 19)
+  assert.ok(rec.ts.startsWith(expectedTs),
+    '时间应取自报告文件名（本地 10:10:10 → UTC）：期望 ' + expectedTs + '，实际 ' + rec.ts)
 
   const second = await call('POST', '/dsh-invest/api/run-log/repair')
   assert.equal(second.json.appended, 0, '重复调用不应重复补写')

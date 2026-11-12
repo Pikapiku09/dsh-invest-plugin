@@ -2,6 +2,36 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.44.3（2026-11-12）
+
+**修复 CI 的最终根因：一条测试硬编码了 UTC+8 时区假设，runner 默认 UTC 必挂**
+
+v0.44.2 修完宿主私有包后 CI 仍失败。这次不再猜——**把 GitHub runner 的典型环境逐项施加到干净 clone 上做二分**：
+
+| 施加的环境 | 结果 |
+|---|---|
+| 基线（无额外环境变量） | ✅ 通过 |
+| `CI=true` + `TZ=UTC` | ❌ **失败** |
+| `LANG=C` + `LC_ALL=C` | ✅ 通过 |
+| `CI=true TZ=UTC LANG=C LC_ALL=C` | ❌ 失败 |
+| `GITHUB_ACTIONS=true` | ✅ 通过 |
+
+**唯一变量是 `TZ=UTC`**——GitHub 托管 runner 默认 UTC，而开发机是 Asia/Shanghai。
+
+- **根因**：`test/run-log.test.js` 断言 `rec.ts.startsWith('2026-11-09T02:10:10')`，
+  即把「报告文件名里的本地 10:10:10」硬编码成 UTC+8 的 02:10:10Z。
+  实现侧是 `new Date('2026-11-09T10:10:10')`（无时区后缀 → 按本地时间解释）再 `toISOString()`，
+  在 UTC runner 上结果就是 `10:10:10Z`，断言必然失败。这类用例**只在东八区开发机上通过**。
+- **修复**：期望值改为用同一语义推导——`new Date(2026, 10, 9, 10, 10, 10).toISOString()`，
+  与实现口径一致，任何时区都成立；失败信息同时打印期望与实际时间戳。
+- **CI 增强**（同时保留，便于以后自助排障）：
+  - 失败要点以 `::error::` 输出到 **Annotations**——未登录的 Summary 页也能直接看到是哪个用例、差在哪；
+  - `--test-concurrency=1` 串行执行，排除并行调度差异；
+  - 固定 `LANG/LC_ALL/TZ`，让 CI 环境显式化而不是隐式继承；
+  - 失败时把完整 `test-output.log` 作为 artifact 上传。
+- **验收**：本机（Asia/Shanghai）123/123；本机 `TZ=UTC` 123/123；
+  干净 clone + `TZ=UTC CI=true LANG=C` + 无 node_modules + 只有 python3，全量通过。
+
 ## v0.44.2（2026-11-12）
 
 **修复 CI 真实根因：两个宿主私有包被硬依赖，干净 clone 缺 node_modules 时模块直接加载失败**

@@ -13,22 +13,54 @@ jobs:
   backend:
     name: 后端测试（node --test，含版本一致性守卫）
     runs-on: ubuntu-latest
+    # 固定 locale：测试里大量中文文件名（持仓.json / 报告.md），避免 runner 默认 locale 造成差异
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      TZ: Asia/Shanghai
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # test/ 下的用例只依赖 Node 内置模块与仓库内相对导入，因此**不做 npm install**：
-      # 既快，也顺带绕开根依赖里的私有包（@deepseek-ai/*）在 CI 上无法拉取的问题。
-      - name: 环境自检（失败时一眼看出缺什么）
+      - name: 环境自检
+        # 每一步都容错：自检是为了看信息，不能让它自己把 job 弄挂
+        shell: bash
         run: |
-          node -v
-          npm -v
-          python3 -V || echo "WARN: 没有 python3（lib 会回退 python）"
-          ls test | head -30
+          echo "node: $(node -v 2>&1)"
+          echo "npm: $(npm -v 2>&1 || echo 不可用)"
+          echo "python3: $(python3 -V 2>&1 || echo 不可用)"
+          echo "python: $(command -v python || echo 不存在)"
+          echo "node_modules: $([ -d node_modules ] && echo 存在 || echo 不存在)"
+          echo "test 文件数: $(ls test | wc -l)"
+          ls test || true
       - name: 运行全量测试
-        # spec 报告器：失败时把用例名/断言差异直接打在日志里，不用再靠猜
-        run: node --test --test-reporter=spec
+        shell: bash
+        run: |
+          set +e
+          # --test-concurrency=1：串行执行，排除并行调度带来的偶发差异；
+          # 失败信息同时写入日志与 ::error:: 注解（注解在未登录的 Summary 页即可见）
+          node --test --test-reporter=spec --test-concurrency=1 > test-output.log 2>&1
+          code=$?
+          echo "==== 测试退出码：$code ===="
+          tail -30 test-output.log
+          if [ "$code" -ne 0 ]; then
+            echo "==== 失败要点（下方 Annotations 可直接看）===="
+            grep -nE '✖|not ok|Error|ERR_[A-Z_]+|Cannot find|AssertionError|ENOENT|EACCES' test-output.log \
+              | head -12 \
+              | while IFS= read -r line; do
+                  msg=$(printf '%s' "$line" | sed 's/::/:/g' | cut -c1-350)
+                  echo "::error::${msg}"
+                done
+          fi
+          exit $code
+      - name: 失败时保留完整日志（可下载）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: test-output.log
+          retention-days: 7
 
   web:
     name: 前端构建（tsc --noEmit + vite build）
