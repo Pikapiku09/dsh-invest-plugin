@@ -20,6 +20,7 @@ import type { SystemNotice } from './notify';
 import { fileToBase64, positionsForConfirm, prepareScreenshotForUpload, renderHoldings, validateHoldingsDraft } from './holdings';
 import type { PreparedScreenshot } from './holdings';
 import { LEDGER_DEFAULT_COLUMNS } from './types';
+import { APP_VERSION } from './version';
 import { compareStockName } from './stock-index';
 import type { ConclusionRecord, HoldingPosition, HoldingsImportInput, Job, ModelSettingsSaveInput, TaskTemplate, WatchAlert, WorkbenchView, WatchlistUpdateInput, LedgerColKey } from './types';
 
@@ -178,6 +179,12 @@ function render(): void {
     ask: '个股知识库', 'model-settings': '模型设置', holdings: '持仓工作区',
   };
   document.getElementById('topbarContext')!.textContent = labels[state.view];
+  // 左上角品牌区的插件版本号（构建期由 packages/dsh-invest/package.json 注入，前端不硬编码）
+  const versionEl = document.getElementById('appVersion');
+  if (versionEl) {
+    versionEl.textContent = 'v' + APP_VERSION;
+    versionEl.title = '插件版本 v' + APP_VERSION + '（来源 packages/dsh-invest/package.json）';
+  }
   document.querySelectorAll<HTMLElement>('.nav-item').forEach((item) => {
     const selected = item.dataset.view === state.view;
     item.classList.toggle('active', selected);

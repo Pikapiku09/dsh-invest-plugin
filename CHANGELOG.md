@@ -2,6 +2,24 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.43.0（2026-11-12）
+
+**工作台左上角显示当前插件版本号**
+
+用户想直接看到正在运行的到底是哪一版；此前版本号只存在于仓库文件里，界面上没有任何提示。
+
+- **品牌区显示版本**：左上角「衡知 / INVEST WORKBENCH」下方新增版本徽标（`#appVersion`），
+  hover 提示完整来源说明；配色走 `var(--muted)` / 主色边框，深浅主题自适应。
+- **前端不硬编码版本**：`web/vite.config.ts` 构建时读取 `packages/dsh-invest/package.json`，
+  注入 `__APP_VERSION__`，经 `web/src/version.ts` 暴露为 `APP_VERSION`。未经 vite 构建直接跑源码时
+  退化为 `dev`（用 `typeof` 守卫，不会 ReferenceError）。后续发版只需改 package.json，
+  界面自动跟随，不存在第二个版本来源。
+- **布局细节**：侧边栏内容宽度只有 200px（232px − 左右各 16px），若把徽标右对齐会与
+  「INVEST WORKBENCH」抢宽度。改为放进 `.brand-copy` 列内并 `width: fit-content`，
+  换行/溢出均不会发生。
+- **测试**：`test/version-sync.test.js` 继续守这场一致性（7 项），全量 `node --test` **115/115**；
+  前端 `tsc --noEmit` 无错误，vite 构建产物中已包含注入后的版本号。
+
 ## v0.42.0（2026-11-12）
 
 **报告提速：图表与取数脚本化，深度分析阶段耗时大幅下降**
