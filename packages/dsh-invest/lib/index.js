@@ -1,7 +1,7 @@
 // dsh-invest Host 半部：invest_run 工具 + /api/dsh-invest 路由 + agent 指引
 // 常规 Cordis 插件（profile bundle 挂载），所有会话可见
-import z from "@deepseek-ai/schemastery"
-import { defineTool } from "@deepseek-ai/dsh-tools"
+// 宿主私有包（schemastery / dsh-tools）走可选导入：见 host-deps.js（干净 clone / 测试环境缺包时自动降级）
+import { z, defineTool } from "./host-deps.js"
 import { promises as fsp } from "node:fs"
 import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY } from "./prompts.js"
 import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv, z2, localYmd } from "./pure.js"

@@ -2,6 +2,29 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.44.2（2026-11-12）
+
+**修复 CI 真实根因：两个宿主私有包被硬依赖，干净 clone 缺 node_modules 时模块直接加载失败**
+
+v0.44.1 修完「测试依赖本机路径」和「python 命名」后，CI 后端 job 仍然失败（6 秒）。
+这次用本机 WSL(Ubuntu) + Node 22 **完整复现了 CI**：`git clone` 出干净仓库再跑 `node --test`。
+
+- **复现结果**：`test/*.test.js` 中凡是 `import ... from '../packages/dsh-invest/lib/index.js'`
+  的文件全部报 `'test failed'`；直接 import 拿到真实报错：
+  `Cannot find package '@deepseek-ai/schemastery' imported from .../lib/index.js`。
+- **根因**：`index.js` 顶部有两行硬依赖——`import z from "@deepseek-ai/schemastery"` 与
+  `import { defineTool } from "@deepseek-ai/dsh-tools"`。这两个都是 **DSH 宿主提供的私有包**，
+  不在公共 npm 上。本机 `node_modules` 里有（所以一直看不出来），而 CI 干净 clone 没有：
+  静态 import 失败发生在**模块链接阶段**，测试文件连加载都过不去。
+- **修复**：新增 `packages/dsh-invest/lib/host-deps.js`，用顶层 await 动态导入这两个包，
+  失败时降级到最小实现（schema 桩 + `defineTool = def => def`），`index.js` 改为从该模块取 `z` / `defineTool`。
+  - 宿主环境：始终拿到真实实现，行为不变；
+  - 测试/独立环境：模块可加载，`Config` schema 与 `defineTool` 不参与断言。
+- **验收方式**：先在 WSL 里用干净 clone 复现失败，修复后再跑干净 clone 全量测试，
+  确认 121 通过 / 2 跳过 / 0 失败（OCR 两条因无示例图与 rapidocr 按设计跳过）。
+- 顺带记一笔方法论：**CI 失败不要靠猜——本机有 WSL(Linux) 就应当直接在干净的 Linux 环境复现**，
+  这次正是 `git clone` + 无 node_modules 才把两轮误判（路径、python）之后真正的根因挖出来。
+
 ## v0.44.1（2026-11-12）
 
 **修复 CI 后端失败：测试不能依赖开发者本机工作区，python 解释器要跨平台探测**
