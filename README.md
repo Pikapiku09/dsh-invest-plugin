@@ -224,7 +224,8 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | 结论事件 | `.dsh-invest/conclusions.jsonl` | 结构化结论日志 |
 | 持仓账本 | `.dsh-invest/持仓.json` | 跨会话唯一真相 |
 | 运行日志 | `.dsh-invest/runs.jsonl` | 每阶段实际模型、耗时、状态 |
-| 图表 | `.dsh-invest/charts/` | 子代理生成的 SVG |
+| 图表 | `.dsh-invest/charts/` | 由 `scripts/stockchart.js` 生成的 SVG 与数据 JSON |
+| 取数包 | `.dsh-invest/cache/pack/` | `scripts/fetch_pack.js` 落盘的完整原始数据（按标的+日期） |
 | 报告归档 | `.dsh-invest/reports/` + `invest-outputs/<时间戳>_<问题>/` | 报告.md + 图表副本 |
 
 索引重建：`python tools/index_store.py`（SQLite + index.json 一次生成）。
@@ -277,6 +278,12 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | `scripts/realtime_quote.py` | `python realtime_quote.py 600519 000768.SZ` | 腾讯财经实时行情兜底 |
 | `scripts/holdings.py` | `sync / list / add / update / remove / set-account` | 持仓账本维护 |
 | `scripts/chart.py` | `python chart.py <data.json> <out.svg>` | **通用 SVG 图表生成器**（price 走势图 / macd 背离图） |
+| `scripts/fetch_pack.js` | `node fetch_pack.js 600519.SH [天数]` | **一次调用取全套个股数据**，输出单位统一的排版摘要（价格/均线/估值/资金/财务/业绩/龙虎榜/融资/相对强度） |
+| `scripts/stockchart.js` | `node stockchart.js 600519.SH [price\|macd\|both] [根数]` | **一条命令出图**：取数 + MA/MACD/九转/关键价位/背离 → SVG，并返回可直接引用的技术面摘要 |
+
+> 这两个 Node 脚本由仓库 `scripts/` 托管，`node tools/build.js` 时自动同步到 `<BASE_DIR>/scripts/`。
+> 设计动机见 CHANGELOG v0.42.0：此前图表数据 JSON（145 天 × 7 数组 ≈ 13 KB）由模型手写，
+> 单标的深度分析因此多耗 80–160 秒且存在手算误差；现全部改为确定性计算。
 
 ### chart.py 数据格式
 

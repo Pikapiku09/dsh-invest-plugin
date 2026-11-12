@@ -65,6 +65,34 @@ fs.writeFileSync(path.join(root, 'packages', 'dsh-invest', 'lib', 'routes.js'), 
 
 console.log('build ok -> dist/invest-run.host.js, dist/invest-run.client.js, packages/dsh-invest/lib/{prompts,pure,routes}.js')
 
+// ---- 运行时脚本部署（v0.42.0 起）----
+// stockchart.js / fetch_pack.js 由本仓库托管（唯一事实来源），提示词按
+// {{BASE_DIR}}/scripts/<name> 调用；构建时同步到工作区，避免仓库副本与工作区副本漂移。
+// 工作区目录不存在时静默跳过（例如 CI 环境）。
+const DEPLOY_SCRIPTS = ['stockchart.js', 'fetch_pack.js']
+try {
+  const baseDir = process.env.DSH_INVEST_BASE_DIR || 'E:/Dsh_WorkSapce/Dify_Agents'
+  if (fs.existsSync(baseDir)) {
+    const targetDir = path.join(baseDir, 'scripts')
+    fs.mkdirSync(targetDir, { recursive: true })
+    const deployed = []
+    const same = []
+    for (const name of DEPLOY_SCRIPTS) {
+      const from = path.join(root, 'scripts', name)
+      const to = path.join(targetDir, name)
+      if (!fs.existsSync(from)) continue
+      const next = fs.readFileSync(from)
+      const prev = fs.existsSync(to) ? fs.readFileSync(to) : null
+      if (prev && prev.equals(next)) { same.push(name); continue }
+      fs.writeFileSync(to, next)
+      deployed.push(name)
+    }
+    console.log('运行时脚本部署 -> ' + targetDir + '｜已更新: ' + (deployed.join(', ') || '无') + '｜无变化: ' + (same.join(', ') || '无'))
+  }
+} catch (e) {
+  console.warn('[部署] 运行时脚本同步失败（不影响构建）: ' + e.message)
+}
+
 // ---- 提示词预算检查（v0.17.0 起）----
 try {
   const budget = require('./check_prompt_budget.js')
