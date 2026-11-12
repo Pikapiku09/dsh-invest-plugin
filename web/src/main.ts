@@ -299,10 +299,12 @@ function dispatchAlertNotifications(alerts: WatchAlert[]): void {
 }
 
 // 判断质量回测（v0.44.0）：结论库 × 日线 → 命中率。force=false 时有缓存直接渲染，不重复跑。
+// v0.45.0 起同时拉「采集审计」：让用户看得见数据从哪来、有没有漏。
 async function loadBacktest(force: boolean): Promise<void> {
   if (state.backtestLoading) return;
   if (!force && state.backtest) { render(); return; }
   state.backtestLoading = true; state.backtestError = '';
+  void loadAudit();
   render();
   try {
     state.backtest = await api.backtest();
@@ -311,6 +313,48 @@ async function loadBacktest(force: boolean): Promise<void> {
     if (force) state.backtest = null;
   } finally {
     state.backtestLoading = false;
+    render();
+  }
+}
+
+async function loadAudit(): Promise<void> {
+  state.auditLoading = true; state.auditError = '';
+  try {
+    state.audit = await api.conclusionsAudit();
+  } catch (error) {
+    state.auditError = errorMessage(error);
+  } finally {
+    state.auditLoading = false;
+    if (state.view === 'backtest') render();
+  }
+}
+
+/** 回溯补录：先 dry-run 拿到候选，确认后再写盘，避免误操作 */
+async function backfillConclusions(): Promise<void> {
+  if (state.backfillRunning) return;
+  state.backfillRunning = true;
+  render();
+  try {
+    const preview = await api.conclusionsBackfill(false);
+    if (!preview.ok) throw new Error(preview.error || '扫描失败');
+    if (!preview.candidates) {
+      toast('没有可补录的历史结论——归档报告里的结构化行都已入库。', 'info');
+      return;
+    }
+    const ok = window.confirm(
+      `扫描到 ${preview.candidates} 条可补录结论（来自 ${(preview.reports || []).length} 份历史报告）。\n\n`
+      + `补录只会写入报告里确实存在的【结论结构化】行，不会推断或编造；按（报告+标的）去重，可反复执行。\n\n`
+      + `确认写入结论库？`,
+    );
+    if (!ok) { toast('已取消补录。', 'info'); return; }
+    const applied = await api.conclusionsBackfill(true);
+    if (!applied.ok) throw new Error(applied.error || '补录失败');
+    toast(`补录完成：新增 ${applied.added} 条结论。`, 'success');
+    await loadBacktest(true);
+  } catch (error) {
+    toast(`补录失败：${errorMessage(error)}`, 'error');
+  } finally {
+    state.backfillRunning = false;
     render();
   }
 }
@@ -1606,6 +1650,7 @@ document.addEventListener('click', (event) => {
   const action = target.dataset.action;
   if (action === 'navigate' && target.dataset.view) navigate(target.dataset.view as WorkbenchView);
   else if (action === 'backtest-refresh') void loadBacktest(true);
+  else if (action === 'conclusions-backfill') void backfillConclusions();
   else if (action === 'back-to-top') window.scrollTo({ top: 0, behavior: 'smooth' });
   else if (action === 'ask-latest-report' && target.dataset.code) {
     // 标的档案的「追问」入口：直接进这只股票的知识库

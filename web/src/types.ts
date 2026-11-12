@@ -318,6 +318,13 @@ export interface BacktestRow {
   hit5: boolean | null;
   hit20: boolean | null;
   thesis: string;
+  /** 溯源（v0.45.0）：这条结论来自哪次运行 / 哪份报告 */
+  runId?: string;
+  report?: string;
+  source?: string;
+  /** 模型自评置信度 0-1；历史记录为 null */
+  confidence?: number | null;
+  counterCase?: string;
 }
 
 export interface BacktestGroup extends BacktestSummary {
@@ -335,6 +342,16 @@ export interface BacktestSummary {
   avgRet20: number | null;
   avgEx5: number | null;
   avgEx20: number | null;
+  /** Wilson 95% 置信区间（小样本时区间极宽，用来识破「1/1=100%」） */
+  rate5CI?: { low: number; high: number } | null;
+  rate20CI?: { low: number; high: number } | null;
+  /** 交易质量指标（v0.45.0）：只看胜率会被「高胜率亏大钱」骗 */
+  dirSamples?: number;
+  winRate?: number | null;
+  avgWin?: number | null;
+  avgLoss?: number | null;
+  plRatio?: number | null;
+  expectancy?: number | null;
 }
 
 export interface BacktestResponse {
@@ -345,9 +362,44 @@ export interface BacktestResponse {
   byStage: BacktestGroup[];
   byStance: BacktestGroup[];
   byMonth: BacktestGroup[];
+  byConfidence?: BacktestGroup[];
+  confidenceCoverage?: number;
   rows: BacktestRow[];
   warnings: string[];
   lastTradeDate: string;
+}
+
+/** 结论采集审计（v0.45.0）：数据从哪来、哪些运行没进库、为什么 */
+export interface ConclusionAuditResponse {
+  generatedAt: string;
+  runs: {
+    total: number; withConclusions: number; without: number; failed: number; recovered: number;
+    realTotal: number; realWith: number; realCoverage: number | null;
+    recentReal: number; recentWith: number; recentCoverage: number | null; recentWindowDays: number;
+  };
+  conclusions: { total: number; distinctCodes: number; orphans: number; withConfidence: number };
+  byMode: Array<{ mode: string; runs: number; withConclusions: number; conclusions: number; failed: number }>;
+  missing: Array<{ ts: string; mode: string; question: string; reason: string }>;
+  dateDist: Array<{ date: string; n: number }>;
+  reports: { total: number; parseable: number };
+  /** 执行率对账（v0.45.0）：建议 vs 实际持仓 */
+  execution?: {
+    available: boolean;
+    positions: number;
+    matched: number;
+    notExecuted: Array<{ code: string; stance: string; ts: string; kind: string }>;
+    note: string;
+  } | null;
+  lineage: { source: string; window: string; note: string };
+}
+
+export interface BackfillResponse {
+  ok: boolean;
+  applied?: boolean;
+  added: number;
+  candidates: number;
+  reports?: Array<{ file: string; blocks: number; added: number }>;
+  error?: string;
 }
 
 export interface StockResolveResponse {

@@ -263,30 +263,53 @@ function apply(ctx, config) {
       + "\n请先判断上次结论是否已兑现或失效，再明确写出本次与上次的**相同点、变化点及变化原因**；没有新证据不得简单重复历史结论。"
   }
 
-  // P3：从最后一个含结构化结论的成功阶段落库（最多 3 个核心标的）
+  // P3：结构化结论落库（v0.45.0 修正采集口径）
+  //
+  // 旧实现只取「最后一个含结论的成功阶段、最多 3 条」——选股模式四阶段里，
+  // 选股师给的候选会被总判断师的 3 条完全覆盖，是真实的数据遗漏点。
+  // 新口径：**收集所有成功阶段**的结构化结论，同一标的后出现的阶段覆盖前面的（下游更权威），
+  // 去重后最多 20 个标的；同时记录 runId / stage / report，保证每条回测数据都可溯源。
   const persistConclusions = async (mode, question, callId, outputs, reports, policy) => {
     const fs = ctx.get("fs")
     if (fs === void 0) return 0
-    let chosen = null
-    let blocks = []
-    for (let i = outputs.length - 1; i >= 0; i--) {
-      const o = outputs[i]
+    const byCode = new Map()
+    let anyBlock = false
+    for (const o of outputs) {
       if (!o.ok) continue
       const parsed = parseConclusionBlocks(o.text)
-      if (parsed.length) { chosen = o; blocks = parsed; break }
+      if (!parsed.length) continue
+      anyBlock = true
+      for (const b of parsed) {
+        const code = String(b.code || "").trim().toUpperCase()
+        if (!/^\d{6}\.(SH|SZ|BJ)$/.test(code)) continue
+        // 后出现的阶段覆盖同标的的旧结论（总判断 > 深度 > 选股）
+        byCode.set(code, { block: b, stage: o.stage })
+      }
     }
-    if (!chosen || !blocks.length) return 0
-    const lines = blocks.slice(0, 3).map((b) => JSON.stringify({
-      ts: new Date().toISOString(), mode, question: String(question).slice(0, 200), callId,
-      code: b.code, stance: b.stance || "未明",
-      target: (typeof b.target === "number" ? b.target : null),
-      stop: (typeof b.stop === "number" ? b.stop : null),
-      buy_low: (typeof b.buy_low === "number" ? b.buy_low : null),
-      buy_high: (typeof b.buy_high === "number" ? b.buy_high : null),
-      thesis: String(b.thesis || "").slice(0, 200),
-      invalidate_if: String(b.invalidate_if || "").slice(0, 200),
-      stage: chosen.stage, report: reports[0] || null, source: "invest_run",
-    }))
+    if (!anyBlock || !byCode.size) return 0
+    const cNum = (v, lo, hi) => {
+      const n = Number(v)
+      return (Number.isFinite(n) && n >= lo && n <= hi) ? Math.round(n * 100) / 100 : null
+    }
+    const entries = Array.from(byCode.entries()).slice(0, 20)
+    const lines = entries.map(([code, item]) => {
+      const b = item.block
+      return JSON.stringify({
+        ts: new Date().toISOString(), mode, question: String(question).slice(0, 200), callId,
+        code, stance: b.stance || "未明",
+        // 置信度（v0.45.0 新增）：模型自评 0-1，用于回测做校准分析；历史记录没有此字段
+        confidence: cNum(b.confidence, 0, 1),
+        target: (typeof b.target === "number" ? b.target : null),
+        stop: (typeof b.stop === "number" ? b.stop : null),
+        buy_low: (typeof b.buy_low === "number" ? b.buy_low : null),
+        buy_high: (typeof b.buy_high === "number" ? b.buy_high : null),
+        thesis: String(b.thesis || "").slice(0, 200),
+        invalidate_if: String(b.invalidate_if || "").slice(0, 200),
+        // 反方论证（v0.45.0 新增）：总判断师必须写「如果我错了会怎么错」
+        counter_case: String(b.counter_case || "").slice(0, 240),
+        stage: item.stage, report: reports[0] || null, source: "invest_run",
+      })
+    })
     try {
       await withLock("conclusions", async () => {
         const target = await fs.resolve(CONCLUSIONS_LOG)
@@ -295,8 +318,16 @@ function apply(ctx, config) {
         const prefix = existing && !existing.endsWith("\n") ? existing + "\n" : existing
         await fs.writeText(target, prefix + lines.join("\n") + "\n", void 0, void 0, policy)
       })
-      // 同步标的档案：观察/看多 → 建档或更新观察档案；持有/减仓 → 更新持仓档案
-      try { await syncWatchlistFromConclusions(blocks.slice(0, 3)) } catch (e) { /* 档案同步失败不阻断结论落库 */ }
+      // 同步标的档案：只取下游（更权威）阶段的若干条，避免选股候选一次塞几十条进档案
+      try {
+        const STAGE_RANK = { "总判断师": 5, "股票深度分析师": 4, "波段池管理师": 3, "选股分析师": 2, "市场重点消息获取师": 1 }
+        const forSync = entries
+          .slice()
+          .sort((a, b) => (STAGE_RANK[b[1].stage] || 0) - (STAGE_RANK[a[1].stage] || 0))
+          .slice(0, 6)
+          .map(([, it]) => it.block)
+        await syncWatchlistFromConclusions(forSync)
+      } catch (e) { /* 档案同步失败不阻断结论落库 */ }
       return lines.length
     } catch (e) { return 0 }
   }
@@ -1896,6 +1927,12 @@ function apply(ctx, config) {
         hit5: (ret5 === null || !directional) ? null : (bullish ? ret5 > 0 : ret5 < 0),
         hit20: (ret20 === null || !directional) ? null : (bullish ? ret20 > 0 : ret20 < 0),
         thesis: String(c.thesis || "").slice(0, 80),
+        // 溯源字段（v0.45.0）：每条回测记录都能回到「哪次运行 / 哪份报告 / 哪个阶段」
+        runId: String(c.callId || ""), report: c.report ? String(c.report).split(/[\\/]/).pop() : "",
+        source: String(c.source || ""),
+        // 置信度与反方论证（历史记录可能没有）
+        confidence: (typeof c.confidence === "number") ? c.confidence : null,
+        counterCase: String(c.counter_case || "").slice(0, 120),
       })
     }
     rows.sort((a, b) => String(a.ts).localeCompare(String(b.ts)))
@@ -1907,12 +1944,39 @@ function apply(ctx, config) {
       const e5 = list.filter((x) => x.ex5 !== null)
       const e20 = list.filter((x) => x.ex20 !== null)
       const avg = (arr, k) => arr.length ? btRound(arr.reduce((a, x) => a + x[k], 0) / arr.length) : null
+      // 方向收益：看多/持有/加仓取 +ret，拒绝/回避/减仓/离场取 -ret（做空视角），观察不计
+      const directional = []
+      for (const x of r5) {
+        const bearish = ["拒绝", "回避", "减仓", "离场"].includes(x.stance)
+        directional.push(bearish ? -x.ret5 : x.ret5)
+      }
+      const wins = directional.filter((v) => v > 0)
+      const losses = directional.filter((v) => v <= 0)
+      const avgWin = wins.length ? btRound(wins.reduce((a, b) => a + b, 0) / wins.length) : null
+      const avgLoss = losses.length ? btRound(Math.abs(losses.reduce((a, b) => a + b, 0) / losses.length)) : null
+      const plRatio = (avgWin !== null && avgLoss !== null && avgLoss > 0) ? btRound(avgWin / avgLoss) : null
+      const winRate = directional.length ? btRound(wins.length / directional.length * 100) : null
+      // 期望值（单笔，%）= 胜率×平均盈利 − 败率×平均亏损
+      const expectancy = (winRate !== null && avgWin !== null && avgLoss !== null)
+        ? btRound((winRate / 100) * avgWin - (1 - winRate / 100) * avgLoss) : null
+      // Wilson 95% 置信区间：小样本命中率必须带区间，否则 1/1=100% 会被误读成「全对」
+      const wilson = (k, n) => {
+        if (!n) return null
+        const z = 1.96, p = k / n
+        const den = 1 + z * z / n
+        const mid = p + z * z / (2 * n)
+        const margin = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+        return { low: btRound(Math.max(0, (mid - margin) / den) * 100), high: btRound(Math.min(1, (mid + margin) / den) * 100) }
+      }
       return {
         samples: list.length,
         hits5: h5.length, rate5: h5.length ? btRound(h5.filter((x) => x.hit5).length / h5.length * 100) : null,
+        rate5CI: h5.length ? wilson(h5.filter((x) => x.hit5).length, h5.length) : null,
         hits20: h20.length, rate20: h20.length ? btRound(h20.filter((x) => x.hit20).length / h20.length * 100) : null,
+        rate20CI: h20.length ? wilson(h20.filter((x) => x.hit20).length, h20.length) : null,
         avgRet5: avg(r5, "ret5"), avgRet20: avg(r20, "ret20"),
         avgEx5: avg(e5, "ex5"), avgEx20: avg(e20, "ex20"),
+        dirSamples: directional.length, winRate, avgWin, avgLoss, plRatio, expectancy,
       }
     }
     const groupAgg = (keyFn) => {
@@ -1925,12 +1989,24 @@ function apply(ctx, config) {
       return Array.from(map.entries()).map(([name, list]) => ({ name, ...agg(list) })).sort((a, b) => b.samples - a.samples)
     }
     const lastTradeDate = datesOfLatest(daily)
+    // 置信度分箱（v0.45.0）：回答「它说很有把握时，是不是真的更准」
+    const confBin = (x) => {
+      const v = x.confidence
+      if (typeof v !== "number") return "无置信度"
+      if (v >= 0.8) return "0.8–1.0（高）"
+      if (v >= 0.6) return "0.6–0.8（中）"
+      return "0–0.6（低）"
+    }
+    const confGroups = groupAgg(confBin)
+      .sort((a, b) => String(b.name).localeCompare(String(a.name)))
+    const withConf = rows.filter((x) => typeof x.confidence === "number").length
     return {
       generatedAt: new Date().toISOString(),
       total: conclusions.length, matched: rows.length,
       overall: agg(rows),
       byStage: groupAgg((x) => x.stage), byStance: groupAgg((x) => x.stance),
       byMonth: groupAgg((x) => String(x.ts).slice(0, 7)),
+      byConfidence: confGroups, confidenceCoverage: withConf,
       rows: rows.slice(-300), warnings, lastTradeDate,
     }
   }
@@ -1941,6 +2017,239 @@ function apply(ctx, config) {
       for (const r of rows) { const d = String(r.trade_date); if (d > latest) latest = d }
     }
     return latest
+  }
+
+  // ===== 结论采集审计（v0.45.0）=====
+  // 回答一个具体问题：回测页的数据到底从哪来、哪些运行没进库、为什么没进。
+  // 采集口径：每次流水线结束时，把各阶段【结论结构化】行写入 store/conclusions.jsonl（append-only）。
+  // 因此「遗漏」只可能发生在采集那一刻，事后不会被改写；而历史报告若保留了结构化行，可以回溯补录。
+  const computeConclusionAudit = async () => {
+    const fs0 = ctx.get("fs")
+    const readSafe = async (p) => {
+      if (fs0 !== void 0) { try { return await fs0.readText(await fs0.resolve(p)) } catch (e) { /* fallthrough */ } }
+      try { const { readFileSync } = await import("node:fs"); return readFileSync(p, "utf8") } catch (e) { return "" }
+    }
+    const parseLines = (text) => String(text || "").split("\n").filter((l) => l.trim()).map((l) => {
+      try { return JSON.parse(l) } catch (e) { return null }
+    }).filter(Boolean)
+
+    const runs = parseLines(await readSafe(RUNS_LOG)).filter((r) => r && r.ts)
+    const conclusions = parseLines(await readSafe(CONCLUSIONS_LOG)).filter((c) => c && c.code)
+
+    const byCall = new Map()
+    for (const c of conclusions) {
+      const k = String(c.callId || "")
+      byCall.set(k, (byCall.get(k) || 0) + 1)
+    }
+
+    const byMode = new Map()
+    const missing = []
+    let withC = 0, without = 0, failedRuns = 0, recoveredRuns = 0
+    // 真实运行（排除 recovered 回填）单独统计：覆盖率分母用真实运行才有意义
+    let realTotal = 0, realWith = 0
+    const recentCut = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10)
+    let recentReal = 0, recentWith = 0
+    for (const r of runs) {
+      const n = byCall.get(String(r.callId)) || 0
+      const mode = String(r.mode || "—")
+      if (!byMode.has(mode)) byMode.set(mode, { mode, runs: 0, withConclusions: 0, conclusions: 0, failed: 0 })
+      const g = byMode.get(mode)
+      g.runs += 1
+      g.conclusions += n
+      const failedRun = r.ok === false || (Array.isArray(r.stages) && r.stages.length > 0 && r.stages.every((s) => s && s.ok === false))
+      if (failedRun) { g.failed += 1; failedRuns += 1 }
+      if (r.recovered) recoveredRuns += 1
+      else {
+        realTotal += 1
+        if (n > 0) realWith += 1
+        if (String(r.ts).slice(0, 10) >= recentCut) {
+          recentReal += 1
+          if (n > 0) recentWith += 1
+        }
+      }
+      if (n > 0) { g.withConclusions += 1; withC += 1 } else {
+        without += 1
+        if (missing.length < 40) {
+          missing.push({
+            ts: r.ts, mode, question: String(r.question || "").slice(0, 70),
+            reason: failedRun ? "运行失败，未产出结论"
+              : r.recovered ? "报告回填记录（当时未写运行日志，无结构化结论）"
+                : "报告未包含【结论结构化】行",
+          })
+        }
+      }
+    }
+    const runIds = new Set(runs.map((r) => String(r.callId)))
+    const orphans = conclusions.filter((c) => !runIds.has(String(c.callId))).length
+
+    // 结论按日期分布：解释「为什么大部分结论还没有 5 日窗口」
+    const dateDist = new Map()
+    for (const c of conclusions) {
+      const d = String(c.ts || "").slice(0, 10)
+      if (d) dateDist.set(d, (dateDist.get(d) || 0) + 1)
+    }
+
+    // 可回溯估算：报告目录里有多少份报告、其中多少份能解析出结构化行
+    let reportFiles = 0, parseable = 0
+    try {
+      const { readdirSync, readFileSync } = await import("node:fs")
+      const dir = BASE_DIR + "/.dsh-invest/reports"
+      const files = readdirSync(dir).filter((f) => f.endsWith(".md"))
+      reportFiles = files.length
+      for (const f of files.slice(-400)) {
+        try {
+          const t = readFileSync(dir + "/" + f, "utf8")
+          if (t.includes("【结论结构化】")) parseable += 1
+        } catch (e) { /* skip */ }
+      }
+    } catch (e) { /* 目录不存在 */ }
+
+    // 执行率对账（v0.45.0）：建议 vs 实际持仓 —— 回答「它说的到底有没有被执行」
+    // 只看每只标的的最新一条结论，避免旧结论干扰
+    let execution = { available: false, positions: 0, matched: 0, notExecuted: [], note: "" }
+    try {
+      const holdText = await readSafe(HOLDINGS_FILE)
+      const hold = JSON.parse(holdText || "{}")
+      const positions = Array.isArray(hold.positions) ? hold.positions : []
+      const held = new Map()
+      for (const p of positions) {
+        const code = String(p.code || "").toUpperCase()
+        if (code) held.set(code, p)
+      }
+      const latestByCode = new Map()
+      for (const c of conclusions) {
+        const code = String(c.code || "").toUpperCase()
+        const cur = latestByCode.get(code)
+        if (!cur || String(c.ts) > String(cur.ts)) latestByCode.set(code, c)
+      }
+      const bullish = new Set(["看多", "持有", "加仓"])
+      const bearish = new Set(["拒绝", "回避", "减仓", "离场"])
+      const notExecuted = []
+      let matched = 0
+      for (const [code, c] of latestByCode.entries()) {
+        const st = String(c.stance || "")
+        const isHeld = held.has(code)
+        if (isHeld) matched += 1
+        if (bullish.has(st) && !isHeld) {
+          notExecuted.push({ code, stance: st, ts: c.ts, kind: "建议持有但账本无持仓" })
+        }
+        if (bearish.has(st) && isHeld) {
+          notExecuted.push({ code, stance: st, ts: c.ts, kind: "建议减仓/离场但账本仍持有" })
+        }
+      }
+      execution = {
+        available: positions.length > 0,
+        positions: positions.length,
+        matched,
+        notExecuted: notExecuted.slice(0, 20),
+        note: positions.length
+          ? "对比「每只标的最新一条结论」与持仓账本；只做提示，不判断对错——没执行可能是你有更好的理由"
+          : "账本为空，无法对账；先在持仓工作区录入持仓",
+      }
+    } catch (e) { /* 账本不可读则跳过对账 */ }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      execution,
+      runs: {
+        total: runs.length, withConclusions: withC, without, failed: failedRuns, recovered: recoveredRuns,
+        // 覆盖率用「真实运行」作分母：recovered 回填记录当时没有结构化输出，不能算作遗漏
+        realTotal, realWith,
+        realCoverage: realTotal ? Math.round(realWith / realTotal * 1000) / 10 : null,
+        recentReal, recentWith,
+        recentCoverage: recentReal ? Math.round(recentWith / recentReal * 1000) / 10 : null,
+        recentWindowDays: 7,
+      },
+      conclusions: { total: conclusions.length, distinctCodes: new Set(conclusions.map((c) => c.code)).size, orphans, withConfidence: conclusions.filter((c) => typeof c.confidence === "number").length },
+      byMode: Array.from(byMode.values()).sort((a, b) => b.runs - a.runs),
+      missing: missing.reverse(),
+      dateDist: Array.from(dateDist.entries()).map(([date, n]) => ({ date, n })).sort((a, b) => a.date.localeCompare(b.date)),
+      reports: { total: reportFiles, parseable },
+      lineage: {
+        source: "每次流水线结束时，各阶段末尾的【结论结构化】行 → store/conclusions.jsonl（只追加，不改写）",
+        window: "回测用结论日后第 5/20 个交易日的收盘价；窗口未走完时 ret 为 null，不计入命中率",
+        note: "历史记录只有 2026-11-04 起（结论采集功能上线时间），更早的报告不会自动出现在回测里，除非执行回溯补录",
+      },
+    }
+  }
+
+  // ===== 历史报告回溯补录（v0.45.0）=====
+  // 把归档报告里残留的【结论结构化】行补进 conclusions.jsonl。
+  // 只补「报告里确实存在的结构化行」，不推断、不编造；按（报告+标的）去重，可反复执行。
+  const backfillConclusions = async (apply) => {
+    const fs0 = ctx.get("fs")
+    const readSafe = async (p) => {
+      if (fs0 !== void 0) { try { return await fs0.readText(await fs0.resolve(p)) } catch (e) { /* fallthrough */ } }
+      try { const { readFileSync } = await import("node:fs"); return readFileSync(p, "utf8") } catch (e) { return "" }
+    }
+    const dir = BASE_DIR + "/.dsh-invest/reports"
+    let files = []
+    try {
+      const { readdirSync } = await import("node:fs")
+      files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort()
+    } catch (e) { return { ok: false, error: "报告目录不可读", added: 0, candidates: 0 } }
+
+    const existing = String(await readSafe(CONCLUSIONS_LOG)).split("\n").filter((l) => l.trim()).map((l) => {
+      try { return JSON.parse(l) } catch (e) { return null }
+    }).filter(Boolean)
+    const seen = new Set()
+    for (const c of existing) {
+      const rep = String(c.report || "").split(/[\\/]/).pop()
+      seen.add(rep + "|" + String(c.code || ""))
+    }
+
+    const additions = []
+    const perReport = []
+    for (const f of files) {
+      const text = String(await readSafe(dir + "/" + f) || "")
+      const blocks = parseConclusionBlocks(text)
+      if (!blocks.length) continue
+      const m = f.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/)
+      const ts = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])).toISOString() : new Date().toISOString()
+      const modeMatch = text.match(/- 模式：(\S+)/)
+      const mode = modeMatch ? modeMatch[1] : "未知"
+      let used = 0
+      for (const b of blocks) {
+        const code = String(b.code || "").trim().toUpperCase()
+        if (!/^\d{6}\.(SH|SZ|BJ)$/.test(code)) continue
+        const key = f + "|" + code
+        if (seen.has(key)) continue
+        seen.add(key)
+        used += 1
+        additions.push(JSON.stringify({
+          ts, mode, question: "历史报告回溯补录", callId: "backfill:" + f,
+          code, stance: b.stance || "未明",
+          confidence: (typeof b.confidence === "number" && b.confidence >= 0 && b.confidence <= 1) ? Math.round(b.confidence * 100) / 100 : null,
+          target: (typeof b.target === "number" ? b.target : null),
+          stop: (typeof b.stop === "number" ? b.stop : null),
+          buy_low: (typeof b.buy_low === "number" ? b.buy_low : null),
+          buy_high: (typeof b.buy_high === "number" ? b.buy_high : null),
+          thesis: String(b.thesis || "").slice(0, 200),
+          invalidate_if: String(b.invalidate_if || "").slice(0, 200),
+          counter_case: String(b.counter_case || "").slice(0, 240),
+          stage: "历史报告", report: BASE_DIR + "/.dsh-invest/reports/" + f, source: "backfill",
+        }))
+      }
+      if (used) perReport.push({ file: f, blocks: blocks.length, added: used })
+    }
+
+    if (!apply || !additions.length) {
+      return { ok: true, applied: false, candidates: additions.length, reports: perReport.slice(-20), added: 0 }
+    }
+    try {
+      const fs2 = ctx.get("fs")
+      if (fs2 === void 0) return { ok: false, error: "fs 不可用", added: 0, candidates: additions.length }
+      await withLock("conclusions", async () => {
+        const target = await fs2.resolve(CONCLUSIONS_LOG)
+        let cur = ""
+        try { cur = await fs2.readText(target) } catch (e) { /* 首次 */ }
+        const prefix = cur && !cur.endsWith("\n") ? cur + "\n" : cur
+        await fs2.writeText(target, prefix + additions.join("\n") + "\n", void 0, void 0, getFsPolicy())
+      })
+      return { ok: true, applied: true, added: additions.length, candidates: additions.length, reports: perReport.slice(-20) }
+    } catch (e) {
+      return { ok: false, error: String(e).slice(0, 200), added: 0, candidates: additions.length }
+    }
   }
 
   const executeJob = async (job) => {
@@ -2384,6 +2693,30 @@ function apply(ctx, config) {
         try {
           const result = await computeBacktest()
           writeJson(res, 200, result)
+        } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 结论采集审计：哪些运行进了库、哪些没进、为什么（v0.45.0）
+      kind: "exact",
+      path: "/dsh-invest/api/conclusions-audit",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try { writeJson(res, 200, await computeConclusionAudit()) } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 历史报告回溯补录：把报告里残留的【结论结构化】行补进结论库（v0.45.0）
+      // 默认 dry-run，只有 apply=true 才写盘；按（报告+标的）去重，可反复执行
+      kind: "exact",
+      path: "/dsh-invest/api/conclusions-backfill",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          writeJson(res, 200, await backfillConclusions(body && body.apply === true))
         } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
       },
     },
