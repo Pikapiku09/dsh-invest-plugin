@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件。把「选股 → 消息 → 深度诊断 → 综合决策」做成一条可复用的多角色子代理流水线，
 > 并配一个本机网页工作台：一键任务、模型配置、持仓管理、结论记忆、标的档案、明暗主题。
 
-**当前版本：v0.43.0**
+**当前版本：v0.44.0**
 
 ---
 
@@ -260,6 +260,7 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | POST | `/dsh-invest/api/stock-note/curate` | 触发二次整理（异步，`full` 可全量重写） |
 | POST | `/dsh-invest/api/stock-ask` | 就个股知识库追问（线程按股票保存） |
 | POST | `/dsh-invest/api/stock-notes/rebuild` | 重建知识库（`?full=1` 全量重解析） |
+| GET | `/dsh-invest/api/backtest` | 判断质量回测：结构化结论 × 日线 → 5/20 日命中率与超额（v0.44.0） |
 | GET/POST | `/dsh-invest/api/model-settings` | 读/写角色+模板模型配置 |
 | POST | `/dsh-invest/api/holdings/import` | CSV/截图/手动 → 草稿 |
 | POST | `/dsh-invest/api/holdings/draft` | 手动编辑 → 草稿 |
@@ -280,6 +281,7 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | `scripts/chart.py` | `python chart.py <data.json> <out.svg>` | **通用 SVG 图表生成器**（price 走势图 / macd 背离图） |
 | `scripts/fetch_pack.js` | `node fetch_pack.js 600519.SH [天数]` | **一次调用取全套个股数据**，输出单位统一的排版摘要（价格/均线/估值/资金/财务/业绩/龙虎榜/融资/相对强度） |
 | `scripts/stockchart.js` | `node stockchart.js 600519.SH [price\|macd\|both] [根数]` | **一条命令出图**：取数 + MA/MACD/九转/关键价位/背离 → SVG，并返回可直接引用的技术面摘要 |
+| `tools/cleanup.js` | `node tools/cleanup.js`（预演）/ `--apply`（执行） | **磁盘卫生**：cache / scratch / 根目录临时文件 / 旧备份；默认预演，执行时移入 `.dsh-invest/trash/` 可回滚 |
 
 > 这两个 Node 脚本由仓库 `scripts/` 托管，`node tools/build.js` 时自动同步到 `<BASE_DIR>/scripts/`。
 > 设计动机见 CHANGELOG v0.42.0：此前图表数据 JSON（145 天 × 7 数组 ≈ 13 KB）由模型手写，
@@ -374,12 +376,13 @@ pnpm build                        # = tsc --noEmit && vite build → ../../.dsh-
 
 ## 十一、版本与变更
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.43.0**（本轮：工作台左上角显示当前插件版本号，
-构建期从 `packages/dsh-invest/package.json` 注入，前端不硬编码任何版本字符串）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.44.0**（本轮：新增「判断质量」回测页——结构化结论×日线算 5/20 日命中率；失败可观测性；深度阶段在指定标的时并行；CI；磁盘自动清理）。
 
 > **维护约定（勿跳过）**：版本号只有一个事实来源 —— `packages/dsh-invest/package.json`。
 > 每次发版必须同步：① 根 `package.json` 与 `package-lock.json`；② 本文件顶部「当前版本」与本节摘要；
-> ③ `CHANGELOG.md` 新条目。`test/version-sync.test.js` 会对此做硬校验，任何一处漏改都会让 `node --test` 失败。
+> ③ `CHANGELOG.md` 新条目；④ **改了版本号必须重跑 `npm --prefix web run build`**——工作台左上角的版本徽标
+> 是构建期从 `packages/dsh-invest/package.json` 注入的，不重建就还是旧号（v0.44.0 实测踩到）。
+> `test/version-sync.test.js` 会硬校验 ①–③，任何一处漏改都会让 `node --test` 失败；④ 需人工确认。
 
 ---
 

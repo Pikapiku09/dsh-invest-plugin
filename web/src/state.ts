@@ -1,7 +1,7 @@
 import { LEDGER_DEFAULT_COLUMNS } from './types';
 import type {
   ConclusionRecord, HoldingsDraftResponse, HoldingsResponse, IndexResponse, Job,
-  ModelSettingsResponse, TaskTemplate, WorkbenchView, WatchlistResponse, LedgerColKey, WatchDailyStatus,
+  ModelSettingsResponse, TaskTemplate, WorkbenchView, WatchlistResponse, LedgerColKey, BacktestResponse, WatchDailyStatus,
   StockNoteMeta, StockNoteDetail,
 } from './types';
 import type { WatchDistMode } from './watch-metrics';
@@ -191,6 +191,10 @@ export interface AppState {
   askLetterCollapsed: Record<string, boolean>;
   /** 运行记录页：隐藏「报告归档」回填条目，只看真实运行日志 */
   runHideBackfill: boolean;
+  /** 判断质量回测（v0.44.0） */
+  backtest: BacktestResponse | null;
+  backtestLoading: boolean;
+  backtestError: string;
   taskDrafts: Record<string, TaskDraft>;
   /** 一键任务模板的自定义排序（模板 id 数组；localStorage 持久化） */
   templateOrder: string[];
@@ -251,6 +255,7 @@ export const state: AppState = {
   indexError: '', holdingsError: '', templatesError: '', jobsError: '',
   selectedCode: null, archiveQuery: '', archiveRecords: [], archiveLoading: false,
   archiveError: '', archiveNotice: '', runQuery: '', runStatus: 'all', runMode: 'all', runHideBackfill: false,
+  backtest: null, backtestLoading: false, backtestError: '',
   askQuery: '', askThreads: readAskThreads(), askDraft: '', askLoading: false, askError: '',
   askSuggestions: readAskSuggestions(), askSuggestionsEditing: false,
   askStocks: [], askStocksBuiltAt: '', askStocksLoading: false, askStocksError: '',

@@ -59,7 +59,9 @@ function collectCharts(t) {
 // roleMap 形如 { '选股': {name, persona}, '消息': {...}, '深度': {...}, '总判断': {...}, '波段': {...} }
 // 显式 sequence 时：每个角色各成一段、严格按该顺序串行；sequence 中不属于本次 roles 的忽略，
 // 未被 sequence 覆盖的角色按默认优先级补在末尾（不丢弃）。
-function buildGroups(roleCodes, roleMap, sequence) {
+// opts.parallelDeep=true（问题已明确指定标的时）：深度并入第一组与选股/消息/波段并行，
+// 总判断仍在最后——深度对指定标的自己取数（fetch_pack/stockchart 一条命令），不必等上游候选名单。
+function buildGroups(roleCodes, roleMap, sequence, opts) {
   const has = (c) => roleCodes.includes(c)
   const valid = (c) => typeof c === 'string' && has(c) && roleMap[c]
   const seq = Array.isArray(sequence)
@@ -72,6 +74,7 @@ function buildGroups(roleCodes, roleMap, sequence) {
     })
     return groups
   }
+  const parallelDeep = opts && opts.parallelDeep === true
   const groups = []
   // 早盘异动：消息 → 选股 串行接力；其余模式仍沿用选股∥消息∥波段并行
   if (roleCodes.length === 2 && has('消息') && has('选股')) return [[roleMap['消息']], [roleMap['选股']]]
@@ -80,7 +83,10 @@ function buildGroups(roleCodes, roleMap, sequence) {
   if (has('消息')) a.push(roleMap['消息'])
   if (has('波段')) a.push(roleMap['波段'])
   if (a.length) groups.push(a)
-  if (has('深度')) groups.push([roleMap['深度']])
+  if (has('深度')) {
+    if (parallelDeep && groups.length >= 1) groups[0].push(roleMap['深度'])
+    else groups.push([roleMap['深度']])
+  }
   if (has('总判断')) groups.push([roleMap['总判断']])
   return groups
 }
@@ -820,7 +826,12 @@ return {
         } else {
           roleCodes = DEFAULT_ROLES[mode] || DEFAULT_ROLES['总判断']
         }
-        const groups = buildGroups(roleCodes, ROLE_MAP)
+        // 问题已明确指定标的（出现 6 位代码）且本轮含深度+上游扫描角色时：深度并入第一组并行
+        const qCodes = extractInvestCodes(String(question || ''))
+        const parallelDeep = qCodes.length > 0 && roleCodes.includes('深度')
+          && (roleCodes.includes('选股') || roleCodes.includes('消息') || roleCodes.includes('波段'))
+        if (parallelDeep) routeNotes.push('问题已含标的 ' + qCodes.slice(0, 4).join('、') + '：深度与选股/消息并行执行（省约一个上游阶段的时间）')
+        const groups = buildGroups(roleCodes, ROLE_MAP, undefined, { parallelDeep })
         // ---- 模型路由解析：preset ← 插件 config ← .dsh-invest/routes.json ← 环境变量 ← 单次调用参数 ----
         const llm = ctx.get('llm')
         const presetName = (typeof args.preset === 'string' && args.preset)
@@ -989,26 +1000,10 @@ return {
             const target = await fs.resolve(reportPath)
             await fs.writeText(target, lines.join('\n'), undefined, undefined, policy)
             reports.push(reportPath)
-                // 建议登记（2026-10-23 内建）：评级表行 → advice_log.jsonl（LihuQuantify track review 对账）
-                try {
-                  const ADVICE_PAT = /综合评级|建议仓位|评级=|买入|持有|观望|回避|减仓|加仓/
-                  const recs = []
-                  for (const o of outputs) {
-                    if (!o.ok || typeof o.text !== 'string') continue
-                    for (const ln of o.text.split('\n')) {
-                      if (ln.includes('|') && ADVICE_PAT.test(ln)) {
-                        const codes = Array.from(ln.matchAll(/\b(\d{6})\.(SH|SZ|BJ)\b/g)).map((m) => m[1] + '.' + m[2])
-                        if (codes.length) recs.push({ date: localYmd(), question: String(question).slice(0, 120), stocks: codes, line: ln.trim().slice(0, 200), report: reportPath })
-                      }
-                    }
-                  }
-                  if (recs.length) {
-                    const aT = await fs.resolve(BASE_DIR + '/.dsh-invest/advice_log.jsonl')
-                    let aOld = ''
-                    try { aOld = await fs.readText(aT) } catch (e) { /* 首次 */ }
-                    await fs.writeText(aT, aOld + recs.map((r) => JSON.stringify(r)).join('\n') + '\n', undefined, undefined, policy)
-                  }
-                } catch (e) { /* 登记失败不影响流水线 */ }
+            // 建议登记说明（v0.44.0 口径统一）：结构化结论由 persistConclusions 统一写入
+            // .dsh-invest/store/conclusions.jsonl（两形态共用，工作台与工具调用都覆盖）。
+            // 旧 advice_log.jsonl 行级登记自 v0.22.0 起从未在任何运行路径落过盘（实测文件不存在），
+            // 属冗余死代码，已移除——避免一份机制两个数据源。
           } catch (e) {
             reportError = String(e).slice(0, 300)
           }
@@ -1089,7 +1084,7 @@ return {
                 callId,
                 ok: outputs.length > 0 && outputs.every((o) => o.ok === true),
                 elapsedMs: Date.now() - runStart,
-                stages: outputs.map((o) => ({ stage: o.stage, ok: o.ok === true, ms: o.elapsedMs || 0, route: o.route || '继承宿主' })),
+                stages: outputs.map((o) => ({ stage: o.stage, ok: o.ok === true, ms: o.elapsedMs || 0, route: o.route || '继承宿主', error: o.ok ? '' : String(o.error || '').slice(0, 200) })),
                 routes: routeMap,
                 routeNotes,
                 charts: allCharts.size,

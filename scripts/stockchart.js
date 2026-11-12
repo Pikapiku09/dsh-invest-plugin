@@ -280,7 +280,8 @@ async function main() {
   const endYmd = ymd(end)
 
   fs.mkdirSync(CACHE_DIR, { recursive: true })
-  const cacheFile = path.join(CACHE_DIR, 'daily_' + code + '_' + endYmd + '.json')
+  // 缓存 key 统一下划线格式（daily_600519_SH_<endYmd>.json），与 fetch_pack / 回测共用同一份
+  const cacheFile = path.join(CACHE_DIR, 'daily_' + code.replace(/\./g, '_') + '_' + endYmd + '.json')
   let dailyRows
   if (fs.existsSync(cacheFile)) {
     try {

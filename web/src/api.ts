@@ -3,7 +3,7 @@ import type {
   HoldingsQuotesResponse, HoldingsRefreshQuotesResponse, HoldingsResponse, IndexResponse, Job, ModelSettingsResponse, ModelSettingsSaveInput,
   HoldingPosition, HoldingsAccount, StockResolveResponse, TaskTemplate,
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
-  StockNotesResponse, StockNoteDetail, StockAskResponse,
+  StockNotesResponse, StockNoteDetail, StockAskResponse, BacktestResponse,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -77,6 +77,8 @@ export const api = {
   chart: (path: string) => request<{ path: string; svg: string }>(
     `${CHART_BASE}?path=${encodeURIComponent(path)}`,
   ),
+  // ===== 判断质量回测（v0.44.0）：结构化结论 × 日线 → 5/20 日命中率 =====
+  backtest: () => request<BacktestResponse>(`${BASE}/backtest`),
   // ===== 标的档案（观察 + 持仓统一监控）=====
   watchlist: () => request<WatchlistResponse>(`${BASE}/watchlist`),
   watchlistRefresh: () => post<WatchlistRefreshResponse>(`${BASE}/watchlist/refresh`, {}),

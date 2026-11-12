@@ -113,7 +113,8 @@ async function main() {
 
   // ---- 日线（复用 stockchart.js 的本日缓存，避免重复取数）----
   let daily = []
-  const dailyCache = path.join(CACHE_DIR, 'daily_' + code + '_' + endYmd + '.json')
+  // 缓存 key 统一下划线格式（daily_600519_SH_<endYmd>.json），与 stockchart / 回测共用同一份
+  const dailyCache = path.join(CACHE_DIR, 'daily_' + code.replace(/\./g, '_') + '_' + endYmd + '.json')
   if (fs.existsSync(dailyCache)) {
     try {
       const c = JSON.parse(fs.readFileSync(dailyCache, 'utf8'))

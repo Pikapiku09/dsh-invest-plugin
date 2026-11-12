@@ -1,0 +1,49 @@
+name: CI
+
+# 为什么需要这个：v0.42.0 之前，README 版本号漂到 v0.25.1、根 package.json 停在 0.23.0、
+# origin 落后 5 个提交，全都没有任何自动检查兜底。这里把「能跑测试」和「版本号一致」
+# 变成每次 push 的硬门槛，避免再靠人肉记得检查。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: 后端测试（node --test，含版本一致性守卫）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # test/ 下的用例只依赖 Node 内置模块与仓库内相对导入，因此**不做 npm install**：
+      # 既快，也顺带绕开根依赖里的私有包（@deepseek-ai/*）在 CI 上无法拉取的问题。
+      - name: 运行全量测试
+        run: node --test
+
+  web:
+    name: 前端构建（tsc --noEmit + vite build）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 安装前端依赖（仅 typescript + vite，均来自公共 npm）
+        run: npm --prefix web install --no-audit --no-fund
+      - name: 构建（产物落到临时目录，不污染仓库）
+        env:
+          DSH_INVEST_BASE_DIR: ${{ runner.temp }}/dsh-invest-base
+        run: |
+          mkdir -p "$DSH_INVEST_BASE_DIR"
+          npm --prefix web run build
+      - name: 校验构建产物存在
+        env:
+          DSH_INVEST_BASE_DIR: ${{ runner.temp }}/dsh-invest-base
+        run: |
+          test -f "$DSH_INVEST_BASE_DIR/.dsh-invest/web/dist/index.html"
+          test -f "$DSH_INVEST_BASE_DIR/.dsh-invest/web/dist/workbench.js"
+          test -f "$DSH_INVEST_BASE_DIR/.dsh-invest/web/dist/workbench.css"
+          du -sh "$DSH_INVEST_BASE_DIR/.dsh-invest/web/dist"

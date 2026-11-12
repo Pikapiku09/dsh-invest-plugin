@@ -14,6 +14,7 @@ import { emptyManualPosition, DEFAULT_ASK_SUGGESTIONS, persistAskSuggestions, pe
 import type { TaskDraft } from './state';
 import { NAME_INPUT_TEMPLATES, orderedTemplates, primaryJobReport, renderTasks } from './tasks';
 import { renderRuns } from './runs';
+import { renderBacktest } from './backtest';
 import { renderModelSettings, modelRouteFor, modelPresetFor, isValidModelRoute, serverHostValue, modelStockKb, modelStockKbAuto, modelStockKbConcurrency, splitStockKbRoute } from './model-settings';
 import { ensureNotifyPermission, notifyEnabled, notifyPermission, pushAlertsToSystem, setNotifyEnabled } from './notify';
 import type { SystemNotice } from './notify';
@@ -171,12 +172,13 @@ function render(): void {
       : state.view === 'runs' ? renderRuns(state)
 : state.view === 'ask' ? renderAsk(state)
         : state.view === 'tasks' ? renderTasks(state)
-          : state.view === 'model-settings' ? renderModelSettings(state) : renderHoldings(state);
+          : state.view === 'model-settings' ? renderModelSettings(state)
+          : state.view === 'backtest' ? renderBacktest(state) : renderHoldings(state);
   // 追问回答以 Markdown 渲染，若回答里引用了 .svg 图表路径，需要按需加载成 data URL
   if (state.view === 'ask') void hydrateCharts(viewElement);
   const labels: Record<WorkbenchView, string> = {
     overview: '投研概览', archive: '标的档案', runs: '运行记录', tasks: '一键任务',
-    ask: '个股知识库', 'model-settings': '模型设置', holdings: '持仓工作区',
+    ask: '个股知识库', 'model-settings': '模型设置', holdings: '持仓工作区', backtest: '判断质量',
   };
   document.getElementById('topbarContext')!.textContent = labels[state.view];
   // 左上角品牌区的插件版本号（构建期由 packages/dsh-invest/package.json 注入，前端不硬编码）
@@ -294,6 +296,23 @@ function dispatchAlertNotifications(alerts: WatchAlert[]): void {
     }));
   if (!pending.length) return;
   void pushAlertsToSystem(pending);
+}
+
+// 判断质量回测（v0.44.0）：结论库 × 日线 → 命中率。force=false 时有缓存直接渲染，不重复跑。
+async function loadBacktest(force: boolean): Promise<void> {
+  if (state.backtestLoading) return;
+  if (!force && state.backtest) { render(); return; }
+  state.backtestLoading = true; state.backtestError = '';
+  render();
+  try {
+    state.backtest = await api.backtest();
+  } catch (error) {
+    state.backtestError = errorMessage(error);
+    if (force) state.backtest = null;
+  } finally {
+    state.backtestLoading = false;
+    render();
+  }
 }
 
 async function loadWatchlist(): Promise<void> {
@@ -763,6 +782,7 @@ function navigate(view: WorkbenchView): void {
   if (view === 'model-settings' && !state.modelSettings && !state.modelSettingsLoading) void loadModelSettings();
   if (view === 'ask' && !state.index && !state.indexLoading) void loadIndex();
   if (view === 'ask') void loadAskStocks();
+  if (view === 'backtest' && !state.backtest && !state.backtestLoading) void loadBacktest(false);
   if (view === 'holdings') {
     if (!state.holdings && !state.holdingsLoading) void loadHoldings();
     void loadJobs();
@@ -1585,6 +1605,7 @@ document.addEventListener('click', (event) => {
   if (!target) return;
   const action = target.dataset.action;
   if (action === 'navigate' && target.dataset.view) navigate(target.dataset.view as WorkbenchView);
+  else if (action === 'backtest-refresh') void loadBacktest(true);
   else if (action === 'back-to-top') window.scrollTo({ top: 0, behavior: 'smooth' });
   else if (action === 'ask-latest-report' && target.dataset.code) {
     // 标的档案的「追问」入口：直接进这只股票的知识库

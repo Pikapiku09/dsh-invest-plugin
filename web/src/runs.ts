@@ -18,6 +18,11 @@ function runRowsTable(runs: RunRow[]): string {
   if (!runs.length) return emptyState('没有匹配的运行记录', '调整关键词或过滤条件后再试。', 'search');
   const rows = runs.slice(0, 150).map((run) => {
     const stages = (run.stages || []).map((stage) => `${stage.stage}${stage.ok === false ? ' ×' : ''}`).join(' →');
+    // 失败原因（v0.44.0 起 runs.jsonl 记录 stages[].error）：运行记录里直接可见，不必再去翻日志
+    const failedStages = (run.stages || []).filter((stage) => stage.ok === false && stage.error);
+    const errParts = failedStages.map((stage) => `${stage.stage}：${stage.error}`);
+    if (run.error && !errParts.length) errParts.push(String(run.error));
+    const errHint = errParts.join(' ｜ ');
     const backfilledRun = run.backfilled === true;
     // 回填行没有 run 记录，点开直接进对应报告
     const action = backfilledRun ? 'open-report-id' : 'open-run';
@@ -30,7 +35,7 @@ function runRowsTable(runs: RunRow[]): string {
     return `<tr class="clickable-row" data-action="${action}" data-id="${escapeHtml(actionId)}" tabindex="0">
       <td class="run-id">${idCell}</td><td class="table-date">${formatDateTime(run.ts_local || run.created_at, true)}</td>
       <td><span class="mode-tag">${escapeHtml(run.mode || '—')}</span></td><td class="question-cell" title="${escapeHtml(run.question || '')}">${escapeHtml(truncate(run.question || '—', 52))}</td>
-      <td>${codeTags(run.codes || [])}</td><td class="stage-cell" title="${escapeHtml(stages)}">${escapeHtml(truncate(stages || '—', 28))}</td>
+      <td>${codeTags(run.codes || [])}</td><td class="stage-cell" title="${escapeHtml(errHint || stages)}">${escapeHtml(truncate(stages || '—', 28))}${errHint ? `<div class="stage-err" title="${escapeHtml(errHint)}">${escapeHtml(truncate(errParts[0], 36))}</div>` : ''}</td>
       <td class="numeric">${formatDuration(run.elapsed_ms)}</td><td>${runStatusBadge(run)}</td>
       <td class="table-action"><span class="row-actions">${askButton}<button class="icon-button small" data-action="${action}" data-id="${escapeHtml(actionId)}" aria-label="打开运行报告">${icon('external', 15)}</button></span></td>
     </tr>`;

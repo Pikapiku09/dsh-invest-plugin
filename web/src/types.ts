@@ -4,6 +4,8 @@ export interface RunStage {
   stage: string;
   ok?: boolean;
   ms?: number;
+  /** 失败原因摘要（v0.44.0 起写入 runs.jsonl，用于运行记录里直接定位失败原因） */
+  error?: string;
 }
 
 export interface RunRecord {
@@ -296,7 +298,57 @@ export interface Job {
   question?: string;
 }
 
-export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings';
+export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest';
+
+// ===== 判断质量回测（v0.44.0）=====
+// 口径：结论日后第一个交易日收盘为基准，看第 5/20 个交易日涨跌；超额 = 个股区间收益 − 上证同区间收益
+export interface BacktestRow {
+  ts: string;
+  code: string;
+  stance: string;
+  stage: string;
+  mode: string;
+  base: number | null;
+  target: number | null;
+  ret5: number | null;
+  ret20: number | null;
+  ex5: number | null;
+  ex20: number | null;
+  /** null = 该结论无方向（观察）或前向窗口尚不足，不计入命中率 */
+  hit5: boolean | null;
+  hit20: boolean | null;
+  thesis: string;
+}
+
+export interface BacktestGroup extends BacktestSummary {
+  name: string;
+}
+
+export interface BacktestSummary {
+  samples: number;
+  /** 有方向且已有 5 日窗口的样本数（命中率分母） */
+  hits5: number;
+  rate5: number | null;
+  hits20: number;
+  rate20: number | null;
+  avgRet5: number | null;
+  avgRet20: number | null;
+  avgEx5: number | null;
+  avgEx20: number | null;
+}
+
+export interface BacktestResponse {
+  generatedAt: string;
+  total: number;
+  matched: number;
+  overall: BacktestSummary | null;
+  byStage: BacktestGroup[];
+  byStance: BacktestGroup[];
+  byMonth: BacktestGroup[];
+  rows: BacktestRow[];
+  warnings: string[];
+  lastTradeDate: string;
+}
 
 export interface StockResolveResponse {
   code: string;

@@ -37,7 +37,9 @@ function collectCharts(t) {
 // roleMap 形如 { '选股': {name, persona}, '消息': {...}, '深度': {...}, '总判断': {...}, '波段': {...} }
 // 显式 sequence 时：每个角色各成一段、严格按该顺序串行；sequence 中不属于本次 roles 的忽略，
 // 未被 sequence 覆盖的角色按默认优先级补在末尾（不丢弃）。
-function buildGroups(roleCodes, roleMap, sequence) {
+// opts.parallelDeep=true（问题已明确指定标的时）：深度并入第一组与选股/消息/波段并行，
+// 总判断仍在最后——深度对指定标的自己取数（fetch_pack/stockchart 一条命令），不必等上游候选名单。
+function buildGroups(roleCodes, roleMap, sequence, opts) {
   const has = (c) => roleCodes.includes(c)
   const valid = (c) => typeof c === 'string' && has(c) && roleMap[c]
   const seq = Array.isArray(sequence)
@@ -50,6 +52,7 @@ function buildGroups(roleCodes, roleMap, sequence) {
     })
     return groups
   }
+  const parallelDeep = opts && opts.parallelDeep === true
   const groups = []
   // 早盘异动：消息 → 选股 串行接力；其余模式仍沿用选股∥消息∥波段并行
   if (roleCodes.length === 2 && has('消息') && has('选股')) return [[roleMap['消息']], [roleMap['选股']]]
@@ -58,7 +61,10 @@ function buildGroups(roleCodes, roleMap, sequence) {
   if (has('消息')) a.push(roleMap['消息'])
   if (has('波段')) a.push(roleMap['波段'])
   if (a.length) groups.push(a)
-  if (has('深度')) groups.push([roleMap['深度']])
+  if (has('深度')) {
+    if (parallelDeep && groups.length >= 1) groups[0].push(roleMap['深度'])
+    else groups.push([roleMap['深度']])
+  }
   if (has('总判断')) groups.push([roleMap['总判断']])
   return groups
 }

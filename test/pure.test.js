@@ -92,6 +92,38 @@ test('buildGroups：缺失角色跳过、空列表返回空', () => {
   assert.equal(buildGroups(['选股', '总判断'], rm).length, 2)
 })
 
+// v0.44.0：问题已明确指定标的时，深度不必等上游候选名单 → 并入第一组并行，总判断仍在最后
+test('buildGroups parallelDeep：深度并入第一组，总判断仍在最后', () => {
+  const rm = { '选股': { name: 'A' }, '消息': { name: 'B' }, '深度': { name: 'C' }, '总判断': { name: 'D' } }
+  const g = buildGroups(['选股', '消息', '深度', '总判断'], rm, undefined, { parallelDeep: true })
+  assert.equal(g.length, 2, '三组压成两组')
+  assert.deepEqual(g[0].map((x) => x.name), ['A', 'B', 'C'], '深度与选股/消息同组并行')
+  assert.deepEqual(g[1].map((x) => x.name), ['D'], '总判断仍在最后')
+})
+
+test('buildGroups parallelDeep：深度单独成组时不受影响（个股模式）', () => {
+  const rm = { '选股': { name: 'A' }, '深度': { name: 'C' }, '总判断': { name: 'D' } }
+  const g = buildGroups(['深度'], rm, undefined, { parallelDeep: true })
+  assert.equal(g.length, 1)
+  assert.deepEqual(g[0].map((x) => x.name), ['C'])
+})
+
+test('buildGroups parallelDeep：显式 sequence 时严格按序列，不被并行化', () => {
+  const rm = { '选股': { name: 'A' }, '深度': { name: 'C' }, '总判断': { name: 'D' } }
+  const g = buildGroups(['选股', '深度'], rm, ['选股', '深度'], { parallelDeep: true })
+  assert.equal(g.length, 2)
+  assert.deepEqual(g[0].map((x) => x.name), ['A'])
+  assert.deepEqual(g[1].map((x) => x.name), ['C'])
+})
+
+test('buildGroups parallelDeep：早盘异动（消息→选股）特例不受影响', () => {
+  const rm = { '选股': { name: 'A' }, '消息': { name: 'B' } }
+  const g = buildGroups(['消息', '选股'], rm, undefined, { parallelDeep: true })
+  assert.equal(g.length, 2)
+  assert.deepEqual(g[0].map((x) => x.name), ['B'])
+  assert.deepEqual(g[1].map((x) => x.name), ['A'])
+})
+
 test('isLoopbackRequest：loopback 无 origin 放行', () => {
   const req = { socket: { remoteAddress: '127.0.0.1' }, headers: { host: '127.0.0.1:3080' } }
   assert.equal(isLoopbackRequest(req), true)

@@ -1224,6 +1224,35 @@ function apply(ctx, config) {
       need.forEach((item) => requestCuration(item.code))
     } catch (e) { /* 后台补整理失败不抛出 */ }
   }
+  // 后台磁盘卫生（v0.44.0）：只清 cache 下 >30 天的取数/索引缓存（可再生，删除无副作用）。
+  // scratch / 根目录临时脚本属于人工排查残留，**不自动清**——交给 tools/cleanup.js 手动执行，
+  // 因为那类文件可能正被使用者手工排查中，自动清掉会让人困惑。
+  // 旧实现的清理只扫 cache 顶层（非递归），导致子目录里的过期文件一直留着（实测 1179 个 / 44MB）。
+  let lastCacheSweep = { at: "", removed: 0, error: "" }
+  const sweepCacheFiles = async () => {
+    try {
+      const { readdirSync, statSync, rmSync } = await import("node:fs")
+      const dir = BASE_DIR + "/.dsh-invest/cache"
+      const cutoff = Date.now() - 30 * 86400000
+      let removed = 0
+      const walkDir = (d, depth) => {
+        if (depth > 4) return
+        let entries = []
+        try { entries = readdirSync(d, { withFileTypes: true }) } catch (e) { return }
+        for (const ent of entries) {
+          const full = d + "/" + ent.name
+          if (ent.isDirectory()) { walkDir(full, depth + 1); continue }
+          try {
+            if (statSync(full).mtimeMs < cutoff) { rmSync(full, { force: true }); removed += 1 }
+          } catch (e) { /* 单文件失败忽略 */ }
+        }
+      }
+      walkDir(dir, 0)
+      lastCacheSweep = { at: new Date().toISOString(), removed, error: "" }
+    } catch (e) {
+      lastCacheSweep = { at: new Date().toISOString(), removed: 0, error: String(e).slice(0, 200) }
+    }
+  }
   // 任务结束后：把受影响的股票排进整理队列（最多 6 只，优先最近的）
   const requestCurationForTouched = async (data) => {
     if (process.env.DSH_INVEST_AUTO_CURATE === "0") return
@@ -1729,6 +1758,170 @@ function apply(ctx, config) {
     return out
   }
 
+  // ============ 判断质量回测（v0.44.0）：conclusions.jsonl × 日线 → 命中率 ============
+  // 数据源：每次流水线末尾【结论结构化】行（persistConclusions 落库，68 条起步持续积累）。
+  // 口径：以结论日后第一个交易日收盘为基准，看第 5 / 20 个交易日收盘的涨跌（另计超额 vs 上证指数）。
+  // 命中定义：看多/持有/加仓 → 上涨命中；拒绝/回避/减仓/离场 → 下跌命中；观察不计命中率（单独看后续走势）。
+  // 日线来源：cache/pack/daily_<code>_<endYmd>.json（fetch_pack / stockchart 产生，同 key 复用），
+  // 无缓存时按需从 Tushare 拉 400 自然日并回写缓存；指数用 000001.SH。
+  const BACKTEST_IDX_CODE = "000001.SH"
+  const btRound = (v) => (typeof v === "number" && Number.isFinite(v)) ? Math.round(v * 100) / 100 : null
+  const btReadToken = async () => {
+    try {
+      const { readFileSync } = await import("node:fs")
+      const t = String(readFileSync(BASE_DIR + "/.dsh-invest/tushare.token", "utf8")).trim()
+      return t || ""
+    } catch (e) { return "" }
+  }
+  // 读某 code 最新的日线缓存；没有则在线拉取（400 自然日）并回写。
+  // isIndex=true 时用 index_daily 接口（Tushare 的 daily 不支持指数代码）。
+  const btDaily = async (code, token, isIndex) => {
+    const { readdirSync, readFileSync, writeFileSync, mkdirSync } = await import("node:fs")
+    const dir = BASE_DIR + "/.dsh-invest/cache/pack"
+    const prefix = "daily_" + code.replace(/\./g, "_") + "_"
+    let best = "", bestDate = ""
+    try {
+      for (const f of readdirSync(dir)) {
+        if (!f.startsWith(prefix) || !f.endsWith(".json")) continue
+        const d = f.slice(prefix.length, -5)
+        if (d > bestDate) { bestDate = d; best = f }
+      }
+    } catch (e) { /* 目录不存在 */ }
+    if (best) {
+      try {
+        const rows = JSON.parse(readFileSync(dir + "/" + best, "utf8")).rows
+        if (Array.isArray(rows) && rows.length >= 30) return rows
+      } catch (e) { /* 坏缓存，走在线 */ }
+    }
+    if (!token) return null
+    const p2 = (n) => String(n).padStart(2, "0")
+    const ymd = (d) => "" + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate())
+    const end = new Date()
+    const start = new Date(end.getTime() - 400 * 86400000)
+    try {
+      const r = await fetch("https://api.tushare.pro", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_name: isIndex ? "index_daily" : "daily", token, params: { ts_code: code, start_date: ymd(start), end_date: ymd(end) } }),
+      })
+      const j = JSON.parse(await r.text())
+      if (j.code !== 0 || !j.data || !Array.isArray(j.data.items)) return null
+      const fields = j.data.fields
+      const rows = j.data.items.map((it) => { const o = {}; fields.forEach((k, i) => { o[k] = it[i] }); return o })
+        .sort((a, b) => String(a.trade_date).localeCompare(String(b.trade_date)))
+      if (rows.length < 30) return null
+      try {
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(dir + "/" + prefix + ymd(end) + ".json", JSON.stringify({ code, endYmd: ymd(end), rows }))
+      } catch (e) { /* 回写失败不影响本次 */ }
+      return rows
+    } catch (e) { return null }
+  }
+  const computeBacktest = async () => {
+    const fs0 = ctx.get("fs")
+    const readSafe = async (p) => {
+      if (fs0 !== void 0) { try { return await fs0.readText(await fs0.resolve(p)) } catch (e) { /* fallthrough */ } }
+      try { const { readFileSync } = await import("node:fs"); return readFileSync(p, "utf8") } catch (e) { return "" }
+    }
+    const text = await readSafe(CONCLUSIONS_LOG)
+    const conclusions = String(text || "").split("\n").filter((l) => l.trim()).map((l) => {
+      try { return JSON.parse(l) } catch (e) { return null }
+    }).filter((r) => r && typeof r.code === "string" && /^\d{6}\.(SH|SZ|BJ)$/.test(r.code) && r.ts)
+    if (!conclusions.length) return { total: 0, matched: 0, rows: [], byStage: [], byStance: [], byMonth: [], overall: null, warnings: ["conclusions.jsonl 暂无有效结论"], generatedAt: new Date().toISOString(), lastTradeDate: "" }
+    const token = await btReadToken()
+    const warnings = []
+    const codes = Array.from(new Set(conclusions.map((c) => c.code)))
+    const daily = {}
+    for (const code of codes) {
+      daily[code] = await btDaily(code, token)
+      if (!daily[code]) warnings.push(code + "：无日线数据（缓存与 Tushare 均失败）")
+    }
+    const idx = await btDaily(BACKTEST_IDX_CODE, token, true)
+    const idxDates = idx ? idx.map((x) => String(x.trade_date)) : []
+    const rows = []
+    for (const c of conclusions) {
+      const r = daily[c.code]
+      if (!r) continue
+      const dates = r.map((x) => String(x.trade_date))
+      const tsYmd = String(c.ts).slice(0, 10).replace(/-/g, "")
+      const i = dates.findIndex((d) => d >= tsYmd)
+      if (i < 0) continue
+      const base = Number(r[i].close)
+      if (!Number.isFinite(base) || base <= 0) continue
+      const closeAt = (n) => (i + n < r.length) ? Number(r[i + n].close) : null
+      const fwd5 = closeAt(5), fwd20 = closeAt(20)
+      const ret5 = fwd5 !== null ? (fwd5 / base - 1) * 100 : null
+      const ret20 = fwd20 !== null ? (fwd20 / base - 1) * 100 : null
+      // 超额 = 个股区间收益 − 上证指数同区间收益
+      let ex5 = null, ex20 = null
+      if (idx) {
+        const j = idxDates.findIndex((d) => d >= tsYmd)
+        if (j >= 0) {
+          const ibase = Number(idx[j].close)
+          if (ibase > 0) {
+            const ifwd5 = j + 5 < idx.length ? Number(idx[j + 5].close) : null
+            const ifwd20 = j + 20 < idx.length ? Number(idx[j + 20].close) : null
+            if (ret5 !== null && ifwd5 !== null) ex5 = ret5 - (ifwd5 / ibase - 1) * 100
+            if (ret20 !== null && ifwd20 !== null) ex20 = ret20 - (ifwd20 / ibase - 1) * 100
+          }
+        }
+      }
+      const bullish = ["看多", "持有", "加仓"].includes(c.stance)
+      const bearish = ["拒绝", "回避", "减仓", "离场"].includes(c.stance)
+      const directional = bullish || bearish
+      rows.push({
+        ts: c.ts, code: c.code, stance: String(c.stance || ""), stage: String(c.stage || ""), mode: String(c.mode || ""),
+        base: btRound(base), target: (typeof c.target === "number" ? c.target : null),
+        ret5: btRound(ret5), ret20: btRound(ret20), ex5: btRound(ex5), ex20: btRound(ex20),
+        hit5: (ret5 === null || !directional) ? null : (bullish ? ret5 > 0 : ret5 < 0),
+        hit20: (ret20 === null || !directional) ? null : (bullish ? ret20 > 0 : ret20 < 0),
+        thesis: String(c.thesis || "").slice(0, 80),
+      })
+    }
+    rows.sort((a, b) => String(a.ts).localeCompare(String(b.ts)))
+    const agg = (list) => {
+      const h5 = list.filter((x) => x.hit5 !== null && x.hit5 !== undefined)
+      const h20 = list.filter((x) => x.hit20 !== null && x.hit20 !== undefined)
+      const r5 = list.filter((x) => x.ret5 !== null)
+      const r20 = list.filter((x) => x.ret20 !== null)
+      const e5 = list.filter((x) => x.ex5 !== null)
+      const e20 = list.filter((x) => x.ex20 !== null)
+      const avg = (arr, k) => arr.length ? btRound(arr.reduce((a, x) => a + x[k], 0) / arr.length) : null
+      return {
+        samples: list.length,
+        hits5: h5.length, rate5: h5.length ? btRound(h5.filter((x) => x.hit5).length / h5.length * 100) : null,
+        hits20: h20.length, rate20: h20.length ? btRound(h20.filter((x) => x.hit20).length / h20.length * 100) : null,
+        avgRet5: avg(r5, "ret5"), avgRet20: avg(r20, "ret20"),
+        avgEx5: avg(e5, "ex5"), avgEx20: avg(e20, "ex20"),
+      }
+    }
+    const groupAgg = (keyFn) => {
+      const map = new Map()
+      for (const x of rows) {
+        const k = keyFn(x) || "—"
+        if (!map.has(k)) map.set(k, [])
+        map.get(k).push(x)
+      }
+      return Array.from(map.entries()).map(([name, list]) => ({ name, ...agg(list) })).sort((a, b) => b.samples - a.samples)
+    }
+    const lastTradeDate = datesOfLatest(daily)
+    return {
+      generatedAt: new Date().toISOString(),
+      total: conclusions.length, matched: rows.length,
+      overall: agg(rows),
+      byStage: groupAgg((x) => x.stage), byStance: groupAgg((x) => x.stance),
+      byMonth: groupAgg((x) => String(x.ts).slice(0, 7)),
+      rows: rows.slice(-300), warnings, lastTradeDate,
+    }
+  }
+  function datesOfLatest(daily) {
+    let latest = ""
+    for (const rows of Object.values(daily)) {
+      if (!Array.isArray(rows)) continue
+      for (const r of rows) { const d = String(r.trade_date); if (d > latest) latest = d }
+    }
+    return latest
+  }
+
   const executeJob = async (job) => {
     job.status = "running"
     job.startedAt = Date.now()
@@ -2157,6 +2350,19 @@ function apply(ctx, config) {
             })
           }
           writeJson(res, 200, { templates, hostModel: host })
+        } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 判断质量回测：结构化结论 × 日线 → 5/20 日命中率与超额收益（只读，含缓存回写）
+      kind: "exact",
+      path: "/dsh-invest/api/backtest",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const result = await computeBacktest()
+          writeJson(res, 200, result)
         } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
       },
     },
@@ -2833,7 +3039,13 @@ function apply(ctx, config) {
       const sequence = Array.isArray(args.sequence)
         ? args.sequence.filter((code) => typeof code === "string" && ROLE_MAP[code] && roleCodes.includes(code))
         : undefined
-      const groups = buildGroups(roleCodes, ROLE_MAP, sequence)
+      // 问题已明确指定标的（出现 6 位代码）且本轮含深度+上游扫描角色时：深度并入第一组并行，
+      // 不必等选股/消息的候选名单（深度对指定标的一条命令自取数据）；总判断仍在最后一组
+      const qCodes = extractInvestCodes(String(question || ""))
+      const parallelDeep = !sequence && qCodes.length > 0 && roleCodes.includes("深度")
+        && (roleCodes.includes("选股") || roleCodes.includes("消息") || roleCodes.includes("波段"))
+      if (parallelDeep) routeNotes.push("问题已含标的 " + qCodes.slice(0, 4).join("、") + "：深度与选股/消息并行执行（省约一个上游阶段的时间）")
+      const groups = buildGroups(roleCodes, ROLE_MAP, sequence, { parallelDeep })
       // ---- 模型路由解析：preset ← 插件 config ← .dsh-invest/routes.json ← 环境变量 ← 单次调用参数 ----
       const llm = ctx.get("llm")
       const presetName = (typeof args.preset === "string" && args.preset)
@@ -3191,7 +3403,7 @@ function apply(ctx, config) {
             callId,
             ok: outputs.length > 0 && outputs.every((o) => o.ok === true),
             elapsedMs: Date.now() - runStart,
-            stages: outputs.map((o) => ({ stage: o.stage, ok: o.ok === true, ms: o.elapsedMs || 0, route: o.route || "继承宿主" })),
+            stages: outputs.map((o) => ({ stage: o.stage, ok: o.ok === true, ms: o.elapsedMs || 0, route: o.route || "继承宿主", error: o.ok ? "" : String(o.error || "").slice(0, 200) })),
             routes: routeMap,
             routeNotes,
             charts: allCharts.size,
@@ -3238,6 +3450,17 @@ function apply(ctx, config) {
     if (typeof tick.unref === "function") tick.unref()
     return () => { clearTimeout(boot); clearInterval(tick) }
   }, "dsh-invest: stock-kb curation")
+
+  ctx.effect(() => {
+    // 磁盘卫生：启动 90 秒后清一次 cache 里超过 30 天的缓存，之后每 24 小时一次。
+    // 只动 cache（可再生）；scratch / 根目录临时文件交给 tools/cleanup.js 手动执行。
+    if (process.env.NODE_TEST_CONTEXT || process.env.DSH_INVEST_AUTO_CLEAN === "0") return () => {}
+    const boot = setTimeout(() => { void sweepCacheFiles() }, 90000)
+    const tick = setInterval(() => { void sweepCacheFiles() }, 24 * 60 * 60 * 1000)
+    if (typeof boot.unref === "function") boot.unref()
+    if (typeof tick.unref === "function") tick.unref()
+    return () => { clearTimeout(boot); clearInterval(tick) }
+  }, "dsh-invest: cache sweep")
 
   ctx.effect(() => {
     // 观察仓日检自动调度：开机补跑 + 收盘后定时（每分钟轮询一次，容忍睡眠/唤醒漏拍）

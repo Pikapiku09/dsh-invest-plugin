@@ -381,3 +381,19 @@
   user-select: all;
 }
 .brand-version:hover { color: var(--text-2); border-color: rgba(111, 159, 248, .45); }
+/* ===== 判断质量回测（v0.44.0）===== */
+/* 说明条：与 inline-warning 同构但走中性色，避免和「数据异常」抢注意力 */
+.inline-note { display: flex; align-items: flex-start; gap: 8px; margin: -8px 0 18px; padding: 10px 13px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm, 8px); background: var(--panel-2, rgba(255, 255, 255, .02)); color: var(--text-2); font-size: 12px; line-height: 1.65; }
+.inline-note .icon { margin-top: 1px; flex: none; color: var(--muted); }
+/* 涨跌与命中着色：只在数字/标签上用色，正文保持中性 */
+.value-up { color: var(--red); }
+.value-down { color: var(--green); }
+.hit-yes { color: var(--mint); font-weight: 600; }
+.hit-no { color: var(--red); opacity: .85; }
+.muted.small, .numeric .small { font-size: 10.5px; color: var(--muted); }
+.theme-light .value-up { color: #c0392b; }
+.theme-light .value-down { color: #1e8449; }
+
+/* 运行记录：失败阶段的原因摘要（v0.44.0 起 runs.jsonl 带 stages[].error） */
+.stage-err { margin-top: 3px; color: var(--red); font-size: 10.5px; line-height: 1.4; opacity: .9; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-light .stage-err { color: #b03a2e; }
