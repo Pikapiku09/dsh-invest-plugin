@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件。把「选股 → 消息 → 深度诊断 → 综合决策」做成一条可复用的多角色子代理流水线，
 > 并配一个本机网页工作台：一键任务、模型配置、持仓管理、结论记忆、标的档案、明暗主题。
 
-**当前版本：v0.25.1**
+**当前版本：v0.42.0**
 
 ---
 
@@ -374,7 +374,12 @@ pnpm build                        # = tsc --noEmit && vite build → ../../.dsh-
 
 ## 十一、版本与变更
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.41.0**（本轮：个股知识库二次整理成可读文档、追问改为对着知识库；「阅读全文」下线）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.42.0**（本轮：图表与取数脚本化——
+`stockchart.js` 一条命令出图、`fetch_pack.js` 一次取全套数据，深度分析阶段提速）。
+
+> **维护约定（勿跳过）**：版本号只有一个事实来源 —— `packages/dsh-invest/package.json`。
+> 每次发版必须同步：① 根 `package.json` 与 `package-lock.json`；② 本文件顶部「当前版本」与本节摘要；
+> ③ `CHANGELOG.md` 新条目。`test/version-sync.test.js` 会对此做硬校验，任何一处漏改都会让 `node --test` 失败。
 
 ---
 

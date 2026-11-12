@@ -32,8 +32,16 @@
   `<BASE_DIR>/scripts/`（内容一致则跳过），避免仓库副本与工作区副本漂移。
 - **实测**：取数 1.4–3.9 秒、出两张 SVG <1.5 秒，取代原先由模型完成的数十秒到数分钟的手写与往返。
   【待实测】上线后深度阶段预计 290s → 110–130s，个股模式 226s → 100s 量级。
-- **测试**：新增 `test/indicators.test.js` 9 条断言（MA / EMA / MACD / 九转计数 / 关键价位去重 / 代码补后缀），
-  全量 `node --test` **108/108**。
+- **版本文档同步（用户反馈）**：动工前 README 顶部仍写着 v0.25.1、根 `package.json` 停在 0.23.0、
+  `package-lock.json` 停在 0.7.1、`docs/使用指南.md` 停在 v0.14.3，且 origin 落后 5 个提交——
+  GitHub 上看到的是几个月前的版本。本次全部对齐到 v0.42.0；`docs/使用指南.md` 的版本表标注为历史，
+  改为不再硬编码版本号。
+- **版本守卫（防再次漂移）**：新增 `test/version-sync.test.js`，以 `packages/dsh-invest/package.json`
+  为唯一事实来源，校验「根 package.json / package-lock 两处 / README 顶部 / README 版本段落 /
+  CHANGELOG 首条 / docs 不硬编码」共 7 项。已做变异测试验证：故意把 README 改回 v0.25.1 后
+  立即失败并提示「应改为 v0.42.0」。
+- **测试**：新增 `test/indicators.test.js` 9 条断言（MA / EMA / MACD / 九转计数 / 关键价位去重 / 代码补后缀）
+  与 `test/version-sync.test.js` 7 条版本守卫，全量 `node --test` **115/115**。
 
 ## v0.41.0（2026-11-12）
 
