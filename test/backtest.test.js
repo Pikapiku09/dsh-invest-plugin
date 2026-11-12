@@ -50,6 +50,12 @@ function makeHarness(options = {}) {
     fs.writeFileSync(path.join(packDir, 'daily_' + code.replace(/\./g, '_') + '_' + last + '.json'),
       JSON.stringify({ code, endYmd: last, rows }), 'utf8')
   }
+  // 复权因子缓存（btAdj 命中即离线；v0.46.0）
+  for (const [code, rows] of Object.entries(options.adj || {})) {
+    const last = rows[rows.length - 1].trade_date
+    fs.writeFileSync(path.join(packDir, 'adj_' + code.replace(/\./g, '_') + '_' + last + '.json'),
+      JSON.stringify({ code, endYmd: last, rows }), 'utf8')
+  }
 
   const registered = []
   const parentAgent = { session: { append() {} }, options: { provider: 'p', model: 'm' } }
@@ -114,6 +120,12 @@ test('回测：命中定义与超额收益（看多→上涨命中；拒绝→�
       CONCLUSION({ code: '002315.SZ', stance: '观察' }),                // 不计命中率
     ],
     daily,
+    // 因子恒为 1 → 复权不应改变任何数值，仅用于消除「无因子」告警
+    adj: {
+      '600519.SH': makeAdj('20261008', 30, 1),
+      '000001.SZ': makeAdj('20261008', 30, 1),
+      '002315.SZ': makeAdj('20261008', 30, 1),
+    },
   })
   t.after(h.cleanup)
 
@@ -205,4 +217,61 @@ test('回测：fwd 口径以「结论日后第一个交易日」为基准（周�
   const row = r.json.rows[0]
   assert.equal(row.base, 100, '基准 = 周一收盘 100')
   assert.ok(Math.abs(row.ret5 - 5) < 0.01)
+})
+
+// ===== v0.46.0：复权 =====
+// 复权因子序列：factor 恒定 = 价格连续，复权不应改变任何结果
+function makeAdj(fromYmd, n, f) {
+  return makeDaily(fromYmd, n, 0, 0).map((x) => ({ trade_date: x.trade_date, adj_factor: f }))
+}
+// 构造一次「除权除息」：前 5 天价 110、因子 1.0；第 6 天起价 101、因子 1.1。
+// 未复权看是 −8.18% 的「下跌」，按前复权看实为 +1% 的真实上涨 —— 命中判定直接被翻转。
+function makeExDivDaily(fromYmd, n) {
+  const rows = makeDaily(fromYmd, n, 110, 0)
+  for (let i = 5; i < n; i++) rows[i].close = 101
+  return rows
+}
+function makeExDivAdj(fromYmd, n) {
+  return makeDaily(fromYmd, n, 0, 0).map((x, i) => ({ trade_date: x.trade_date, adj_factor: i < 5 ? 1 : 1.1 }))
+}
+
+test('回测：除权日必须用前复权价，否则「分红」会被误判成「下跌」（v0.46.0）', async (t) => {
+  const n = 30
+  const h = makeHarness({
+    conclusions: [CONCLUSION({ stance: '看多' })],
+    daily: { '600519.SH': makeExDivDaily('20261008', n), '000001.SH': makeDaily('20261008', n, 3000, 0) },
+    adj: { '600519.SH': makeExDivAdj('20261008', n) },
+  })
+  t.after(h.cleanup)
+
+  const r = await h.call('GET', '/dsh-invest/api/backtest')
+  assert.equal(r.status, 200)
+  const row = r.json.rows[0]
+
+  assert.ok(row.ret5Raw < -8, '未复权口径应显示约 -8.18%，实际 ' + row.ret5Raw)
+  assert.ok(row.ret5 > 0.9 && row.ret5 < 1.1, '前复权口径应约 +1%，实际 ' + row.ret5)
+  assert.equal(row.adjApplied, true, '本条确实用到了复权因子')
+  assert.equal(row.hit5, true, '复权后是上涨 → 看多应判命中（未复权会误判为未中）')
+  assert.equal(r.json.overall.rate5, 100)
+  assert.equal(r.json.adjCoverage, 1)
+  assert.equal(r.json.adjUniverse, 1)
+})
+
+test('回测：无复权因子时回落未复权并显式告警（不静默降级）', async (t) => {
+  const n = 30
+  const h = makeHarness({
+    conclusions: [CONCLUSION({ stance: '看多' })],
+    // 无 adj 缓存 → btAdj 拿不到因子
+    daily: { '600519.SH': makeExDivDaily('20261008', n), '000001.SH': makeDaily('20261008', n, 3000, 0) },
+  })
+  t.after(h.cleanup)
+
+  const r = await h.call('GET', '/dsh-invest/api/backtest')
+  assert.equal(r.status, 200)
+  const row = r.json.rows[0]
+  assert.equal(row.adjApplied, false, '无因子 → 走未复权')
+  assert.equal(row.ret5, row.ret5Raw, '复权与未复权应一致（都等于未复权）')
+  assert.equal(row.hit5, false, '按未复权算则是下跌 → 未命中')
+  assert.equal(r.json.adjCoverage, 0)
+  assert.ok(r.json.warnings.some((w) => w.includes('复权因子覆盖')), '必须告警，不能静默按未复权算')
 })

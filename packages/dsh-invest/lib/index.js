@@ -1868,6 +1868,53 @@ function apply(ctx, config) {
       return rows
     } catch (e) { return null }
   }
+  // 复权因子（v0.46.0）：Tushare `daily` 返回的是未复权价，除权除息日价格自然下跳，
+  // 直接用未复权 close 算区间收益，会把「分红送转」误算成「下跌」。
+  // 缓存策略与 btDaily 一致：命中 <BASE_DIR>/.dsh-invest/cache/pack/adj_<code>_<ymd>.json 即离线。
+  const btAdj = async (code, token) => {
+    const { readdirSync, readFileSync, writeFileSync, mkdirSync } = await import("node:fs")
+    const dir = BASE_DIR + "/.dsh-invest/cache/pack"
+    const prefix = "adj_" + code.replace(/\./g, "_") + "_"
+    let best = "", bestDate = ""
+    try {
+      for (const f of readdirSync(dir)) {
+        if (!f.startsWith(prefix) || !f.endsWith(".json")) continue
+        const d = f.slice(prefix.length, -5)
+        if (d > bestDate) { bestDate = d; best = f }
+      }
+    } catch (e) { /* 目录不存在 */ }
+    if (best) {
+      try {
+        const c = JSON.parse(readFileSync(dir + "/" + best, "utf8"))
+        if (Array.isArray(c.rows) && c.rows.length >= 30) return c.rows
+        // 负缓存：ETF 等确实没有复权因子，记下来免得每次刷新都再问一次接口
+        if (c.noAdj === true) return null
+      } catch (e) { /* 坏缓存，走在线 */ }
+    }
+    if (!token) return null
+    const p2 = (n) => String(n).padStart(2, "0")
+    const ymd = (d) => "" + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate())
+    const end = new Date()
+    const start = new Date(end.getTime() - 400 * 86400000)
+    try {
+      const r = await fetch("https://api.tushare.pro", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_name: "adj_factor", token, params: { ts_code: code, start_date: ymd(start), end_date: ymd(end) } }),
+      })
+      const j = JSON.parse(await r.text())
+      if (j.code !== 0 || !j.data || !Array.isArray(j.data.items)) return null
+      const fields = j.data.fields
+      const rows = j.data.items.map((it) => { const o = {}; fields.forEach((k, i) => { o[k] = it[i] }); return o })
+        .sort((a, b) => String(a.trade_date).localeCompare(String(b.trade_date)))
+      // ETF / 部分新标的没有复权因子，行数不足视为「无因子」，回落到未复权
+      try {
+        mkdirSync(dir, { recursive: true })
+        const body = rows.length < 30 ? { code, endYmd: ymd(end), rows: [], noAdj: true } : { code, endYmd: ymd(end), rows }
+        writeFileSync(dir + "/" + prefix + ymd(end) + ".json", JSON.stringify(body))
+      } catch (e) { /* 回写失败不影响本次 */ }
+      return rows.length < 30 ? null : rows
+    } catch (e) { return null }
+  }
   const computeBacktest = async () => {
     const fs0 = ctx.get("fs")
     const readSafe = async (p) => {
@@ -1883,9 +1930,26 @@ function apply(ctx, config) {
     const warnings = []
     const codes = Array.from(new Set(conclusions.map((c) => c.code)))
     const daily = {}
+    const adjRaw = {}
     for (const code of codes) {
       daily[code] = await btDaily(code, token)
       if (!daily[code]) warnings.push(code + "：无日线数据（缓存与 Tushare 均失败）")
+      if (daily[code]) adjRaw[code] = await btAdj(code, token)
+    }
+    // 复权因子索引：trade_date -> adj_factor
+    const adjOf = {}
+    let adjCovered = 0
+    for (const code of codes) {
+      if (!Array.isArray(adjRaw[code])) continue
+      const m = new Map()
+      for (const x of adjRaw[code]) {
+        const f = Number(x.adj_factor)
+        if (Number.isFinite(f) && f > 0) m.set(String(x.trade_date), f)
+      }
+      if (m.size) { adjOf[code] = m; adjCovered += 1 }
+    }
+    if (adjCovered < codes.length) {
+      warnings.push("复权因子覆盖 " + adjCovered + "/" + codes.length + " 只；无因子标的（ETF 等）按未复权计算")
     }
     const idx = await btDaily(BACKTEST_IDX_CODE, token, true)
     const idxDates = idx ? idx.map((x) => String(x.trade_date)) : []
@@ -1901,8 +1965,22 @@ function apply(ctx, config) {
       if (!Number.isFinite(base) || base <= 0) continue
       const closeAt = (n) => (i + n < r.length) ? Number(r[i + n].close) : null
       const fwd5 = closeAt(5), fwd20 = closeAt(20)
-      const ret5 = fwd5 !== null ? (fwd5 / base - 1) * 100 : null
-      const ret20 = fwd20 !== null ? (fwd20 / base - 1) * 100 : null
+      // 未复权收益：保留作审计字段，用来对照「复权后差了多少」
+      const ret5Raw = fwd5 !== null ? (fwd5 / base - 1) * 100 : null
+      const ret20Raw = fwd20 !== null ? (fwd20 / base - 1) * 100 : null
+      // 前复权收益：close × adj_factor 才是连续可比价格；缺因子（ETF 等）回落未复权
+      const amap = adjOf[c.code]
+      const fa = amap ? amap.get(String(r[i].trade_date)) : void 0
+      const adjRatio = (n) => {
+        if (!amap || i + n >= r.length) return null
+        if (typeof fa !== "number" || fa <= 0) return null
+        const fb = amap.get(String(r[i + n].trade_date))
+        if (typeof fb !== "number" || fb <= 0) return null
+        return (Number(r[i + n].close) * fb) / (base * fa)
+      }
+      const ratio5 = adjRatio(5), ratio20 = adjRatio(20)
+      const ret5 = ratio5 !== null ? (ratio5 - 1) * 100 : ret5Raw
+      const ret20 = ratio20 !== null ? (ratio20 - 1) * 100 : ret20Raw
       // 超额 = 个股区间收益 − 上证指数同区间收益
       let ex5 = null, ex20 = null
       if (idx) {
@@ -1924,6 +2002,9 @@ function apply(ctx, config) {
         ts: c.ts, code: c.code, stance: String(c.stance || ""), stage: String(c.stage || ""), mode: String(c.mode || ""),
         base: btRound(base), target: (typeof c.target === "number" ? c.target : null),
         ret5: btRound(ret5), ret20: btRound(ret20), ex5: btRound(ex5), ex20: btRound(ex20),
+        // 审计字段（v0.46.0）：未复权原值 + 本条是否真的应用了复权
+        ret5Raw: btRound(ret5Raw), ret20Raw: btRound(ret20Raw),
+        adjApplied: ratio5 !== null || ratio20 !== null,
         hit5: (ret5 === null || !directional) ? null : (bullish ? ret5 > 0 : ret5 < 0),
         hit20: (ret20 === null || !directional) ? null : (bullish ? ret20 > 0 : ret20 < 0),
         thesis: String(c.thesis || "").slice(0, 80),
@@ -2007,6 +2088,8 @@ function apply(ctx, config) {
       byStage: groupAgg((x) => x.stage), byStance: groupAgg((x) => x.stance),
       byMonth: groupAgg((x) => String(x.ts).slice(0, 7)),
       byConfidence: confGroups, confidenceCoverage: withConf,
+      // 复权覆盖：adjCoverage / adjUniverse，用来一眼看出有多少标的真的按前复权算了
+      adjCoverage: adjCovered, adjUniverse: codes.length,
       rows: rows.slice(-300), warnings, lastTradeDate,
     }
   }

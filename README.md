@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件。把「选股 → 消息 → 深度诊断 → 综合决策」做成一条可复用的多角色子代理流水线，
 > 并配一个本机网页工作台：一键任务、模型配置、持仓管理、结论记忆、标的档案、明暗主题。
 
-**当前版本：v0.45.1**
+**当前版本：v0.46.0**
 
 ---
 
@@ -260,7 +260,7 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | POST | `/dsh-invest/api/stock-note/curate` | 触发二次整理（异步，`full` 可全量重写） |
 | POST | `/dsh-invest/api/stock-ask` | 就个股知识库追问（线程按股票保存） |
 | POST | `/dsh-invest/api/stock-notes/rebuild` | 重建知识库（`?full=1` 全量重解析） |
-| GET | `/dsh-invest/api/backtest` | 判断质量回测：结构化结论 × 日线 → 5/20 日命中率与超额（v0.44.0） |
+| GET | `/dsh-invest/api/backtest` | 判断质量回测：结构化结论 × 日线 → 5/20 日命中率与超额；收益按**前复权**（close × adj_factor）计算（v0.44.0，v0.46.0 修复权） |
 | GET/POST | `/dsh-invest/api/model-settings` | 读/写角色+模板模型配置 |
 | POST | `/dsh-invest/api/holdings/import` | CSV/截图/手动 → 草稿 |
 | POST | `/dsh-invest/api/holdings/draft` | 手动编辑 → 草稿 |
@@ -376,7 +376,7 @@ pnpm build                        # = tsc --noEmit && vite build → ../../.dsh-
 
 ## 十一、版本与变更
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.45.1**（修复：启动时误跳转到个股知识库页，覆盖了默认的概览页）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.46.0**（修复：回测收益改用前复权价，除权除息不再被误判成下跌）。
 
 > **维护约定（勿跳过）**：版本号只有一个事实来源 —— `packages/dsh-invest/package.json`。
 > 每次发版必须同步：① 根 `package.json` 与 `package-lock.json`；② 本文件顶部「当前版本」与本节摘要；

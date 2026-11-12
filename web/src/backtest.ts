@@ -147,6 +147,10 @@ function detailTable(rows: BacktestRow[]): string {
   const body = sorted.map((row) => {
     const hit = row.hit5 === null ? '<span class="muted">未到期</span>'
       : row.hit5 ? '<span class="hit-yes">命中</span>' : '<span class="hit-no">未中</span>';
+    // 复权修正量（v0.46.0）：差异 >= 0.05pp 才提示，否则满屏噪声
+    const d5 = row.ret5 !== null && row.ret5 !== undefined && row.ret5Raw !== null && row.ret5Raw !== undefined
+      ? Math.abs(row.ret5 - row.ret5Raw) : 0;
+    const adjHint = d5 >= 0.05 ? `<span class="muted small" title="未复权 ${pct(row.ret5Raw)}，差额来自除权除息"> ⚖</span>` : '';
     return `<tr>
       <td class="table-date">${formatDateTime(row.ts, true)}</td>
       <td>${escapeHtml(row.code)}</td>
@@ -154,14 +158,14 @@ function detailTable(rows: BacktestRow[]): string {
       <td class="muted small">${escapeHtml(row.stage || '—')}</td>
       <td class="numeric">${row.confidence === null || row.confidence === undefined ? '<span class="muted">—</span>' : row.confidence.toFixed(2)}</td>
       <td class="numeric">${row.base === null ? '—' : row.base.toFixed(2)}</td>
-      <td class="numeric ${toneClass(row.ret5)}">${pct(row.ret5)}</td>
+      <td class="numeric ${toneClass(row.ret5)}">${pct(row.ret5)}${adjHint}</td>
       <td class="numeric ${toneClass(row.ex5)}">${pct(row.ex5)}</td>
       <td>${hit}</td>
       <td class="muted small" title="${escapeHtml(row.report || '')}">${escapeHtml(row.source === 'backfill' ? '回溯补录' : (row.runId || '—'))}</td>
     </tr>`
   }).join('');
   return `<section class="panel">
-    ${sectionHeading('逐条明细', '最近 60 条；最后一列是溯源信息：来自哪次运行或哪份报告（hover 看报告文件名）', `<span class="record-count">${rows.length} 条可回测</span>`)}
+    ${sectionHeading('逐条明细', '最近 60 条；收益按前复权计算，⚖ 标记表示该条若用未复权价会差 0.05pp 以上（hover 看原值）', `<span class="record-count">${rows.length} 条可回测</span>`)}
     <div class="table-scroll"><table class="data-table">
       <thead><tr><th>时间</th><th>标的</th><th>结论</th><th>角色</th><th>置信度</th><th>基准价</th><th>5 日</th><th>超额</th><th>5日命中</th><th>溯源</th></tr></thead>
       <tbody>${body}</tbody>
@@ -187,7 +191,11 @@ export function renderBacktest(state: AppState): string {
   const warnings = data.warnings.length
     ? `<div class="inline-warning">${icon('alert', 15)}${escapeHtml(data.warnings.slice(0, 4).join('；'))}${data.warnings.length > 4 ? `（共 ${data.warnings.length} 条）` : ''}</div>`
     : '';
+  const adjNote = (data.adjUniverse || 0) > 0
+    ? `复权因子覆盖 ${data.adjCoverage ?? 0} / ${data.adjUniverse} 只标的${(data.adjCoverage ?? 0) < (data.adjUniverse ?? 0) ? '（其余为 ETF 等无因子标的，按未复权计算）' : ''}。`
+    : '';
   const method = `<div class="inline-note">${icon('file', 15)}<span><strong>命中</strong>：看多/持有/加仓 → 上涨；拒绝/回避/减仓/离场 → 下跌；观察不计命中率。<br>
+    <strong>收益按前复权</strong>（close × adj_factor）计算——未复权价在除权除息日会自然下跳，直接算会被误判成下跌。${adjNote}<br>
     <strong>超额</strong>＝个股区间收益 − 上证指数同区间收益。<strong>盈亏比</strong>＝平均盈利 ÷ 平均亏损（>1 才有正向赔率）。<br>
     20 日窗口需要更长时间积累，样本少时显示「—」。</span></div>`;
   const confGroups = data.byConfidence || [];

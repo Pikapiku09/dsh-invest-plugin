@@ -314,6 +314,11 @@ export interface BacktestRow {
   ret20: number | null;
   ex5: number | null;
   ex20: number | null;
+  /** 未复权原值（v0.46.0）：仅供审计对照，除权日会失真，不要拿它判断准不准 */
+  ret5Raw?: number | null;
+  ret20Raw?: number | null;
+  /** 本条是否真的取到了复权因子（ETF 等无因子标的为 false，等于用未复权价） */
+  adjApplied?: boolean;
   /** null = 该结论无方向（观察）或前向窗口尚不足，不计入命中率 */
   hit5: boolean | null;
   hit20: boolean | null;
@@ -364,6 +369,9 @@ export interface BacktestResponse {
   byMonth: BacktestGroup[];
   byConfidence?: BacktestGroup[];
   confidenceCoverage?: number;
+  /** 复权覆盖（v0.46.0）：adjCoverage / adjUniverse，标的层面有多少真的按前复权算 */
+  adjCoverage?: number;
+  adjUniverse?: number;
   rows: BacktestRow[];
   warnings: string[];
   lastTradeDate: string;
