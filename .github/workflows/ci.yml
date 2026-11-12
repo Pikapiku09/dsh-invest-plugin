@@ -20,8 +20,15 @@ jobs:
           node-version: 22
       # test/ 下的用例只依赖 Node 内置模块与仓库内相对导入，因此**不做 npm install**：
       # 既快，也顺带绕开根依赖里的私有包（@deepseek-ai/*）在 CI 上无法拉取的问题。
+      - name: 环境自检（失败时一眼看出缺什么）
+        run: |
+          node -v
+          npm -v
+          python3 -V || echo "WARN: 没有 python3（lib 会回退 python）"
+          ls test | head -30
       - name: 运行全量测试
-        run: node --test
+        # spec 报告器：失败时把用例名/断言差异直接打在日志里，不用再靠猜
+        run: node --test --test-reporter=spec
 
   web:
     name: 前端构建（tsc --noEmit + vite build）

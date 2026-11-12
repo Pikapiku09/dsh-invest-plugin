@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件。把「选股 → 消息 → 深度诊断 → 综合决策」做成一条可复用的多角色子代理流水线，
 > 并配一个本机网页工作台：一键任务、模型配置、持仓管理、结论记忆、标的档案、明暗主题。
 
-**当前版本：v0.44.0**
+**当前版本：v0.44.1**
 
 ---
 
@@ -376,7 +376,7 @@ pnpm build                        # = tsc --noEmit && vite build → ../../.dsh-
 
 ## 十一、版本与变更
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.44.0**（本轮：新增「判断质量」回测页——结构化结论×日线算 5/20 日命中率；失败可观测性；深度阶段在指定标的时并行；CI；磁盘自动清理）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.44.1**（本轮：修复 CI——OCR 测试不再依赖本机工作区 fixture，lib 的 python 调用改为自动探测 python3/python）。
 
 > **维护约定（勿跳过）**：版本号只有一个事实来源 —— `packages/dsh-invest/package.json`。
 > 每次发版必须同步：① 根 `package.json` 与 `package-lock.json`；② 本文件顶部「当前版本」与本节摘要；

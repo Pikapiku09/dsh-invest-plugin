@@ -2,6 +2,28 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.44.1（2026-11-12）
+
+**修复 CI 后端失败：测试不能依赖开发者本机工作区，python 解释器要跨平台探测**
+
+v0.44.0 推上去后 GitHub Actions 的「后端测试」job 直接失败。定位到两个独立的坑：
+
+- **根因 1（致命）**：`test/ocr-holdings.test.js` 用 `path.resolve('..', '.dsh-invest/store/names.json')`
+  定位 fixture——那是**相对 CWD** 的路径，只有在工作区根目录执行时才碰巧正确。CI 上 CWD 同样是仓库根，
+  但上一级没有 `.dsh-invest`，于是**模块加载阶段**的无条件 `copyFileSync` 抛 ENOENT，
+  整个测试文件被记为失败，job 随之失败（`skip` 判断在测试声明里，根本来不及生效）。
+  - 修复：fixture 路径改为相对**测试文件自身**（`fileURLToPath(import.meta.url)` → 上两级），
+    且拷贝前 `existsSync` 判断——缺失时测试走 `skip`，绝不抛错。
+  - 已用「把 CWD 换到工作区之外」的方式复现了 CI 失败，并在修复后验证通过。
+- **根因 2（Linux 兼容）**：`packages/lib/index.js` 有 **4 处硬编码 `spawn("python", …)`**
+  （实时行情、本地 OCR、索引重建、截图压缩）。GitHub 的 ubuntu runner 上通常只有 `python3`，
+  一旦 spawn 失败：行情会退化到 Node 直连（可用），但 OCR/索引/压缩直接报错，桩脚本测试也失效。
+  - 修复：新增 `resolvePython()`，按平台顺序探测（win32 先 `python`，其余先 `python3`），
+    结果缓存；4 处调用全部改为 `spawn(await resolvePython(), …)`。
+- **CI 可诊断性**：后端 job 增加环境自检步骤（node/npm/python3 版本 + test 目录列表）与
+  `--test-reporter=spec`，以后失败时日志里直接能看到是哪个用例、差在哪。
+- **测试**：本地全量 `node --test` **123/123**；另用「CWD 在工作区之外」跑一遍全量，确认无其余路径假设。
+
 ## v0.44.0（2026-11-12）
 
 **判断质量回测 + 失败可观测性 + 深度阶段并行 + CI + 磁盘卫生**

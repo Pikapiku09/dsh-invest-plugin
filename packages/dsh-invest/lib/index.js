@@ -100,6 +100,24 @@ function apply(ctx, config) {
   // 本地持仓账本（跨会话共享）：由 scripts/holdings.py 维护，invest_run 每次运行注入摘要
   const HOLDINGS_FILE = BASE_DIR + "/.dsh-invest/持仓.json"
   const REALTIME_SCRIPT = BASE_DIR + "/scripts/realtime_quote.py"
+  // Python 解释器探测（v0.44.1）：Windows 上叫 python，Linux/CI 上通常只有 python3。
+  // 只探测一次并缓存；探测失败时按平台给默认值，让上层错误处理照常报错。
+  let pythonCmdCache = ""
+  const resolvePython = async () => {
+    if (pythonCmdCache) return pythonCmdCache
+    const candidates = process.platform === "win32" ? ["python", "python3"] : ["python3", "python"]
+    try {
+      const { spawnSync } = await import("node:child_process")
+      for (const cmd of candidates) {
+        try {
+          const probe = spawnSync(cmd, ["-V"], { stdio: "ignore", windowsHide: true })
+          if (probe && probe.status === 0) { pythonCmdCache = cmd; return cmd }
+        } catch (e) { /* 试下一个 */ }
+      }
+    } catch (e) { /* 探测失败走默认 */ }
+    pythonCmdCache = candidates[0]
+    return pythonCmdCache
+  }
   // 工作台（P1 只读）：页面与索引文件（tools/index_store.py 生成，运行时读取，改页面无需改插件）
   const WEB_INDEX = BASE_DIR + "/.dsh-invest/web/index.html"
   const STORE_INDEX = BASE_DIR + "/.dsh-invest/store/index.json"
@@ -802,11 +820,12 @@ function apply(ctx, config) {
   // 返回 { quotes, fetchedAt }；脚本失败/非 ok/解析失败抛 Error（由路由转成 400），spawn 不可用则退化到 Node fetch
   const fetchQuotePrices = async (codes) => {
     const { spawn } = await import("node:child_process")
+    const pyCmd = await resolvePython()
     const run = await new Promise((resolve) => {
       let settled = false, timer = null, child = null
       const done = (r) => { if (settled) return; settled = true; if (timer) clearTimeout(timer); resolve(r) }
       try {
-        child = spawn("python", [REALTIME_SCRIPT, ...codes], { cwd: BASE_DIR, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
+        child = spawn(pyCmd, [REALTIME_SCRIPT, ...codes], { cwd: BASE_DIR, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
       } catch (e) {
         done({ ok: false, spawnUnavailable: true, reason: "spawn python 失败：" + String(e && e.message || e) })
         return
@@ -954,8 +973,9 @@ function apply(ctx, config) {
     await fsp.writeFile(tmp, Buffer.from(imageBase64, "base64"))
     try {
       const script = process.env.DSH_INVEST_OCR_SCRIPT || (BASE_DIR + "/scripts/ocr_holdings.py")
+      const pyCmd = await resolvePython()
       const stdout = await new Promise((resolve, reject) => {
-        const child = spawn("python", [script, tmp], { cwd: BASE_DIR, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
+        const child = spawn(pyCmd, [script, tmp], { cwd: BASE_DIR, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
         let out = ""
         let err = ""
         const timer = setTimeout(() => { try { child.kill() } catch (e) { /* ignore */ } reject(new Error("本地 OCR 超时（60 秒）")) }, 60000)
@@ -1577,8 +1597,9 @@ function apply(ctx, config) {
     if (reindexPromise && !force) return reindexPromise
     const tracked = (async () => {
       const { spawn } = await import("node:child_process")
+      const pyCmd = await resolvePython()
       await new Promise((resolve, reject) => {
-        const child = spawn("python", [BASE_DIR + "/tools/index_store.py"], { cwd: BASE_DIR, stdio: "ignore", windowsHide: true })
+        const child = spawn(pyCmd, [BASE_DIR + "/tools/index_store.py"], { cwd: BASE_DIR, stdio: "ignore", windowsHide: true })
         const timer = setTimeout(() => { child.kill(); reject(new Error("index_store timeout")) }, 90000)
         child.on("error", (e) => { clearTimeout(timer); reject(e) })
         child.on("close", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error("index_store exit " + code)) })
@@ -2779,8 +2800,9 @@ function apply(ctx, config) {
       try {
         const { spawn } = await import("node:child_process")
         const py = BASE_DIR + "/tools/compress_image.py"
+        const pyCmd = await resolvePython()
         sendBase64 = await new Promise((resolve, reject) => {
-          const child = spawn("python", [py], { cwd: BASE_DIR, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] })
+          const child = spawn(pyCmd, [py], { cwd: BASE_DIR, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] })
           let out = "", err = ""
           child.stdout.on("data", (d) => out += String(d))
           child.stderr.on("data", (d) => err += String(d))
