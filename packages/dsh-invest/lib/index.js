@@ -263,6 +263,57 @@ function apply(ctx, config) {
       + "\n请先判断上次结论是否已兑现或失效，再明确写出本次与上次的**相同点、变化点及变化原因**；没有新证据不得简单重复历史结论。"
   }
 
+  // ============ 实例身份（v0.48.0）：多人共用时的来源标识 ============
+  // store/instance.json：本机身份 { id, name, createdAt }；id 首次启动随机生成、永久不变，
+  // name 可在判断质量页改名。conclusions 落库带 instance=id；导入他机数据时按 id 区分来源。
+  // store/instances.json：已知实例映射 { <id>: { name, lastSeen } }——导入时自动登记，
+  // 分组表里就能显示对方的名字而不是一串随机短码。
+  const INSTANCE_FILE = BASE_DIR + "/.dsh-invest/store/instance.json"
+  const INSTANCES_FILE = BASE_DIR + "/.dsh-invest/store/instances.json"
+  let instanceCache = null
+  const loadInstance = async () => {
+    if (instanceCache) return instanceCache
+    try {
+      const j = JSON.parse(await fsp.readFile(INSTANCE_FILE, "utf8"))
+      if (j && typeof j.id === "string" && j.id) { instanceCache = { id: j.id, name: String(j.name || "") }; return instanceCache }
+    } catch (e) { /* 首次 */ }
+    const inst = { id: "i" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), name: "", createdAt: new Date().toISOString() }
+    try { await fsp.mkdir(BASE_DIR + "/.dsh-invest/store", { recursive: true }); await fsp.writeFile(INSTANCE_FILE, JSON.stringify(inst, null, 2)) } catch (e) { /* 内存兜底 */ }
+    instanceCache = { id: inst.id, name: inst.name }
+    return instanceCache
+  }
+  const setInstanceName = async (name) => {
+    const inst = await loadInstance()
+    const clean = String(name || "").trim().slice(0, 30)
+    inst.name = clean
+    let prev = {}
+    try { prev = JSON.parse(await fsp.readFile(INSTANCE_FILE, "utf8")) } catch (e) { /* 新建 */ }
+    try { await fsp.writeFile(INSTANCE_FILE, JSON.stringify({ ...prev, id: inst.id, name: clean }, null, 2)) } catch (e) { /* 内存态已改，落盘失败下次启动丢失 */ }
+    return inst
+  }
+  const loadKnownInstances = async () => {
+    try {
+      const j = JSON.parse(await fsp.readFile(INSTANCES_FILE, "utf8"))
+      if (j && typeof j === "object") return j
+    } catch (e) { /* 无 */ }
+    return {}
+  }
+  const rememberInstance = async (id, name) => {
+    if (!id) return
+    const map = await loadKnownInstances()
+    const prev = map[id] || {}
+    map[id] = { name: String(name || prev.name || "").slice(0, 30), lastSeen: new Date().toISOString() }
+    try { await fsp.writeFile(INSTANCES_FILE, JSON.stringify(map, null, 2)) } catch (e) { /* 尽力而为 */ }
+  }
+  // 分组显示名：本机 → 自定义名或「本机」；已知他机 → 其名；未知 → 短码
+  const instanceLabel = async (id) => {
+    const local = await loadInstance()
+    const eff = id || local.id // 无 instance 的行是本机旧数据（v0.48.0 之前落库），归本机
+    if (eff === local.id) return local.name || "本机"
+    const known = (await loadKnownInstances())[eff]
+    return (known && known.name) ? known.name : eff.slice(0, 8)
+  }
+
   // P3：结构化结论落库（v0.45.0 修正采集口径）
   //
   // 旧实现只取「最后一个含结论的成功阶段、最多 3 条」——选股模式四阶段里，
@@ -292,11 +343,14 @@ function apply(ctx, config) {
       return (Number.isFinite(n) && n >= lo && n <= hi) ? Math.round(n * 100) / 100 : null
     }
     const entries = Array.from(byCode.entries()).slice(0, 20)
+    const inst = await loadInstance()
     const lines = entries.map(([code, item]) => {
       const b = item.block
       return JSON.stringify({
         ts: new Date().toISOString(), mode, question: String(question).slice(0, 200), callId,
         code, stance: b.stance || "未明",
+        // 来源实例（v0.48.0）：多人共享数据时区分「谁的判断」；旧记录无此字段，回测时归本机
+        instance: inst.id,
         // 置信度（v0.45.0 新增）：模型自评 0-1，用于回测做校准分析；历史记录没有此字段
         confidence: cNum(b.confidence, 0, 1),
         target: (typeof b.target === "number" ? b.target : null),
@@ -2024,6 +2078,8 @@ function apply(ctx, config) {
         adjApplied: ratio5 !== null || ratio20 !== null,
         // 市场状态（v0.47.0）：同质样本拆分的唯一维度
         regime: regimeAt(tsYmd),
+        // 来源实例（v0.48.0）：空 = 本机旧数据（v0.48.0 之前落库）
+        instance: String(c.instance || ""),
         hit5: (ret5 === null || !directional) ? null : (bullish ? ret5 > 0 : ret5 < 0),
         hit20: (ret20 === null || !directional) ? null : (bullish ? ret20 > 0 : ret20 < 0),
         thesis: String(c.thesis || "").slice(0, 80),
@@ -2089,6 +2145,15 @@ function apply(ctx, config) {
       return Array.from(map.entries()).map(([name, list]) => ({ name, ...agg(list) })).sort((a, b) => b.samples - a.samples)
     }
     const lastTradeDate = datesOfLatest(daily)
+    // 来源实例（v0.48.0）：分组显示名解析——本机 → 自定义名；他机 → 导入时登记的名字
+    const localInst = await loadInstance()
+    const knownInst = await loadKnownInstances()
+    const labelOf = (id) => {
+      const eff = id || localInst.id // 无 instance 的旧行归本机
+      if (eff === localInst.id) return localInst.name || "本机"
+      const k = knownInst[eff]
+      return (k && k.name) ? k.name : eff.slice(0, 8)
+    }
     // 置信度分箱（v0.45.0）：回答「它说很有把握时，是不是真的更准」
     const confBin = (x) => {
       const v = x.confidence
@@ -2107,6 +2172,8 @@ function apply(ctx, config) {
       byStage: groupAgg((x) => x.stage), byStance: groupAgg((x) => x.stance),
       byMonth: groupAgg((x) => String(x.ts).slice(0, 7)),
       byRegime: groupAgg((x) => x.regime),
+      byInstance: groupAgg((x) => labelOf(x.instance)),
+      localInstance: { id: localInst.id, name: localInst.name },
       byConfidence: confGroups, confidenceCoverage: withConf,
       // 复权覆盖：adjCoverage / adjUniverse，用来一眼看出有多少标的真的按前复权算了
       adjCoverage: adjCovered, adjUniverse: codes.length,
@@ -2820,6 +2887,117 @@ function apply(ctx, config) {
         try {
           const body = await readRequestJson(req)
           writeJson(res, 200, await backfillConclusions(body && body.apply === true))
+        } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 实例改名（v0.48.0）：多人共享数据时给本机起个名字，分组表里显示这个名字
+      kind: "exact",
+      path: "/dsh-invest/api/instance-name",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const inst = await setInstanceName(body && body.name)
+          writeJson(res, 200, { ok: true, instance: inst })
+        } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 结论导出（v0.48.0）：一键导出单文件 jsonl，微信/网盘直接转发。
+      // 第一行是 _manifest（来源实例/导出时间/条数），其余为结论行原样——只含结论，
+      // 不含 token、持仓账本、报告正文；question/thesis 字段是流水线判断内容本身。
+      kind: "exact",
+      path: "/dsh-invest/api/conclusions-export",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          let text = ""
+          try { text = await fsp.readFile(CONCLUSIONS_LOG, "utf8") } catch (e) { /* 空库 */ }
+          const lines = String(text || "").split("\n").filter((l) => l.trim())
+          if (!lines.length) { writeJson(res, 400, { error: "结论库还是空的：先跑几次带结构化结论的任务再导出" }); return }
+          const inst = await loadInstance()
+          const manifest = JSON.stringify({
+            _manifest: true, instance: inst.id, name: inst.name, exportedAt: new Date().toISOString(),
+            count: lines.length, kind: "dsh-invest-conclusions", note: "dsh-invest 判断质量数据：仅含结构化结论，不含持仓与凭证",
+          })
+          const body = manifest + "\n" + lines.join("\n") + "\n"
+          const d = new Date()
+          const stamp = "" + d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0")
+          res.statusCode = 200
+          res.setHeader("content-type", "application/x-ndjson; charset=utf-8")
+          res.setHeader("cache-control", "no-store")
+          res.setHeader("content-disposition", 'attachment; filename="conclusions-' + inst.id.slice(0, 8) + '-' + stamp + '.jsonl"')
+          res.end(body)
+        } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 结论导入（v0.48.0）：导入他人导出的 jsonl——按（callId+标的）去重、只追加不改写，
+      // 与 conclusions.jsonl 的 append-only 纪律一致；导入来源登记进 instances.json 供分组显示。
+      kind: "exact",
+      path: "/dsh-invest/api/conclusions-import",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req, 8 * 1048576)
+          const text = String((body && body.text) || "")
+          if (!text.trim()) { writeJson(res, 400, { error: "导入内容为空" }); return }
+          const localInst = await loadInstance()
+          const inLines = text.split(/\r?\n/).filter((l) => l.trim())
+          if (inLines.length > 5000) { writeJson(res, 400, { error: "单次导入上限 5000 条" }); return }
+          // manifest：来源身份（缺 instance 的行是导出方的旧数据，导入时归到导出方名下）
+          let srcId = "", srcName = ""
+          for (const l of inLines) {
+            try {
+              const j = JSON.parse(l)
+              if (j && j._manifest === true) {
+                if (typeof j.instance === "string" && j.instance) srcId = j.instance
+                if (typeof j.name === "string") srcName = j.name
+                break
+              }
+            } catch (e) { /* 非法行后面统一算 */ }
+          }
+          const fs0 = ctx.get("fs")
+          if (fs0 === void 0) { writeJson(res, 500, { error: "文件系统不可用" }); return }
+          const result = await withLock("conclusions", async () => {
+            const target = await fs0.resolve(CONCLUSIONS_LOG)
+            let existing = ""
+            try { existing = await fs0.readText(target) } catch (e) { /* 首次 */ }
+            const have = new Set()
+            for (const l of String(existing || "").split("\n")) {
+              if (!l.trim()) continue
+              try { const j = JSON.parse(l); if (j && j.callId && j.code) have.add(j.callId + "|" + j.code) } catch (e) { /* 忽略坏行 */ }
+            }
+            const add = []
+            let skippedDup = 0, skippedInvalid = 0
+            for (const l of inLines) {
+              let j = null
+              try { j = JSON.parse(l) } catch (e) { skippedInvalid += 1; continue }
+              if (!j || j._manifest === true) continue
+              if (typeof j.code !== "string" || !/^\d{6}\.(SH|SZ|BJ)$/.test(j.code) || !j.ts || !j.callId || !j.stance) { skippedInvalid += 1; continue }
+              if (have.has(j.callId + "|" + j.code)) { skippedDup += 1; continue }
+              have.add(j.callId + "|" + j.code)
+              // 归属：行自带 instance 优先；否则用导出方 manifest 的 instance；再否则不补（无法判断来源）
+              const row = { ...j }
+              if (!row.instance && srcId && srcId !== localInst.id) row.instance = srcId
+              add.push(JSON.stringify(row))
+            }
+            if (add.length) {
+              const prefix = existing && !existing.endsWith("\n") ? existing + "\n" : existing
+              await fs0.writeText(target, prefix + add.join("\n") + "\n", void 0, void 0, getFsPolicy())
+            }
+            return { imported: add.length, skippedDup, skippedInvalid }
+          })
+          if (srcId && srcId !== localInst.id) await rememberInstance(srcId, srcName)
+          writeJson(res, 200, {
+            ok: true, ...result,
+            source: { instance: srcId, name: srcName },
+            note: "导入只追加不覆盖；同一份文件重复导入会全部跳过，无副作用",
+          })
         } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
       },
     },

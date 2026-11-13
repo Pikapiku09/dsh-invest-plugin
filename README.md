@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件。把「选股 → 消息 → 深度诊断 → 综合决策」做成一条可复用的多角色子代理流水线，
 > 并配一个本机网页工作台：一键任务、模型配置、持仓管理、结论记忆、标的档案、明暗主题。
 
-**当前版本：v0.47.0**
+**当前版本：v0.48.0**
 
 ---
 
@@ -230,6 +230,16 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 >    在此之前「按置信度」分组只作记录。
 > 5. **观察类不计入命中率**（它没有方向），但保留在样本里看后续走势。
 
+**多人共享数据（v0.48.0）**：「导出数据」生成单文件 `conclusions-*.jsonl`，发给另一位装了同款插件的朋友，
+对方「导入数据」即可合并。规矩只有三条：
+
+1. **只追加不改写**，按 `(callId + code)` 去重，重复导入无副作用；
+2. **只交换结论**——文件里不含 token、持仓账本、报告正文；
+3. **记得改本机标识**（面板上的输入框），否则「按来源」分组里你会显示成「本机」、对方显示成随机短码。
+
+> 提醒：两人同时间跑，**市场状态维度不会变多**（同一个行情），增量在个股层面与跨实例一致性。
+> 别指望靠人多提前跨过 S1 门槛。
+
 ---
 
 ## 五、数据层
@@ -278,7 +288,10 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | POST | `/dsh-invest/api/stock-note/curate` | 触发二次整理（异步，`full` 可全量重写） |
 | POST | `/dsh-invest/api/stock-ask` | 就个股知识库追问（线程按股票保存） |
 | POST | `/dsh-invest/api/stock-notes/rebuild` | 重建知识库（`?full=1` 全量重解析） |
-| GET | `/dsh-invest/api/backtest` | 判断质量回测：结构化结论 × 日线 → 5/20 日命中率与超额；收益按**前复权**（close × adj_factor）计算（v0.44.0，v0.46.0 修复权） |
+| GET | `/dsh-invest/api/backtest` | 判断质量回测：结构化结论 × 日线 → 5/20 日命中率与超额；收益按**前复权**（close × adj_factor）计算（v0.44.0 上线，v0.46.0 修口径） |
+| GET | `/dsh-invest/api/conclusions-export` | 导出结论单文件 jsonl（首行 `_manifest`，v0.48.0） |
+| POST | `/dsh-invest/api/conclusions-import` | 导入他机结论：按 `(callId+code)` 去重、只追加（v0.48.0） |
+| POST | `/dsh-invest/api/instance-name` | 修改本机实例显示名（v0.48.0） |
 | GET/POST | `/dsh-invest/api/model-settings` | 读/写角色+模板模型配置 |
 | POST | `/dsh-invest/api/holdings/import` | CSV/截图/手动 → 草稿 |
 | POST | `/dsh-invest/api/holdings/draft` | 手动编辑 → 草稿 |
@@ -394,7 +407,7 @@ pnpm build                        # = tsc --noEmit && vite build → ../../.dsh-
 
 ## 十一、版本与变更
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.47.0**（判断质量页：市场状态维度拆同质样本 + S0/S1 读数纪律入界面）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.48.0**（多人协作：结论一键导出/导入 + 来源实例标识，只追加去重）。
 
 > **维护约定（勿跳过）**：版本号只有一个事实来源 —— `packages/dsh-invest/package.json`。
 > 每次发版必须同步：① 根 `package.json` 与 `package-lock.json`；② 本文件顶部「当前版本」与本节摘要；

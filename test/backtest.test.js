@@ -78,18 +78,25 @@ function makeHarness(options = {}) {
   }
   apply(ctx, {})
 
-  async function call(method, pathAndQuery) {
+  async function call(method, pathAndQuery, opts) {
     const route = registered.find((item) => item.path === pathAndQuery.split('?')[0])
     assert.ok(route, '路由未注册：' + pathAndQuery)
     let status = 0
     let text = ''
-    const req = { method, url: pathAndQuery, socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'localhost:3080' } }
+    const body = opts && opts.body
+    // readRequestJson 走 async iterator——用异步生成器模拟带 body 的请求流
+    const req = body === undefined
+      ? { method, url: pathAndQuery, socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'localhost:3080' } }
+      : {
+          method, url: pathAndQuery, socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'localhost:3080' },
+          [Symbol.asyncIterator]: async function* () { yield Buffer.from(body) },
+        }
     const res = {
       setHeader() {}, set statusCode(v) { status = v }, get statusCode() { return status },
       end(v) { text = v === undefined ? '' : String(v) },
     }
     await route.handler(req, res)
-    return { status: status || 200, json: text ? JSON.parse(text) : null }
+    return { status: status || 200, json: (() => { try { return text ? JSON.parse(text) : null } catch { return null } })(), text }
   }
   return { base, call, cleanup: () => fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) }
 }
@@ -321,4 +328,96 @@ test('回测：指数历史不足 20 根 → 市场状态 null，归入「—」
   assert.equal(r.status, 200)
   assert.equal(r.json.rows[0].regime, null)
   assert.ok(r.json.byRegime.some((g) => g.name === '—'), 'null 归入「—」组')
+})
+
+// ===== v0.48.0：实例标识 + 导入导出 =====
+test('回测：新落库结论带 instance，旧数据（无 instance）归本机（v0.48.0）', async (t) => {
+  const h = makeHarness({
+    conclusions: [
+      CONCLUSION({}),                                     // 无 instance → 归本机
+      CONCLUSION({ code: '000001.SZ', stance: '拒绝', instance: 'ifriend001' }), // 他机
+    ],
+    daily: {
+      '600519.SH': makeDaily('20261008', 30, 100, 1),
+      '000001.SZ': makeDaily('20261008', 30, 10, -0.05),
+      '000001.SH': makeDaily('20261008', 30, 3000, 6),
+    },
+    adj: { '600519.SH': makeAdj('20261008', 30, 1), '000001.SZ': makeAdj('20261008', 30, 1) },
+  })
+  t.after(h.cleanup)
+  const r = await h.call('GET', '/dsh-invest/api/backtest')
+  assert.equal(r.status, 200)
+  assert.ok(r.json.localInstance && r.json.localInstance.id, '返回本机实例')
+  assert.ok(r.json.byInstance.some((g) => g.name === '本机'), '无 instance 的旧行归「本机」')
+  // 他机 instance 未登记名字 → 分组名用短码前 8 位（'ifriend001'.slice(0,8) = 'ifriend0'）
+  assert.ok(r.json.byInstance.some((g) => g.name === 'ifriend0'), '他机行按短码归组')
+  assert.ok(r.json.byInstance.every((g) => typeof g.samples === 'number' && g.samples > 0))
+})
+
+test('导出：单文件 jsonl，首行 _manifest，其余行原样（v0.48.0）', async (t) => {
+  const h = makeHarness({ conclusions: [CONCLUSION(), CONCLUSION({ code: '000001.SZ', stance: '拒绝' })] })
+  t.after(h.cleanup)
+  const r = await h.call('GET', '/dsh-invest/api/conclusions-export')
+  assert.equal(r.status, 200)
+  const lines = r.text.split('\n').filter((l) => l.trim())
+  assert.equal(lines.length, 3, 'manifest + 2 条结论')
+  const m = JSON.parse(lines[0])
+  assert.equal(m._manifest, true)
+  assert.ok(m.instance, 'manifest 带来源实例 id')
+  assert.equal(m.count, 2)
+  for (const l of lines.slice(1)) {
+    const j = JSON.parse(l)
+    assert.ok(j.code && j.ts && j.stance, '结论行结构完整')
+  }
+})
+
+test('导入：按（callId+code）去重、只追加、归属来源实例（v0.48.0）', async (t) => {
+  // 导入的标的必须有日线才会进回测行（否则行级丢弃，来源分组里看不到它）
+  const h = makeHarness({
+    conclusions: [CONCLUSION()],
+    daily: {
+      '600519.SH': makeDaily('20261008', 30, 100, 1),
+      '000823.SZ': makeDaily('20261008', 30, 20, -0.1),
+      '000001.SH': makeDaily('20261008', 30, 3000, 6),
+    },
+    adj: { '600519.SH': makeAdj('20261008', 30, 1), '000823.SZ': makeAdj('20261008', 30, 1) },
+  })
+  t.after(h.cleanup)
+
+  // 朋友导出的文件：1 条重复（同 callId+code）、1 条新数据（instance 归属 manifest）
+  const foreign = [
+    JSON.stringify({ _manifest: true, instance: 'ifriend002', name: '老王', count: 2 }),
+    JSON.stringify({ ts: '2026-10-08T02:00:00.000Z', mode: '个股', callId: 'test', code: '600519.SH', stance: '看多', instance: 'ifriend002' }),
+    JSON.stringify({ ts: '2026-10-09T02:00:00.000Z', mode: '个股', callId: 'run2', code: '000823.SZ', stance: '减仓' }),
+    '不是json的行',
+  ].join('\n')
+
+  const r = await h.call('POST', '/dsh-invest/api/conclusions-import', { body: JSON.stringify({ text: foreign }) })
+  assert.equal(r.status, 200)
+  assert.equal(r.json.ok, true)
+  assert.equal(r.json.imported, 1, '只导入 1 条新数据')
+  assert.equal(r.json.skippedDup, 1, '重复 1 条被跳过')
+  assert.equal(r.json.skippedInvalid, 1, '坏行 1 条被计为无效')
+  assert.equal(r.json.source.instance, 'ifriend002')
+
+  // 落库验证：新增行带上了来源 instance（无 instance 的行用 manifest 的补）
+  const fs = await import('node:fs')
+  const stored = fs.readFileSync(h.base + '/.dsh-invest/store/conclusions.jsonl', 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  const added = stored.find((x) => x.callId === 'run2')
+  assert.ok(added, '新行已落库')
+  assert.equal(added.instance, 'ifriend002', '归属导出方实例')
+  assert.equal(added.code, '000823.SZ')
+
+  // 同一份文件重复导入 → 全部跳过，无副作用
+  const r2 = await h.call('POST', '/dsh-invest/api/conclusions-import', { body: JSON.stringify({ text: foreign }) })
+  assert.equal(r2.json.imported, 0)
+  assert.equal(r2.json.skippedDup, 2, '已导入的那条现在也算重复')
+
+  // instances.json 登记了来源
+  const known = JSON.parse(fs.readFileSync(h.base + '/.dsh-invest/store/instances.json', 'utf8'))
+  assert.equal(known.ifriend002.name, '老王')
+
+  // 分组名显示「老王」
+  const bt = await h.call('GET', '/dsh-invest/api/backtest')
+  assert.ok(bt.json.byInstance.some((g) => g.name === '老王'), '已登记名字的他机按名字归组')
 })

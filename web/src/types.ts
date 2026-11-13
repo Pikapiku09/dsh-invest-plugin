@@ -321,6 +321,8 @@ export interface BacktestRow {
   adjApplied?: boolean;
   /** 市场状态（v0.47.0）：结论基准日的上证 上行/下行/震荡；指数历史不足为 null */
   regime?: string | null;
+  /** 来源实例（v0.48.0）：空 = 本机旧数据（v0.48.0 之前落库） */
+  instance?: string;
   /** null = 该结论无方向（观察）或前向窗口尚不足，不计入命中率 */
   hit5: boolean | null;
   hit20: boolean | null;
@@ -371,6 +373,10 @@ export interface BacktestResponse {
   byMonth: BacktestGroup[];
   /** 按市场状态分组（v0.47.0）：拆同质样本——同一周内的结论共享同一段行情 */
   byRegime?: BacktestGroup[];
+  /** 按来源实例分组（v0.48.0）：多人共享数据时区分「谁的判断」 */
+  byInstance?: BacktestGroup[];
+  /** 本机实例身份（v0.48.0）：id 永久不变，name 可在判断质量页修改 */
+  localInstance?: { id: string; name: string };
   byConfidence?: BacktestGroup[];
   confidenceCoverage?: number;
   /** 复权覆盖（v0.46.0）：adjCoverage / adjUniverse，标的层面有多少真的按前复权算 */
@@ -379,6 +385,16 @@ export interface BacktestResponse {
   rows: BacktestRow[];
   warnings: string[];
   lastTradeDate: string;
+}
+
+/** 结论导入结果（v0.48.0）：只追加不改写，重复导入全跳过 */
+export interface ImportResponse {
+  ok: boolean;
+  imported: number;
+  skippedDup: number;
+  skippedInvalid: number;
+  source: { instance: string; name: string };
+  note: string;
 }
 
 /** 结论采集审计（v0.45.0）：数据从哪来、哪些运行没进库、为什么 */

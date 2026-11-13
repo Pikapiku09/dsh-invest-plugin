@@ -3,7 +3,7 @@ import type {
   HoldingsQuotesResponse, HoldingsRefreshQuotesResponse, HoldingsResponse, IndexResponse, Job, ModelSettingsResponse, ModelSettingsSaveInput,
   HoldingPosition, HoldingsAccount, StockResolveResponse, TaskTemplate,
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
-  StockNotesResponse, StockNoteDetail, StockAskResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse,
+  StockNotesResponse, StockNoteDetail, StockAskResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -83,6 +83,30 @@ export const api = {
   conclusionsAudit: () => request<ConclusionAuditResponse>(`${BASE}/conclusions-audit`),
   /** 历史报告回溯补录（默认 dry-run，apply=true 才写盘） */
   conclusionsBackfill: (apply: boolean) => post<BackfillResponse>(`${BASE}/conclusions-backfill`, { apply }),
+  /** 结论导出（v0.48.0）：下载单文件 jsonl（首行 _manifest），转发即共享 */
+  conclusionsExport: async (): Promise<void> => {
+    const res = await fetch(`${BASE}/conclusions-export`);
+    if (!res.ok) {
+      let msg = `导出失败（${res.status}）`;
+      try { msg = (await res.json() as { error?: string }).error || msg; } catch { /* keep */ }
+      throw new Error(msg);
+    }
+    const disposition = res.headers.get('content-disposition') || '';
+    const m = /filename="([^"]+)"/.exec(disposition);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = m ? m[1] : 'conclusions.jsonl';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+  /** 结论导入（v0.48.0）：他机导出的 jsonl 文本，后端按（callId+标的）去重、只追加 */
+  conclusionsImport: (text: string) => post<ImportResponse>(`${BASE}/conclusions-import`, { text }),
+  /** 本机实例改名（v0.48.0）：多人共享数据时给分组表一个可读名字 */
+  setInstanceName: (name: string) => post<{ ok: true; instance: { id: string; name: string } }>(`${BASE}/instance-name`, { name }),
   // ===== 标的档案（观察 + 持仓统一监控）=====
   watchlist: () => request<WatchlistResponse>(`${BASE}/watchlist`),
   watchlistRefresh: () => post<WatchlistRefreshResponse>(`${BASE}/watchlist/refresh`, {}),

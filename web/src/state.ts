@@ -200,6 +200,8 @@ export interface AppState {
   auditLoading: boolean;
   auditError: string;
   backfillRunning: boolean;
+  /** v0.48.0：结论导入进行中 */
+  importRunning: boolean;
   taskDrafts: Record<string, TaskDraft>;
   /** 一键任务模板的自定义排序（模板 id 数组；localStorage 持久化） */
   templateOrder: string[];
@@ -261,7 +263,7 @@ export const state: AppState = {
   selectedCode: null, archiveQuery: '', archiveRecords: [], archiveLoading: false,
   archiveError: '', archiveNotice: '', runQuery: '', runStatus: 'all', runMode: 'all', runHideBackfill: false,
   backtest: null, backtestLoading: false, backtestError: '',
-  audit: null, auditLoading: false, auditError: '', backfillRunning: false,
+  audit: null, auditLoading: false, auditError: '', backfillRunning: false, importRunning: false,
   askQuery: '', askThreads: readAskThreads(), askDraft: '', askLoading: false, askError: '',
   askSuggestions: readAskSuggestions(), askSuggestionsEditing: false,
   askStocks: [], askStocksBuiltAt: '', askStocksLoading: false, askStocksError: '',

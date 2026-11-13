@@ -359,6 +359,57 @@ async function backfillConclusions(): Promise<void> {
   }
 }
 
+/** 导出结论（v0.48.0）：单文件 jsonl 下载，转发即共享 */
+async function exportConclusions(): Promise<void> {
+  try {
+    await api.conclusionsExport();
+    toast('已导出：浏览器下载列表里找 conclusions-*.jsonl。', 'success');
+  } catch (error) {
+    toast(`导出失败：${errorMessage(error)}`, 'error');
+  }
+}
+
+/** 导入结论（v0.48.0）：选文件 → 读文本 → 后端去重追加；只合并他机数据，不覆盖任何本机记录 */
+function openImportFilePicker(): void {
+  const input = document.getElementById('conclusions-import-file');
+  if (!(input instanceof HTMLInputElement)) return;
+  input.value = '';
+  input.click();
+}
+
+async function importConclusionsFile(file: File): Promise<void> {
+  if (state.importRunning) return;
+  state.importRunning = true;
+  render();
+  try {
+    const text = await file.text();
+    const result = await api.conclusionsImport(text);
+    const src = result.source?.name || result.source?.instance?.slice(0, 8) || '未知来源';
+    if (result.imported === 0) {
+      toast(`没有新数据：${result.skippedDup} 条与库内重复，${result.skippedInvalid} 条无效。同一份文件重复导入无副作用。`, 'info');
+    } else {
+      toast(`导入完成：来自「${src}」新增 ${result.imported} 条（跳过重复 ${result.skippedDup} 条）。`, 'success');
+    }
+    await loadBacktest(true);
+  } catch (error) {
+    toast(`导入失败：${errorMessage(error)}`, 'error');
+  } finally {
+    state.importRunning = false;
+    render();
+  }
+}
+
+/** 本机实例改名（v0.48.0）：多人共享数据时的来源显示名 */
+async function saveInstanceName(name: string): Promise<void> {
+  try {
+    await api.setInstanceName(name);
+    toast('本机标识已更新。', 'success');
+    await loadBacktest(true);
+  } catch (error) {
+    toast(`改名失败：${errorMessage(error)}`, 'error');
+  }
+}
+
 async function loadWatchlist(): Promise<void> {
   state.watchlistLoading = true; state.watchlistError = '';
   try {
@@ -1659,6 +1710,8 @@ document.addEventListener('click', (event) => {
   if (action === 'navigate' && target.dataset.view) navigate(target.dataset.view as WorkbenchView);
   else if (action === 'backtest-refresh') void loadBacktest(true);
   else if (action === 'conclusions-backfill') void backfillConclusions();
+  else if (action === 'conclusions-export') void exportConclusions();
+  else if (action === 'conclusions-import') openImportFilePicker();
   else if (action === 'back-to-top') window.scrollTo({ top: 0, behavior: 'smooth' });
   else if (action === 'ask-latest-report' && target.dataset.code) {
     // 标的档案的「追问」入口：直接进这只股票的知识库
@@ -1836,6 +1889,18 @@ document.addEventListener('compositionend', (event) => {
 
 document.addEventListener('change', (event) => {
   const target = event.target;
+  // 判断质量：导入他机导出的结论文件（v0.48.0）
+  if (target instanceof HTMLInputElement && target.id === 'conclusions-import-file') {
+    const file = target.files?.[0];
+    target.value = '';
+    if (file) void importConclusionsFile(file);
+    return;
+  }
+  // 判断质量：本机标识改名——失焦提交（回车在 keydown 里处理）
+  if (target instanceof HTMLInputElement && target.dataset.instanceName !== undefined) {
+    if (state.backtest?.localInstance?.name !== target.value) void saveInstanceName(target.value);
+    return;
+  }
   if (target instanceof HTMLInputElement && target.dataset.holdingsFile) {
     const kind = target.dataset.holdingsFile;
     const file = target.files?.[0];
@@ -1932,6 +1997,9 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) {
     const newSuggestion = event.target instanceof HTMLElement ? event.target.closest<HTMLInputElement>('[data-ask-suggestion-new]') : null;
     if (newSuggestion) { event.preventDefault(); addAskSuggestion(); return; }
+    // 本机标识改名：回车提交（v0.48.0）
+    const instanceInput = event.target instanceof HTMLElement ? event.target.closest<HTMLInputElement>('[data-instance-name]') : null;
+    if (instanceInput) { event.preventDefault(); instanceInput.blur(); void saveInstanceName(instanceInput.value); return; }
   }
   if (event.key !== 'Enter' && event.key !== ' ') return;
   const target = event.target instanceof Element ? event.target.closest<HTMLTableRowElement>('tr[data-action="open-run"]') : null;

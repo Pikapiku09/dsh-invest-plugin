@@ -42,14 +42,21 @@ function sampleNote(summary: BacktestSummary | null): string {
 }
 
 // ===== 数据来源与完整性 =====
-function auditPanel(audit: ConclusionAuditResponse | null, loading: boolean, error: string, backfilling: boolean): string {
+function auditPanel(state: AppState): string {
+  const audit = state.audit;
+  const backfilling = state.backfillRunning;
+  const importing = state.importRunning;
+  const local = state.backtest?.localInstance;
   const head = sectionHeading(
     '数据从哪来 · 有没有漏',
     '回测的每条记录都能追溯到具体某次运行与报告；这里列出采集口径与未进库的运行',
-    `<button class="button button-secondary" data-action="conclusions-backfill" ${backfilling ? 'disabled' : ''}>${icon('upload', 15)}${backfilling ? '补录中' : '扫描历史报告'}</button>`,
+    `<button class="button button-secondary" data-action="conclusions-export">${icon('download', 15)}导出数据</button>`
+    + `<button class="button button-secondary" data-action="conclusions-import" ${importing ? 'disabled' : ''}>${icon('upload', 15)}${importing ? '导入中' : '导入数据'}</button>`
+    + `<input type="file" id="conclusions-import-file" accept=".jsonl,.json,.txt" hidden>`
+    + `<button class="button button-secondary" data-action="conclusions-backfill" ${backfilling ? 'disabled' : ''}>${icon('archive', 15)}${backfilling ? '补录中' : '扫描历史报告'}</button>`,
   );
-  if (loading && !audit) return `<section class="panel">${head}<div class="loading-block"><span class="spinner"></span><span>正在审计采集链路</span></div></section>`;
-  if (error && !audit) return `<section class="panel">${head}${errorState('审计失败', error)}</section>`;
+  if (state.auditLoading && !audit) return `<section class="panel">${head}<div class="loading-block"><span class="spinner"></span><span>正在审计采集链路</span></div></section>`;
+  if (state.auditError && !audit) return `<section class="panel">${head}${errorState('审计失败', state.auditError)}</section>`;
   if (!audit) return `<section class="panel">${head}</section>`;
 
   const r = audit.runs;
@@ -80,7 +87,12 @@ function auditPanel(audit: ConclusionAuditResponse | null, loading: boolean, err
     </div>
     <div class="inline-note">${icon('file', 15)}<span><strong>采集口径</strong>：${escapeHtml(audit.lineage.source)}。<br>
       <strong>回测口径</strong>：${escapeHtml(audit.lineage.window)}。<br>
-      <strong>边界</strong>：${escapeHtml(audit.lineage.note)}</span></div>
+      <strong>边界</strong>：${escapeHtml(audit.lineage.note)}<br>
+      <strong>共享</strong>：「导出数据」生成单文件 jsonl——只含结构化结论（含你的提问与模型论据，不含持仓账本与凭证），发给装了同款插件的朋友，对方「导入数据」即可合并，按运行+标的自动去重，重复导入无副作用。</span></div>
+    <div class="inline-note">${icon('user', 15)}<span><strong>本机标识</strong>：
+      <input type="text" data-instance-name value="${escapeHtml(local?.name || '')}" placeholder="如：小李的电脑"
+        style="width:160px;padding:2px 8px;border:1px solid var(--bt-line, #ccc);border-radius:4px;background:transparent;color:inherit;font-size:12px;">
+      <span class="muted small">多人共享数据时用来区分来源（改完回车生效；实例号 ${escapeHtml((local?.id || '').slice(0, 8))}）</span></span></div>
     ${r.recovered ? `<div class="inline-warning">${icon('alert', 15)}另有 ${r.recovered} 条「报告回填」记录（早期版本未写运行日志时按报告补的），它们当时没有结构化结论，已从覆盖率分母中剔除，不算遗漏。</div>` : ''}
     <div class="table-scroll"><table class="data-table">
       <thead><tr><th>模式</th><th>运行次数</th><th>有结论</th><th>结论条数</th><th>失败运行</th></tr></thead>
@@ -191,7 +203,7 @@ export function renderBacktest(state: AppState): string {
     '用历史结论验证这套流水线到底准不准：每条结论都对照真实走势。同时列出采集口径与未进库的运行，避免数据被悄悄漏掉。',
     `<button class="button button-secondary" data-action="backtest-refresh" ${state.backtestLoading ? 'disabled' : ''}>${icon('refresh', 15)}${state.backtestLoading ? '回测中' : '重新回测'}</button>`,
   );
-  const audit = auditPanel(state.audit, state.auditLoading, state.auditError, state.backfillRunning);
+  const audit = auditPanel(state);
 
   if (state.backtestLoading && !state.backtest) return header + skeletonPage();
   if (state.backtestError && !state.backtest) return header + audit + errorState('回测失败', state.backtestError);
@@ -223,6 +235,7 @@ export function renderBacktest(state: AppState): string {
     + method + warnings
     + groupTable('按角色', '谁给的结论更靠谱；样本量小的别急着下判断', data.byStage, '角色')
     + groupTable('按市场状态', '同一周内的结论共享同一段行情——不是独立样本；跨市况对比才回答「它什么时候可信」', data.byRegime || [], '市场状态')
+    + groupTable('按来源', '多人共享数据时区分「谁的判断」——本机标识可在上方修改；同一实例的结论才可比', data.byInstance || [], '来源')
     + groupTable('按置信度', confMeta, confGroups, '置信度')
     + groupTable('按立场', '观察类样本最多但不计命中率，可看它们的后续走势', data.byStance, '立场')
     + groupTable('按月份', '同一个月内市场环境相近，命中率会同步漂移', data.byMonth, '月份')
