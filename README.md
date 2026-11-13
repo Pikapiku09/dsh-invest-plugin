@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件。把「选股 → 消息 → 深度诊断 → 综合决策」做成一条可复用的多角色子代理流水线，
 > 并配一个本机网页工作台：一键任务、模型配置、持仓管理、结论记忆、标的档案、明暗主题。
 
-**当前版本：v0.49.2**
+**当前版本：v0.50.0**
 
 ---
 
@@ -431,9 +431,56 @@ pnpm build                        # = tsc --noEmit && vite build → ../../.dsh-
 
 ---
 
-## 十一、版本与变更
+## 十一、更新与升级（v0.50.0）
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.49.2**（修复：Loader 行名 / 包名 / bundle id 必须三者一致，否则客户端半部从不加载）。
+**DSH 没有插件自动更新**：宿主半部是进程内加载的，**任何更新都必须重启 DSH 才生效**。
+因此这里只把「发现」和「执行」两步做顺，不做假装的热更新。
+
+### 11.1 从 GitHub 源安装（推荐，更新只需一条命令）
+
+```bash
+dsh plugin --profile web add "github:Pikapiku09/dsh-invest-plugin#main&path:/packages/dsh-invest"
+```
+
+之后每次更新：
+
+```bash
+dsh plugin --profile web update dsh-invest
+```
+
+`#main` 让 pnpm 跟踪分支最新提交（锁文件里记录的是具体 commit，`update` 会重新解析）。
+比「本地 clone + `link:`」省事：不用找目录、不用 `git pull`。
+
+### 11.2 本地克隆安装（开发用）
+
+```bash
+dsh plugin --profile web add "link:<仓库路径>/packages/dsh-invest"
+```
+
+更新 = 在仓库里 `git pull`，再 `dsh plugin --profile web install`，然后重启。
+
+### 11.3 工作台内的提示
+
+- 启动时静默检查一次 GitHub 上的最新版本（30 分钟缓存，失败**静默**）；
+  有新版时在左上角版本徽标旁挂 `↑ vX.Y.Z`，点一下复制与你安装方式匹配的命令。
+- 升级后**首次**进入工作台会弹一次「本次更新」，列出这个版本（跨版本时合并）的要点，末尾致谢。
+  已读版本记在 `localStorage`，同一版本不再打扰。
+
+### 11.4 发版纪律（新增一步）
+
+```bash
+node tools/gen-whats-new.js      # 从 CHANGELOG.md 生成 lib/whats-new.json
+```
+
+`CHANGELOG.md` 是更新说明的**唯一事实来源**，`lib/whats-new.json` 随包分发（仓库根的 CHANGELOG
+不在 `files` 里，装到别处读不到）。**改了版本号必须重新生成**，否则
+`test/update-check.test.js` 会因 `whats-new.latest !== package.json.version` 而失败。
+
+---
+
+## 十二、版本与变更
+
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.50.0**（更新检查 + 升级后弹出「本次更新」说明并致谢）。
 
 > **维护约定（勿跳过）**：版本号只有一个事实来源 —— `packages/dsh-invest/package.json`。
 > 每次发版必须同步：① 根 `package.json` 与 `package-lock.json`；② 本文件顶部「当前版本」与本节摘要；

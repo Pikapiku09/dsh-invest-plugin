@@ -4,7 +4,7 @@
 import { z, defineTool } from "./host-deps.js"
 import { promises as fsp } from "node:fs"
 import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY } from "./prompts.js"
-import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv, z2, localYmd } from "./pure.js"
+import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv, z2, localYmd, cmpVersion as cmpVersionPure } from "./pure.js"
 import { DEFAULT_PRESET, PRESETS, ROLE_CODES, mergeRoutes, formatRoute, formatRouteChain, parseRoute, parseRouteList, parseRoutesJson } from "./routes.js"
 import { buildStockNotes, normalizeCode, stockFileName } from "./stock-notes.js"
 import { buildCuratePrompt, sanitizeCurated, validateCurated, rawTimelineMarkdown } from "./stock-curator.js"
@@ -312,6 +312,76 @@ function apply(ctx, config) {
     if (eff === local.id) return local.name || "本机"
     const known = (await loadKnownInstances())[eff]
     return (known && known.name) ? known.name : eff.slice(0, 8)
+  }
+
+  // ============ 更新检查（v0.50.0）============
+  // DSH 没有插件自动更新：宿主半部是进程内加载的，更新后必须重启才生效。
+  // 因此这里只做两件事：① 告诉用户「有没有新版」；② 给出与其安装方式匹配的那一条命令。
+  // 不下载、不安装、不改文件——一切写操作留给用户自己执行。
+  let updateCache = null
+  const REPO_RAW_PKG = "https://raw.githubusercontent.com/Pikapiku09/dsh-invest-plugin/main/packages/dsh-invest/package.json"
+  const REPO_URL = "https://github.com/Pikapiku09/dsh-invest-plugin"
+  // 语义化版本比较：统一用 pure.js 的实现（可测试），这里不再重复定义
+  const cmpVersion = cmpVersionPure
+  // 读本包版本：相对 lib/index.js 的 ../package.json（link: 与 github 安装都成立）
+  const localVersion = async () => {
+    try {
+      const here = new URL("../package.json", import.meta.url)
+      const j = JSON.parse(await fsp.readFile(here, "utf8"))
+      return String(j.version || "")
+    } catch (e) { return "" }
+  }
+  // 探测安装方式：扫 profiles 下各 package.json 的依赖，找出指向本仓库的那条
+  const detectInstall = async () => {
+    const home = process.env.USERPROFILE || process.env.HOME || ""
+    const dir = home + "/.dsh/profiles"
+    let names = []
+    try { names = await fsp.readdir(dir) } catch (e) { return { kind: "unknown", profile: "web", command: "" } }
+    for (const name of names) {
+      let pkg
+      try { pkg = JSON.parse(await fsp.readFile(dir + "/" + name + "/package.json", "utf8")) } catch (e) { continue }
+      const deps = pkg && pkg.dependencies ? pkg.dependencies : {}
+      for (const [key, spec] of Object.entries(deps)) {
+        const s = String(spec || "")
+        if (!/dsh-invest/i.test(key) && !/dsh-invest-plugin/i.test(s)) continue
+        if (s.startsWith("link:") || s.startsWith("file:")) {
+          return { kind: "link", profile: name, command: 'dsh plugin --profile ' + name + " install" }
+        }
+        if (s.startsWith("github:") || s.startsWith("git+")) {
+          return { kind: "github", profile: name, command: "dsh plugin --profile " + name + " update " + key }
+        }
+      }
+    }
+    return { kind: "unknown", profile: "web", command: "" }
+  }
+  const checkForUpdate = async () => {
+    const current = await localVersion()
+    const install = await detectInstall()
+    const base = {
+      current, repo: REPO_URL, installKind: install.kind, profile: install.profile,
+      command: install.command, checkedAt: new Date().toISOString(),
+    }
+    if (!current) return { ok: false, ...base, error: "无法读取本包版本号" }
+    let latest = ""
+    try {
+      const r = await fetch(REPO_RAW_PKG, { signal: AbortSignal.timeout(5000), headers: { "cache-control": "no-cache" } })
+      if (!r.ok) throw new Error("HTTP " + r.status)
+      const j = await r.json()
+      latest = String(j.version || "")
+    } catch (e) {
+      return { ok: false, ...base, error: "检查更新失败（网络不可用或仓库不可达）：" + String(e && e.message || e).slice(0, 120) }
+    }
+    const diff = cmpVersion(latest, current)
+    return {
+      ok: true, ...base, latest,
+      updateAvailable: diff > 0,
+      // 安装方式决定命令；link 方式还要先 git pull，这里给出可直接复制的一行
+      hint: install.kind === "link"
+        ? "先到插件目录执行 git pull，再跑下面的命令；完成后重启 DSH"
+        : install.kind === "github"
+          ? "直接跑下面的命令即可拉取 main 最新提交；完成后重启 DSH"
+          : "未识别安装方式，请手动更新后重启 DSH",
+    }
   }
 
   // P3：结构化结论落库（v0.45.0 修正采集口径）
@@ -2999,6 +3069,43 @@ function apply(ctx, config) {
             note: "导入只追加不覆盖；同一份文件重复导入会全部跳过，无副作用",
           })
         } catch (e) { writeJson(res, 500, { error: String(e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 更新检查（v0.50.0）：本包版本 vs GitHub main 上的版本，并给出与「安装方式」对应的准确命令。
+      // 只读、不执行任何更新动作；网络失败一律静默降级为 { ok:false }，不影响工作台。
+      // 有 30 分钟内存缓存，避免每次刷新都打网络。
+      kind: "exact",
+      path: "/dsh-invest/api/update-check",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const now = Date.now()
+          if (updateCache && now - updateCache.at < 30 * 60 * 1000) { writeJson(res, 200, updateCache.value); return }
+          const result = await checkForUpdate()
+          updateCache = { at: now, value: result }
+          writeJson(res, 200, result)
+        } catch (e) { writeJson(res, 200, { ok: false, error: String(e).slice(0, 200) }) }
+      },
+    },
+    {
+      // 「本次更新」说明（v0.50.0）：内容由 tools/gen-whats-new.js 从 CHANGELOG.md 生成，
+      // 随包分发（仓库根的 CHANGELOG 不在 files 里，装到别处就读不到了）。
+      kind: "exact",
+      path: "/dsh-invest/api/whats-new",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          // 与 index.js 同级（lib/whats-new.json）；../ 会指到包根，别写错
+          const here = new URL("./whats-new.json", import.meta.url)
+          const j = JSON.parse(await fsp.readFile(here, "utf8"))
+          writeJson(res, 200, { ok: true, ...j })
+        } catch (e) {
+          // 说明文件缺失不影响使用：前端拿不到就不弹
+          writeJson(res, 200, { ok: false, releases: [], error: "缺少 whats-new.json（发布前需跑 tools/gen-whats-new.js）" })
+        }
       },
     },
     {

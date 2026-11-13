@@ -22,6 +22,7 @@ import { fileToBase64, positionsForConfirm, prepareScreenshotForUpload, renderHo
 import type { PreparedScreenshot } from './holdings';
 import { LEDGER_DEFAULT_COLUMNS } from './types';
 import { APP_VERSION } from './version';
+import { lastSeenVersion, markVersionSeen, renderWhatsNew, unseenReleases } from './whats-new';
 import { compareStockName } from './stock-index';
 import type { ConclusionRecord, HoldingPosition, HoldingsImportInput, Job, ModelSettingsSaveInput, TaskTemplate, WatchAlert, WorkbenchView, WatchlistUpdateInput, LedgerColKey } from './types';
 
@@ -186,6 +187,21 @@ function render(): void {
   if (versionEl) {
     versionEl.textContent = 'v' + APP_VERSION;
     versionEl.title = '插件版本 v' + APP_VERSION + '（来源 packages/dsh-invest/package.json）';
+    // 有新版时在旁边挂一个可点的小标（v0.50.0）：DSH 无插件自动更新，更新后必须重启
+    const info = state.updateInfo;
+    const old = document.getElementById('updateHint');
+    if (old) old.remove();
+    if (info && info.updateAvailable) {
+      const chip = document.createElement('button');
+      chip.id = 'updateHint';
+      chip.type = 'button';
+      chip.textContent = '↑ v' + (info.latest || '');
+      chip.title = `${info.hint || '有新版本'}（当前 v${info.current}）。点击复制命令。`;
+      chip.style.cssText = 'margin-left:6px;padding:0 6px;font-size:11px;line-height:16px;border-radius:8px;cursor:pointer;'
+        + 'border:1px solid var(--accent-amber, #d08700);background:transparent;color:var(--accent-amber, #d08700)';
+      chip.addEventListener('click', () => { if (info.command) void copyUpdateCommand(info.command); });
+      versionEl.insertAdjacentElement('afterend', chip);
+    }
   }
   document.querySelectorAll<HTMLElement>('.nav-item').forEach((item) => {
     const selected = item.dataset.view === state.view;
@@ -408,6 +424,52 @@ async function saveInstanceName(name: string): Promise<void> {
   } catch (error) {
     toast(`改名失败：${errorMessage(error)}`, 'error');
   }
+}
+
+/** 更新检查（v0.50.0）：只读；失败静默，绝不打扰使用 */
+async function loadUpdateCheck(): Promise<void> {
+  try {
+    const info = await api.updateCheck();
+    if (info && info.ok && info.updateAvailable) {
+      state.updateInfo = info;
+      render();
+    }
+  } catch { /* 网络不可用时静默 */ }
+}
+
+/** 把更新命令复制到剪贴板，并说明「重启才生效」 */
+async function copyUpdateCommand(command: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(command);
+    toast(`已复制：${command}　执行完请重启 DSH。`, 'success');
+  } catch {
+    toast(`请手动执行：${command}`, 'info');
+  }
+}
+
+/** 「本次更新」：只在版本变化时弹一次（v0.50.0）；失败静默，不打扰 */
+async function loadWhatsNew(): Promise<void> {
+  try {
+    const r = await api.whatsNew();
+    if (!r || !r.ok || !Array.isArray(r.releases)) return;
+    const seen = lastSeenVersion();
+    const list = unseenReleases(r.releases, APP_VERSION, seen);
+    if (!list.length) { markVersionSeen(APP_VERSION); return; }
+    let root = document.getElementById('whatsNewRoot');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'whatsNewRoot';
+      document.body.appendChild(root);
+    }
+    root.innerHTML = renderWhatsNew(list, APP_VERSION);
+  } catch { /* 静默 */ }
+}
+
+/** 关闭「本次更新」并把当前版本记为已读（同一版本不再弹） */
+function closeWhatsNew(): void {
+  const root = document.getElementById('whatsNewRoot');
+  if (root) root.innerHTML = '';
+  markVersionSeen(APP_VERSION);
 }
 
 async function loadWatchlist(): Promise<void> {
@@ -1712,6 +1774,7 @@ document.addEventListener('click', (event) => {
   else if (action === 'conclusions-backfill') void backfillConclusions();
   else if (action === 'conclusions-export') void exportConclusions();
   else if (action === 'conclusions-import') openImportFilePicker();
+  else if (action === 'whatsnew-close') closeWhatsNew();
   else if (action === 'back-to-top') window.scrollTo({ top: 0, behavior: 'smooth' });
   else if (action === 'ask-latest-report' && target.dataset.code) {
     // 标的档案的「追问」入口：直接进这只股票的知识库
@@ -2030,6 +2093,10 @@ initialiseReader();
 state.lastRefreshAt = readLastRefreshAt();
 render();
 const bootLoaded = Promise.all([loadIndex(), loadHoldings(), loadJobs(), loadWatchlist(), loadWatchDaily(), loadAskStocks()]);
+// 更新检查（v0.50.0）：独立异步，失败静默；不与首屏加载争带宽
+void loadUpdateCheck();
+// 「本次更新」弹层（v0.50.0）：只在版本变化时出现一次
+void loadWhatsNew();
 // 每天首次打开自动刷新（含现价与信号比对）
 void bootLoaded.then(() => autoDailyRefresh());
 // 页面跨天整晚开着由定时器触发；睡眠唤醒/切回标签页由可见性变化触发

@@ -397,6 +397,39 @@ export interface ImportResponse {
   note: string;
 }
 
+/** 「本次更新」说明（v0.50.0）：由 CHANGELOG.md 生成，随包分发 */
+export interface WhatsNewRelease {
+  version: string;
+  date: string;
+  title: string;
+  items: string[];
+}
+export interface WhatsNewResponse {
+  ok: boolean;
+  latest?: string;
+  releases: WhatsNewRelease[];
+  error?: string;
+}
+
+/** 更新检查（v0.50.0）：只读，不执行任何更新 */
+export interface UpdateCheckResponse {
+  ok: boolean;
+  /** 本机插件版本 */
+  current: string;
+  /** GitHub main 上的最新版本 */
+  latest?: string;
+  updateAvailable?: boolean;
+  /** link = 本地克隆（需先 git pull）；github = 从 GitHub 源安装（pnpm update 即可） */
+  installKind?: 'link' | 'github' | 'unknown';
+  profile?: string;
+  /** 与安装方式匹配的那一条命令 */
+  command?: string;
+  hint?: string;
+  repo?: string;
+  checkedAt?: string;
+  error?: string;
+}
+
 /** 结论采集审计（v0.45.0）：数据从哪来、哪些运行没进库、为什么 */
 export interface ConclusionAuditResponse {
   generatedAt: string;

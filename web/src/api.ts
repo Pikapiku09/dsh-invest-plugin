@@ -3,7 +3,7 @@ import type {
   HoldingsQuotesResponse, HoldingsRefreshQuotesResponse, HoldingsResponse, IndexResponse, Job, ModelSettingsResponse, ModelSettingsSaveInput,
   HoldingPosition, HoldingsAccount, StockResolveResponse, TaskTemplate,
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
-  StockNotesResponse, StockNoteDetail, StockAskResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse,
+  StockNotesResponse, StockNoteDetail, StockAskResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -107,6 +107,10 @@ export const api = {
   conclusionsImport: (text: string) => post<ImportResponse>(`${BASE}/conclusions-import`, { text }),
   /** 本机实例改名（v0.48.0）：多人共享数据时给分组表一个可读名字 */
   setInstanceName: (name: string) => post<{ ok: true; instance: { id: string; name: string } }>(`${BASE}/instance-name`, { name }),
+  /** 更新检查（v0.50.0）：只读，返回是否有新版 + 对应更新命令 */
+  updateCheck: () => request<UpdateCheckResponse>(`${BASE}/update-check`),
+  /** 「本次更新」说明（v0.50.0）：由 CHANGELOG.md 生成 */
+  whatsNew: () => request<WhatsNewResponse>(`${BASE}/whats-new`),
   // ===== 标的档案（观察 + 持仓统一监控）=====
   watchlist: () => request<WatchlistResponse>(`${BASE}/watchlist`),
   watchlistRefresh: () => post<WatchlistRefreshResponse>(`${BASE}/watchlist/refresh`, {}),
