@@ -1953,6 +1953,23 @@ function apply(ctx, config) {
     }
     const idx = await btDaily(BACKTEST_IDX_CODE, token, true)
     const idxDates = idx ? idx.map((x) => String(x.trade_date)) : []
+    // 市场状态（v0.47.0）：解决「同一周几十条结论共享同一段行情」的同质样本问题。
+    // 口径：结论基准日的上证——收盘 vs MA20、20 日涨跌，双确认定上/下行，混合为震荡；
+    // 与收益基准同日（多数结论盘后生成，当日收盘即当时可见状态）。指数数据不足 20 根则为 null。
+    const regimeAt = (ymd) => {
+      if (!idx) return null
+      const j = idxDates.findIndex((d) => d >= ymd)
+      if (j < 0 || j < 20) return null
+      const closes = idx.slice(j - 19, j + 1).map((x) => Number(x.close))
+      if (closes.length < 20 || closes.some((v) => !Number.isFinite(v) || v <= 0)) return null
+      const ma20 = closes.reduce((a, b) => a + b, 0) / closes.length
+      const ret20 = Number(idx[j].close) / Number(idx[j - 20].close) - 1
+      if (!Number.isFinite(ret20)) return null
+      const c = Number(idx[j].close)
+      if (c > ma20 && ret20 > 0) return "上行"
+      if (c < ma20 && ret20 < 0) return "下行"
+      return "震荡"
+    }
     const rows = []
     for (const c of conclusions) {
       const r = daily[c.code]
@@ -2005,6 +2022,8 @@ function apply(ctx, config) {
         // 审计字段（v0.46.0）：未复权原值 + 本条是否真的应用了复权
         ret5Raw: btRound(ret5Raw), ret20Raw: btRound(ret20Raw),
         adjApplied: ratio5 !== null || ratio20 !== null,
+        // 市场状态（v0.47.0）：同质样本拆分的唯一维度
+        regime: regimeAt(tsYmd),
         hit5: (ret5 === null || !directional) ? null : (bullish ? ret5 > 0 : ret5 < 0),
         hit20: (ret20 === null || !directional) ? null : (bullish ? ret20 > 0 : ret20 < 0),
         thesis: String(c.thesis || "").slice(0, 80),
@@ -2087,6 +2106,7 @@ function apply(ctx, config) {
       overall: agg(rows),
       byStage: groupAgg((x) => x.stage), byStance: groupAgg((x) => x.stance),
       byMonth: groupAgg((x) => String(x.ts).slice(0, 7)),
+      byRegime: groupAgg((x) => x.regime),
       byConfidence: confGroups, confidenceCoverage: withConf,
       // 复权覆盖：adjCoverage / adjUniverse，用来一眼看出有多少标的真的按前复权算了
       adjCoverage: adjCovered, adjUniverse: codes.length,

@@ -275,3 +275,50 @@ test('回测：无复权因子时回落未复权并显式告警（不静默降�
   assert.equal(r.json.adjCoverage, 0)
   assert.ok(r.json.warnings.some((w) => w.includes('复权因子覆盖')), '必须告警，不能静默按未复权算')
 })
+
+// ===== v0.47.0：市场状态（同质样本拆分） =====
+test('回测：市场状态按结论基准日的上证判定（上行/下行/震荡），byRegime 分组存在', async (t) => {
+  // 上行：一路上涨 → 收盘 > MA20 且 20 日涨跌 > 0
+  const h1 = makeHarness({
+    conclusions: [CONCLUSION()],
+    daily: { '600519.SH': makeDaily('20261008', 30, 100, 1), '000001.SH': makeDaily('20260901', 40, 3000, 6) },
+  })
+  t.after(h1.cleanup)
+  const r1 = await h1.call('GET', '/dsh-invest/api/backtest')
+  assert.equal(r1.status, 200)
+  assert.equal(r1.json.rows[0].regime, '上行')
+  assert.ok(r1.json.byRegime.some((g) => g.name === '上行'))
+
+  // 下行：一路下跌 → 收盘 < MA20 且 20 日涨跌 < 0
+  const h2 = makeHarness({
+    conclusions: [CONCLUSION()],
+    daily: { '600519.SH': makeDaily('20261008', 30, 100, 1), '000001.SH': makeDaily('20260901', 40, 3000, -6) },
+  })
+  t.after(h2.cleanup)
+  const r2 = await h2.call('GET', '/dsh-invest/api/backtest')
+  assert.equal(r2.json.rows[0].regime, '下行')
+
+  // 震荡：先涨 35 根，末 3 根压回 MA20 下方，但 20 日涨跌仍为正 → 混合
+  const chop = makeDaily('20260901', 40, 3000, 6)
+  chop[35].close = 3120; chop[36].close = 3126; chop[37].close = 3132
+  const h3 = makeHarness({
+    conclusions: [CONCLUSION()],
+    daily: { '600519.SH': makeDaily('20261008', 30, 100, 1), '000001.SH': chop },
+  })
+  t.after(h3.cleanup)
+  const r3 = await h3.call('GET', '/dsh-invest/api/backtest')
+  assert.equal(r3.json.rows[0].regime, '震荡', '收盘<MA20 但 20 日涨跌>0 → 震荡而非下行')
+})
+
+test('回测：指数历史不足 20 根 → 市场状态 null，归入「—」组不冒充结论', async (t) => {
+  // 指数与个股同日起步 → 结论基准日 j=0 < 20 → 无状态
+  const h = makeHarness({
+    conclusions: [CONCLUSION()],
+    daily: { '600519.SH': makeDaily('20261008', 30, 100, 1), '000001.SH': makeDaily('20261008', 30, 3000, 6) },
+  })
+  t.after(h.cleanup)
+  const r = await h.call('GET', '/dsh-invest/api/backtest')
+  assert.equal(r.status, 200)
+  assert.equal(r.json.rows[0].regime, null)
+  assert.ok(r.json.byRegime.some((g) => g.name === '—'), 'null 归入「—」组')
+})

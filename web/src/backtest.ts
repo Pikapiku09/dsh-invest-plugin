@@ -30,11 +30,14 @@ function ciText(ci: { low: number; high: number } | null | undefined): string {
   return `95% 区间 ${ci.low.toFixed(0)}–${ci.high.toFixed(0)}%`;
 }
 
+/** S0/S1 纪律：单桶 30 条以下只算「记录」，不算「结论」 */
+const THIN_SAMPLE = 30;
+
 function sampleNote(summary: BacktestSummary | null): string {
   if (!summary) return '';
   const n = summary.hits5;
   if (!n) return '还没有走完 5 个交易日的样本';
-  if (n < 10) return `${n} 条样本 · ${ciText(summary.rate5CI)}（样本太少，不能据此评判）`;
+  if (n < THIN_SAMPLE) return `${n} 条样本 · ${ciText(summary.rate5CI)}（不足 ${THIN_SAMPLE} 条，仅作记录，不构成评判）`;
   return `${n} 条样本 · ${ciText(summary.rate5CI)}`;
 }
 
@@ -121,7 +124,7 @@ function summaryCards(overall: BacktestSummary | null, matched: number): string 
 function groupTable(title: string, meta: string, groups: BacktestGroup[], firstCol: string): string {
   if (!groups.length) return '';
   const rows = groups.map((g) => {
-    const thin = g.hits5 > 0 && g.hits5 < 10;
+    const thin = g.hits5 > 0 && g.hits5 < THIN_SAMPLE;
     return `<tr>
       <td>${g.name === '—' ? '<span class="muted">—</span>' : escapeHtml(g.name)}</td>
       <td class="numeric">${g.samples}</td>
@@ -137,8 +140,16 @@ function groupTable(title: string, meta: string, groups: BacktestGroup[], firstC
       <thead><tr><th>${firstCol}</th><th>结论数</th><th>5 日命中率 / 样本</th><th>20 日命中率 / 样本</th><th>盈亏比</th><th>平均超额</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <div class="inline-note">${icon('alert', 15)}标注 ⚠ 的行样本不足 10 条，命中率没有统计意义；命中率长期高于 50% 但盈亏比小于 1，仍然会亏钱。</div>
+    <div class="inline-note">${icon('alert', 15)}标注 ⚠ 的行样本不足 ${THIN_SAMPLE} 条（S0 记录期门槛），命中率仅作记录、没有统计意义；单桶攒到 ${THIN_SAMPLE} 条以上才允许据此评判。命中率长期高于 50% 但盈亏比小于 1，仍然会亏钱。</div>
   </section>`;
+}
+
+/** 市场状态徽标：上行/下行/震荡/null（指数历史不足） */
+function regimeBadge(regime: string | null | undefined): string {
+  if (regime === '上行') return '<span class="hit-yes">上行</span>';
+  if (regime === '下行') return '<span class="hit-no">下行</span>';
+  if (regime === '震荡') return '<span class="muted">震荡</span>';
+  return '<span class="muted">—</span>';
 }
 
 function detailTable(rows: BacktestRow[]): string {
@@ -156,6 +167,7 @@ function detailTable(rows: BacktestRow[]): string {
       <td>${escapeHtml(row.code)}</td>
       <td>${stanceBadge(row.stance)}</td>
       <td class="muted small">${escapeHtml(row.stage || '—')}</td>
+      <td>${regimeBadge(row.regime)}</td>
       <td class="numeric">${row.confidence === null || row.confidence === undefined ? '<span class="muted">—</span>' : row.confidence.toFixed(2)}</td>
       <td class="numeric">${row.base === null ? '—' : row.base.toFixed(2)}</td>
       <td class="numeric ${toneClass(row.ret5)}">${pct(row.ret5)}${adjHint}</td>
@@ -167,7 +179,7 @@ function detailTable(rows: BacktestRow[]): string {
   return `<section class="panel">
     ${sectionHeading('逐条明细', '最近 60 条；收益按前复权计算，⚖ 标记表示该条若用未复权价会差 0.05pp 以上（hover 看原值）', `<span class="record-count">${rows.length} 条可回测</span>`)}
     <div class="table-scroll"><table class="data-table">
-      <thead><tr><th>时间</th><th>标的</th><th>结论</th><th>角色</th><th>置信度</th><th>基准价</th><th>5 日</th><th>超额</th><th>5日命中</th><th>溯源</th></tr></thead>
+      <thead><tr><th>时间</th><th>标的</th><th>结论</th><th>角色</th><th>市况</th><th>置信度</th><th>基准价</th><th>5 日</th><th>超额</th><th>5日命中</th><th>溯源</th></tr></thead>
       <tbody>${body}</tbody>
     </table></div>
   </section>`;
@@ -197,6 +209,7 @@ export function renderBacktest(state: AppState): string {
   const method = `<div class="inline-note">${icon('file', 15)}<span><strong>命中</strong>：看多/持有/加仓 → 上涨；拒绝/回避/减仓/离场 → 下跌；观察不计命中率。<br>
     <strong>收益按前复权</strong>（close × adj_factor）计算——未复权价在除权除息日会自然下跳，直接算会被误判成下跌。${adjNote}<br>
     <strong>超额</strong>＝个股区间收益 − 上证指数同区间收益。<strong>盈亏比</strong>＝平均盈利 ÷ 平均亏损（>1 才有正向赔率）。<br>
+    <strong>市况</strong>＝结论基准日的上证：收盘 vs MA20 与 20 日涨跌双确认（同向定上/下行，混合为震荡）——同一周内的结论共享同一段行情，跨市况看命中率才回答「它什么时候可信」。<br>
     20 日窗口需要更长时间积累，样本少时显示「—」。</span></div>`;
   const confGroups = data.byConfidence || [];
   const confMeta = (data.confidenceCoverage || 0) > 0
@@ -209,6 +222,7 @@ export function renderBacktest(state: AppState): string {
     + summaryCards(data.overall, data.matched)
     + method + warnings
     + groupTable('按角色', '谁给的结论更靠谱；样本量小的别急着下判断', data.byStage, '角色')
+    + groupTable('按市场状态', '同一周内的结论共享同一段行情——不是独立样本；跨市况对比才回答「它什么时候可信」', data.byRegime || [], '市场状态')
     + groupTable('按置信度', confMeta, confGroups, '置信度')
     + groupTable('按立场', '观察类样本最多但不计命中率，可看它们的后续走势', data.byStance, '立场')
     + groupTable('按月份', '同一个月内市场环境相近，命中率会同步漂移', data.byMonth, '月份')

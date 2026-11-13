@@ -319,6 +319,8 @@ export interface BacktestRow {
   ret20Raw?: number | null;
   /** 本条是否真的取到了复权因子（ETF 等无因子标的为 false，等于用未复权价） */
   adjApplied?: boolean;
+  /** 市场状态（v0.47.0）：结论基准日的上证 上行/下行/震荡；指数历史不足为 null */
+  regime?: string | null;
   /** null = 该结论无方向（观察）或前向窗口尚不足，不计入命中率 */
   hit5: boolean | null;
   hit20: boolean | null;
@@ -367,6 +369,8 @@ export interface BacktestResponse {
   byStage: BacktestGroup[];
   byStance: BacktestGroup[];
   byMonth: BacktestGroup[];
+  /** 按市场状态分组（v0.47.0）：拆同质样本——同一周内的结论共享同一段行情 */
+  byRegime?: BacktestGroup[];
   byConfidence?: BacktestGroup[];
   confidenceCoverage?: number;
   /** 复权覆盖（v0.46.0）：adjCoverage / adjUniverse，标的层面有多少真的按前复权算 */
