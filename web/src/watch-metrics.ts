@@ -46,6 +46,23 @@ const positive = (v: unknown): number | null => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
+/**
+ * 持有期「止盈目标」是否语义合理（v0.53.0）：必须高于成本、且高于止损价。
+ * 多次分析后回踩位 / 减仓参考价可能被误写进止盈字段，出现
+ * 「止盈 16.68 < 止损 17.35 < 成本 18.855」。这种脏数据不能再参与距离计算，
+ * 否则界面会显示「距止盈 -4.3%」这种既错误又像结论的数字。
+ */
+export function positionTargetSane(it: WatchlistItem): boolean {
+  const pos = it.position || {};
+  const target = positive(pos.target);
+  if (target === null) return false;
+  const cost = positive(pos.cost);
+  const stop = positive(pos.stop);
+  if (cost !== null && target <= cost) return false;
+  if (stop !== null && target <= stop) return false;
+  return true;
+}
+
 /** 返回距离百分点；缺现价 / 缺阈值 / 非观察持有状态 → null */
 export function watchDistance(it: WatchlistItem, mode: WatchDistMode): number | null {
   const price = positive(it.monitor?.current_price);
@@ -56,6 +73,7 @@ export function watchDistance(it: WatchlistItem, mode: WatchDistMode): number | 
     return anchor === null ? null : r2(((price - anchor) / anchor) * 100);
   }
   if (it.state === '持有') {
+    if (mode === 'target' && !positionTargetSane(it)) return null;
     const level = positive(mode === 'target' ? it.position?.target : it.position?.stop);
     if (level === null) return null;
     return mode === 'target'
@@ -66,7 +84,9 @@ export function watchDistance(it: WatchlistItem, mode: WatchDistMode): number | 
 }
 
 export function watchDistLabel(it: WatchlistItem, mode: WatchDistMode): string {
-  return it.state === '观察' ? '距买点' : (mode === 'target' ? '距止盈' : '距止损');
+  if (it.state === '观察') return '距买点';
+  if (mode === 'target' && !positionTargetSane(it)) return '距止盈（价位异常）';
+  return mode === 'target' ? '距止盈' : '距止损';
 }
 
 /** 距离口径切换控件（概览面板与档案监控卡片共用同一 state，联动） */

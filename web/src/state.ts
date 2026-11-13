@@ -187,6 +187,8 @@ export interface AppState {
   askNote: StockNoteDetail | null;
   askNoteLoading: boolean;
   askNoteError: string;
+  /** v0.53.0：当前个股归集到的图表路径（放进知识库放大层的画廊） */
+  askCharts: string[];
   /** 折叠的首字母分组（默认全展开） */
   askLetterCollapsed: Record<string, boolean>;
   /** 运行记录页：隐藏「报告归档」回填条目，只看真实运行日志 */
@@ -269,7 +271,7 @@ export const state: AppState = {
   askQuery: '', askThreads: readAskThreads(), askDraft: '', askLoading: false, askError: '',
   askSuggestions: readAskSuggestions(), askSuggestionsEditing: false,
   askStocks: [], askStocksBuiltAt: '', askStocksLoading: false, askStocksError: '',
-  askStock: '', askNote: null, askNoteLoading: false, askNoteError: '', askLetterCollapsed: {},
+  askStock: '', askNote: null, askNoteLoading: false, askNoteError: '', askLetterCollapsed: {}, askCharts: [],
   taskDrafts: {}, templateOrder: readTemplateOrder(), startingTemplates: {}, sidebarOpen: false,
   modelSettings: null, modelSettingsLoading: false, modelSettingsSaving: false,
   modelSettingsError: '', modelRoleRoutes: {}, modelTemplatePresets: {}, modelHostDraft: '', modelStockKbDraft: '', modelStockKbAutoDraft: null, modelStockKbConcurrencyDraft: null,

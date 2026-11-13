@@ -5,7 +5,7 @@ import { allRunRows } from './run-history';
 import { reportForRun, sortConclusions } from './selectors';
 import type { AppState } from './state';
 import type { ConclusionRecord, IndexResponse, RunRecord, WatchAlert, WatchlistItem } from './types';
-import { alertMessageWithQty, alertQty, watchDistance, watchDistSwitch, type WatchDistMode } from './watch-metrics';
+import { alertMessageWithQty, alertQty, positionTargetSane, watchDistance, watchDistSwitch, type WatchDistMode } from './watch-metrics';
 
 function stockName(index: IndexResponse, code?: string): string {
   return code ? (index.codes?.[code]?.name || code) : '未识别标的';
@@ -33,7 +33,8 @@ function latestPerCode(records: ConclusionRecord[]): ConclusionRecord[] {
 const val = (v: unknown): string => (v === null || v === undefined || v === '') ? '—' : String(v);
 const pctText = (v: number | null): string => (v === null || !Number.isFinite(v)) ? '—' : (v > 0 ? '+' : '') + v + '%';
 
-/** 监控规则列：观察 → 买入区间/失效价；持有 → 按当前口径把目标(止盈)或止损放在前面 */
+/** 监控规则列：观察 → 买入区间/失效价；持有 → 按当前口径把目标(止盈)或止损放在前面
+ *  止盈价倒挂（低于成本/止损）时直接标「价位异常」，不再当正常目标展示（v0.53.0） */
 function watchRuleCell(it: WatchlistItem, mode: WatchDistMode): string {
   if (it.state === '观察') {
     const w = it.watch;
@@ -41,6 +42,9 @@ function watchRuleCell(it: WatchlistItem, mode: WatchDistMode): string {
     return '<div class="target-cell"><span>买区 <b>' + escapeHtml(zone) + '</b></span><small>失效价 ' + escapeHtml(val(w.stop)) + '</small></div>';
   }
   const p = it.position;
+  if (mode === 'target' && !positionTargetSane(it)) {
+    return '<div class="target-cell"><span>目标 <b class="target-bad" title="止盈目标低于成本或止损价，价位语义异常，请在档案里修正">' + escapeHtml(val(p.target)) + '</b></span><small>价位异常，需修正</small></div>';
+  }
   return mode === 'target'
     ? '<div class="target-cell"><span>目标 <b>' + escapeHtml(val(p.target)) + '</b></span><small>止损 ' + escapeHtml(val(p.stop)) + '</small></div>'
     : '<div class="target-cell"><span>止损 <b>' + escapeHtml(val(p.stop)) + '</b></span><small>目标 ' + escapeHtml(val(p.target)) + '</small></div>';
@@ -117,9 +121,16 @@ function watchPanel(state: AppState): string {
   const unreadBar = unread ? '<div class="watch-unread-bar">' + icon('alert', 15)
     + alerts.filter((a) => !a.read).slice(0, 3).map((a) => '<span class="watch-unread-item ' + (a.level === 'bad' ? 'watch-sig-bad' : 'watch-sig-good') + '">' + escapeHtml(alertMessageWithQty(a, items)) + '</span>').join('')
     + '</div>' : '';
+  // v0.53.0：持有标的止盈价倒挂（低于成本/止损）时在面板顶部亮黄条，点标的进档案修正
+  const badLevelItems = items.filter((it) => it.state === '持有' && !positionTargetSane(it) && it.position.target !== null);
+  const badLevelBar = badLevelItems.length
+    ? '<div class="inline-warning">' + icon('alert', 15) + '<span>' + badLevelItems.length + ' 只持有标的的止盈价低于成本或止损价（价位倒挂，多为回踩位误写）：'
+      + badLevelItems.slice(0, 4).map((it) => '<button class="text-button" data-action="select-code" data-code="' + escapeHtml(it.code) + '">' + escapeHtml(it.name || it.code) + '（目标 ' + escapeHtml(val(it.position.target)) + '）</button>').join('、')
+      + '。距离计算与止盈提醒已暂停，请在档案「编辑规则」里修正。</span></div>'
+    : '';
   return '<section class="panel overview-conclusions" id="overview-watchlist">'
     + sectionHeading('标的档案监控', '观察 + 持仓统一管理 · 每日收盘刷新现价 · 落入区间触发提醒', actions)
-    + summary + watchDistSwitch(mode, 'watch-mode-overview') + unreadBar + table + '</section>';
+    + summary + watchDistSwitch(mode, 'watch-mode-overview') + badLevelBar + unreadBar + table + '</section>';
 }
 
 export function renderOverview(state: AppState): string {

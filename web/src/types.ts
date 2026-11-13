@@ -499,9 +499,19 @@ export interface WatchRules {
   created_at: string | null; last_conclusion_ts: string | null;
 }
 
+/** v0.53.0：结论同步时被语义校验挡下的价位（如回踩位被误当止盈目标），只审计、不静默改写 */
+export interface WatchPositionSyncIgnored {
+  ts: string;
+  field: 'target' | 'stop';
+  value: number;
+  stance: string;
+  reason: string;
+}
+
 export interface WatchPosition {
   cost: number | null; shares: number | null; stop: number | null; target: number | null;
   add_low: number | null; add_high: number | null; trim_line: number | null; trailing_stop: number | null;
+  sync_ignored?: WatchPositionSyncIgnored[];
 }
 
 export interface WatchMonitor {
@@ -655,6 +665,20 @@ export interface StockAskResponse {
   kbUpdatedAt: string;
   kbStatus: string;
   newEntries: number;
+}
+
+// ===== 个股知识库「相关图表」（v0.53.0）=====
+export interface StockChartItem {
+  path: string;
+  name: string;
+  mtime: number;
+  size: number;
+}
+
+export interface StockChartsResponse {
+  code: string;
+  charts: StockChartItem[];
+  total: number;
 }
 
 // ===== 持仓工作区「当前账本」列偏好 =====

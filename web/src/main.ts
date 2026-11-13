@@ -1341,21 +1341,45 @@ async function refreshAskStocksQuietly(): Promise<void> {
   } catch { /* 静默失败 */ }
 }
 
-async function selectAskStock(code: string): Promise<void> {
+/** 图表按标的归集（v0.53.0）：切换股票时一起取，失败静默降级，不挡知识库正文 */
+async function loadAskCharts(code: string): Promise<void> {
+  try {
+    const data = await api.stockCharts(code);
+    if (String(state.askStock || '').toUpperCase() !== String(code).toUpperCase()) return;
+    state.askCharts = (data.charts || []).map((item) => item.path);
+  } catch {
+    if (String(state.askStock || '').toUpperCase() === String(code).toUpperCase()) state.askCharts = [];
+  }
+  render();
+}
+
+/** 放大查看当前个股的知识库全文 + 归集图表（右上角按钮与「标的档案」直达共用） */
+function openAskKb(): void {
+  const note = state.askNote;
+  if (!note) return;
+  openMarkdown(`${note.name || note.code} · 知识库`, note.markdown,
+    `更新于 ${note.updated_at || '尚未整理'} ｜ ${note.count} 段分析 ｜ 相关图表 ${state.askCharts.length} 张 ｜ 整理模型 ${note.model || '继承宿主'}`,
+    state.askCharts);
+}
+
+/** openKb=true：从标的档案 / 运行记录点「个股知识库」时直接展开全文，省掉第二次点击 */
+async function selectAskStock(code: string, openKb = false): Promise<void> {
   const target = String(code || '').toUpperCase();
   if (!target) return;
   askNotePolling = 0;
   if (askNotePollTimer) { window.clearTimeout(askNotePollTimer); askNotePollTimer = 0; }
   state.askStock = target;
   state.askNote = null;
+  state.askCharts = [];
   state.askNoteError = '';
   state.askDraft = '';
   state.askError = '';
   state.askSuggestionsEditing = false;
   if (state.view !== 'ask') navigate('ask');
   else render();
-  await loadAskNote(target);
+  await Promise.all([loadAskCharts(target), loadAskNote(target)]);
   scrollAskThreadToBottom();
+  if (openKb && state.askNote && String(state.askStock || '').toUpperCase() === target) openAskKb();
 }
 
 /** 手动触发二次整理（后端异步跑，前端轮询状态） */
@@ -1859,14 +1883,14 @@ document.addEventListener('click', (event) => {
   else if (action === 'update-copy') void copyUpdateCommand();
   else if (action === 'back-to-top') window.scrollTo({ top: 0, behavior: 'smooth' });
   else if (action === 'ask-latest-report' && target.dataset.code) {
-    // 标的档案的「追问」入口：直接进这只股票的知识库
-    void selectAskStock(target.dataset.code);
+    // 标的档案的「个股知识库」：进这只股票并直接展开知识库全文 + 图表（v0.53.0 免二次点击）
+    void selectAskStock(target.dataset.code, true);
   }
   else if (action === 'ask-report' && target.dataset.path) {
-    // 运行记录/概览/任务卡的「追问」只带报告路径：解析出个股后进知识库
+    // 运行记录/概览/任务卡的「追问」只带报告路径：解析出个股后进知识库并展开全文
     const code = codeForReportPath(target.dataset.path) || String(target.dataset.code || '');
     if (!code) { toast('该报告没有个股归属，无法进入个股知识库。', 'info'); return; }
-    void selectAskStock(code);
+    void selectAskStock(code, true);
   }
   else if (action === 'ask-stock-select' && target.dataset.code) void selectAskStock(target.dataset.code);
   else if (action === 'ask-letter-toggle' && target.dataset.letter) toggleAskLetter(target.dataset.letter);
@@ -1874,12 +1898,7 @@ document.addEventListener('click', (event) => {
   else if (action === 'ask-stocks-rebuild') void rebuildAskStocks();
   else if (action === 'ask-curate' && target.dataset.code) void curateAskStock(target.dataset.code);
   else if (action === 'ask-run' && target.dataset.code) void updateAskStock(target.dataset.code);
-  else if (action === 'ask-kb-expand') {
-    const note = state.askNote;
-    if (!note) return;
-    openMarkdown(`${note.name || note.code} · 知识库`, note.markdown,
-      `更新于 ${note.updated_at || '尚未整理'} ｜ ${note.count} 段分析 ｜ 整理模型 ${note.model || '继承宿主'}`);
-  }
+  else if (action === 'ask-kb-expand') openAskKb();
   else if (action === 'ask-ask' && target.dataset.question) void askAboutStock(state.askStock, target.dataset.question);
   else if (action === 'ask-send') void askAboutStock(state.askStock);
   else if (action === 'ask-suggest-edit') {

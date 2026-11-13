@@ -6,7 +6,7 @@ import { codeEntries, recordsForCode, reportForRun, runsForCode, sortConclusions
 import { latestReportForCode } from './run-history';
 import type { AppState } from './state';
 import type { ConclusionRecord, WatchAlert, WatchlistItem } from './types';
-import { alertMessageWithQty, alertQty, alertQtyIsCurrent, watchDistance, watchDistLabel, watchDistSwitch } from './watch-metrics';
+import { alertMessageWithQty, alertQty, alertQtyIsCurrent, positionTargetSane, watchDistance, watchDistLabel, watchDistSwitch } from './watch-metrics';
 
 /** 提醒类型 → 中文标签（止盈/止损/买入…） */
 const ALERT_KIND_LABEL: Record<string, string> = {
@@ -160,11 +160,20 @@ function monitorPanel(state: AppState, code: string): string {
        ['结论目标 / 止损', v(w.target) + ' / ' + v(w.stop)],
        ['失效条件', w.invalidate_if || '—'], ['核心逻辑', w.thesis || '—']]
     : [['成本 / 股数', v(p.cost) + ' / ' + (p.shares !== null ? p.shares + ' 股' : '—')],
-       ['止盈目标', v(p.target)],
+       // 止盈价倒挂（低于成本/止损）时直接标注，不当作正常目标展示（v0.53.0）
+       ['止盈目标', p.target !== null && !positionTargetSane(it) ? `${v(p.target)}（价位异常）` : v(p.target)],
        ['止损价', v(p.stop)],
        ['加仓区间', (p.add_low !== null && p.add_high !== null) ? (p.add_low + ' ~ ' + p.add_high) : '待补录'],
        ['减仓线 / 移动止盈', v(p.trim_line) + ' / ' + v(p.trailing_stop)],
        ['失效条件', w.invalidate_if || '—']];
+  // 价位倒挂或存在被拒绝的同步值时给出解释与入口，不静默（v0.53.0）
+  const levelWarning = (p.target !== null && !positionTargetSane(it))
+    ? `<div class="inline-warning">${icon('alert', 15)}止盈目标 ${v(p.target)} 低于成本或止损价（价位倒挂，多为回踩位被误当止盈目标写入）。距止盈计算与止盈提醒已暂停，请在「编辑规则」里修正目标价。</div>`
+    : '';
+  const ignored = Array.isArray(p.sync_ignored) ? p.sync_ignored.slice(0, 3) : [];
+  const ignoredBar = ignored.length
+    ? `<div class="watch-sync-ignored"><small>近期有 ${ignored.length} 条结论价位因语义异常未写入（如低于成本的止盈价），原始值保留在结论库：</small>${ignored.map((g) => `<small>${escapeHtml(g.field === 'target' ? '目标' : '止损')} ${escapeHtml(String(g.value))}（${escapeHtml(g.reason)}）</small>`).join('')}</div>`
+    : '';
   const factsHtml = `<div class="watch-facts">${facts.map(([k, value]) => `<div class="watch-fact"><small>${escapeHtml(k)}</small><strong>${escapeHtml(value)}</strong></div>`).join('')}</div>`;
   const signalHtml = alerts.length
     ? `<div class="watch-alerts">${alerts.map((a) => `<div class="watch-alert ${a.level === 'bad' ? 'watch-sig-bad' : a.level === 'good' ? 'watch-sig-good' : 'watch-sig-info'}"><span>${escapeHtml(alertMessageWithQty(a, doc?.items || []))}</span><small>${escapeHtml(formatDateTime(a.ts, true))}</small></div>`).join('')}</div>`
@@ -199,7 +208,7 @@ function monitorPanel(state: AppState, code: string): string {
       <button class="button button-secondary" data-action="watch-toggle-edit">取消</button>
     </div></div>` : '';
   const modeRow = `<div class="watch-mode-row">${watchDistSwitch(mode, 'watch-mode-archive')}<span class="field-help">正值＝尚有空间；切换后「监控规则」优先级与距离同步变化，观察标的按买入区间计算</span></div>`;
-  return `<section class="panel watch-monitor">${head}${top}${modeRow}${factsHtml}${signalHtml}${editForm}</section>`;
+  return `<section class="panel watch-monitor">${head}${top}${modeRow}${levelWarning}${factsHtml}${ignoredBar}${signalHtml}${editForm}</section>`;
 }
 
 function archiveDetail(state: AppState): string {

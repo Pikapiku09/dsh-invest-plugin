@@ -124,8 +124,9 @@ export function renderMarkdown(text: string): string {
 function chartDataUrl(path: string): Promise<string> {
   if (!chartCache.has(path)) {
     const request = api.chart(path).then((result) => {
-      if (!result || typeof result.svg !== 'string') throw new Error('图表接口未返回 SVG 内容');
-      return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(result.svg);
+      if (result && typeof result.png === 'string') return 'data:image/png;base64,' + result.png;
+      if (result && typeof result.svg === 'string') return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(result.svg);
+      throw new Error('图表接口未返回图片内容');
     });
     // 失败不能永久缓存：报告/图表归档存在毫秒级时序差，下一次打开必须允许重试
     request.catch(() => chartCache.delete(path));

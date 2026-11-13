@@ -31,7 +31,7 @@ function threadHtml(state: AppState, code: string, name: string): string {
   const thread = state.askThreads[key] || [];
   const updated = state.askNote && state.askNote.updated_at ? state.askNote.updated_at : '';
   if (!thread.length) {
-    return `<div class="ask-hint">${icon('chat', 20)}<div><strong>就 ${escapeHtml(name || code)} 的知识库提问</strong><p>回答只依据这份知识库${updated ? `（更新于 ${escapeHtml(updated)}）` : ''}；知识库没写的会明确说「未涉及」，涉及更晚的行情会提示你跑任务更新。支持连续追问，历史轮次会一起带上。</p><p class="ask-hint-kb">整理后的知识库已收起，点右上角「知识库」可放大查看。</p></div></div>
+    return `<div class="ask-hint">${icon('chat', 20)}<div><strong>就 ${escapeHtml(name || code)} 的知识库提问</strong><p>回答只依据这份知识库${updated ? `（更新于 ${escapeHtml(updated)}）` : ''}；知识库没写的会明确说「未涉及」，涉及更晚的行情会提示你跑任务更新。支持连续追问，历史轮次会一起带上。</p><p class="ask-hint-kb">整理后的知识库${(state.askCharts || []).length ? ` 与 ${(state.askCharts || []).length} 张相关图表` : ''}已收起，点右上角「知识库」可放大查看。</p></div></div>
       ${suggestionsHtml(state)}`;
   }
   return thread.map((turn) => `<div class="ask-turn ask-${turn.role}">
@@ -173,6 +173,8 @@ function mainPane(state: AppState): string {
     daysSince(note.updated_at) >= 3 ? '可能滞后' : '',
   ].filter(Boolean).join(' · ');
 
+  const charts = state.askCharts || [];
+  const chartsHint = charts.length ? ` 与 ${charts.length} 张相关图表` : '';
   const body = `<section class="panel ask-main">
     <header class="ask-head">
       <div>
@@ -180,15 +182,15 @@ function mainPane(state: AppState): string {
         <div class="ask-meta">${meta}</div>
       </div>
       <div class="ask-head-actions">
-        <button class="button button-secondary" data-action="ask-kb-expand" title="放大查看整理后的个股知识库">${icon('book', 15)}知识库</button>
+        <button class="button button-secondary" data-action="ask-kb-expand" title="放大查看整理后的个股知识库与图表">${icon('book', 15)}知识库${charts.length ? ` · ${charts.length} 图` : ''}</button>
         <button class="button button-secondary" data-action="ask-curate" data-code="${escapeHtml(code)}">${icon('refresh', 15)}重新整理</button>
         <button class="button button-secondary" data-action="ask-run" data-code="${escapeHtml(code)}">${icon('sparkles', 15)}更新数据</button>
       </div>
     </header>
     ${kbStateBanner(note)}
     <div class="ask-kb-collapsed">
-      ${icon('book', 15)}<span>整理后的知识库已收起。这里是追问工作区，需要看全文时点右上角「知识库」放大查看。</span>
-      <button class="text-button" data-action="ask-kb-expand">查看知识库 ${icon('arrow', 13)}</button>
+      ${icon('book', 15)}<span>整理后的知识库${chartsHint}已收起。这里是追问工作区，需要看全文或图表时点右上角「知识库」放大查看。</span>
+      <button class="text-button" data-action="ask-kb-expand">查看知识库${chartsHint ? '与图表' : ''} ${icon('arrow', 13)}</button>
     </div>
     <div class="ask-thread" id="ask-thread">${threadHtml(state, code, name)}</div>
     ${state.askError ? `<div class="inline-warning">${icon('alert', 15)}${escapeHtml(state.askError)}</div>` : ''}
@@ -219,6 +221,6 @@ export function renderAsk(state: AppState): string {
       : `<div class="ask-list-body"><div class="ask-report-list"><p class="muted compact">${state.askStocksLoading ? '正在读取知识库清单…' : '还没有可展示的个股知识库，先跑一次任务。'}</p></div></div>
         ${state.askStocksError ? `<p class="ask-list-foot">知识库不可用：${escapeHtml(state.askStocksError)}</p>` : ''}`}
   </aside>`;
-  const head = pageHeader('个股知识库', '按股票归档：左侧索引里持仓/观察中的标的会高亮；中间是追问工作区，整理后的知识库收在右上角，点开即放大查看。');
+  const head = pageHeader('个股知识库', '按股票归档：左侧索引里持仓/观察中的标的会高亮；中间是追问工作区，整理后的知识库与该股图表一起收在右上角，点开即放大查看。');
   return head + `<div class="ask-layout">${list}${mainPane(state)}</div>`;
 }

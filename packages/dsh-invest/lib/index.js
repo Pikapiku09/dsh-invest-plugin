@@ -570,6 +570,35 @@ function apply(ctx, config) {
       m.dist_buy_pct = null
     } else { m.dist_buy_pct = null; m.dist_stop_pct = null }
   }
+  // ===== 持有期价位语义校验（v0.53.0）=====
+  // 结论里的 target / stop 会随 stance 变语义：「减仓 / 离场」给出的往往是回踩位、减仓参考价，
+  // 并不是止盈目标。过去无条件覆盖，导致多次分析后出现
+  // 「止盈 16.68 < 止损 17.35 < 成本 18.855」这种自相矛盾的档案，还会被当成止盈阈值误报提醒。
+  // 成本是账本事实（不由结论写入），拿它当唯一可靠锚点。
+  const positionLevelIssue = (pos, field, value) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "不是有效正价格"
+    const cost = wNum(pos.cost)
+    const stop = wNum(pos.stop)
+    const target = wNum(pos.target)
+    if (field === "target") {
+      if (cost !== null && value <= cost) return `低于成本 ${cost}，不能作为止盈目标`
+      if (stop !== null && value <= stop) return `不高于止损价 ${stop}，不能作为止盈目标`
+      return ""
+    }
+    if (cost !== null && value >= cost) return `不低于成本 ${cost}，不能作为止损价`
+    // 现存的止盈目标本身异常时，不能拿它当锚反过来拒绝一个合理的止损
+    if (target !== null && (cost === null || target > cost) && value >= target) return `不低于止盈目标 ${target}，不能作为止损价`
+    return ""
+  }
+  /** 存量脏数据（止盈 ≤ 成本 / ≤ 止损）不得再参与止盈信号比对 */
+  const positionLevelSane = (pos) => {
+    const target = wNum(pos.target), stop = wNum(pos.stop), cost = wNum(pos.cost)
+    if (target === null) return true
+    if (cost !== null && target <= cost) return false
+    if (stop !== null && target <= stop) return false
+    return true
+  }
+
   // 信号比对：返回 {key, kind, level, qty, message} 或 null；kind: buy/invalidate/stop/target/add/trim
   // qty = 购买仓位数：观察期（买入/失效）取 watch.buy_qty 计划买入股数；持有期（止盈/止损/加减仓）取 position.shares 持仓股数
   const evalWatchSignal = (it) => {
@@ -598,7 +627,8 @@ function apply(ctx, config) {
       const st = wNum(pos.stop)
       if (st !== null && p <= st) return { key: it.code + "|stop|" + localYmd(), kind: "stop", level: "bad", qty: heldQty, message: "【止损提醒】" + nm + " " + it.code + " 现价 " + p + " 触及/跌破止损价 " + st + "，成本 " + f2(wNum(pos.cost)) + "，" + heldText + "。" }
       const tg = wNum(pos.target)
-      if (tg !== null && p >= tg) return { key: it.code + "|target|" + localYmd(), kind: "target", level: "good", qty: heldQty, message: "【止盈提醒】" + nm + " " + it.code + " 现价 " + p + " 达到目标价 " + tg + "，成本 " + f2(wNum(pos.cost)) + "，" + heldText + "。" }
+      // 止盈目标低于成本/止损时是脏数据（多半由回踩位误写），不得再触发「止盈提醒」误导用户
+      if (tg !== null && positionLevelSane(pos) && p >= tg) return { key: it.code + "|target|" + localYmd(), kind: "target", level: "good", qty: heldQty, message: "【止盈提醒】" + nm + " " + it.code + " 现价 " + p + " 达到目标价 " + tg + "，成本 " + f2(wNum(pos.cost)) + "，" + heldText + "。" }
       const al = wNum(pos.add_low), ah = wNum(pos.add_high)
       if (al !== null && ah !== null && p >= al && p <= ah) return { key: it.code + "|add|" + localYmd(), kind: "add", level: "info", qty: heldQty, message: "【加仓提醒】" + nm + " " + it.code + " 现价 " + p + " 回落至加仓区间 [" + al + ", " + ah + "]，" + heldText + "。" }
       const tr = wNum(pos.trim_line)
@@ -664,8 +694,23 @@ function apply(ctx, config) {
         changed = true
       } else if (it.state === "持有" && (stance === "持有" || stance === "减仓" || stance === "离场")) {
         const pos = it.position
-        if (typeof b.target === "number") pos.target = b.target
-        if (typeof b.stop === "number") pos.stop = b.stop
+        // 「减仓 / 离场」结论里的 target 多为回踩位 / 减仓参考价，不是止盈目标：
+        // 只更新失效条件与时间戳，不碰持有期价位，避免多次分析把止盈价越改越低。
+        if (stance === "持有") {
+          for (const field of ["target", "stop"]) {
+            if (typeof b[field] !== "number") continue
+            const issue = positionLevelIssue(pos, field, b[field])
+            if (issue) {
+              const ignored = Array.isArray(pos.sync_ignored) ? pos.sync_ignored : (pos.sync_ignored = [])
+              ignored.unshift({ ts: now, field, value: b[field], stance, reason: issue })
+              pos.sync_ignored = ignored.slice(0, 6)
+              changed = true
+              continue
+            }
+            pos[field] = b[field]
+            changed = true
+          }
+        }
         if (b.invalidate_if) it.watch.invalidate_if = String(b.invalidate_if).slice(0, 300)
         it.watch.last_conclusion_ts = now
         deriveWatch(it)
@@ -2732,15 +2777,52 @@ function apply(ctx, config) {
         if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
         const url = new URL(req.url ?? "/", "http://localhost")
         const p = queryParam(url, "path") ?? ""
-        if (!/\.svg$/i.test(p) || !p.startsWith(CHARTS_DIR)) { writeJson(res, 400, { error: "denied" }); return }
+        if (!/\.(svg|png)$/i.test(p) || !p.startsWith(CHARTS_DIR)) { writeJson(res, 400, { error: "denied" }); return }
         const fs = ctx.get("fs")
         if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
         try {
+          // PNG 走 node:fs 直读（路径已通过 startsWith 白名单 + 扩展名校验）；
+          // fs.resolve 返回的是 DSH fs 的句柄对象，node:fs 吃不了，只能传字符串路径。
+          if (/\.png$/i.test(p)) {
+            const buf = await fsp.readFile(p)
+            if (buf.length > 4_000_000) { writeJson(res, 413, { error: "too large" }); return }
+            writeJson(res, 200, { path: p, png: buf.toString("base64") })
+            return
+          }
           const target = await fs.resolve(p)
           const svg = await fs.readText(target)
           if (svg.length > 160000) { writeJson(res, 413, { error: "too large" }); return }
           writeJson(res, 200, { path: p, svg })
         } catch (e) {
+          writeJson(res, 500, { error: String(e).slice(0, 200) })
+        }
+      },
+    },
+    {
+      // 个股知识库「相关图表」（v0.53.0）：按 6 位代码扫描 charts 目录，
+      // 只回 svg/png，按修改时间倒序。图表散落在运行报告里时用户找不到，这里按标的归集。
+      kind: "exact",
+      path: "/dsh-invest/api/stock-charts",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const url = new URL(req.url ?? "/", "http://localhost")
+        const code = String(queryParam(url, "code") || "").trim().toUpperCase()
+        const digits = code.replace(/[^0-9]/g, "").slice(0, 6)
+        if (digits.length !== 6) { writeJson(res, 400, { error: "股票代码格式错误：" + code }); return }
+        try {
+          const entries = await fsp.readdir(CHARTS_DIR, { withFileTypes: true })
+          const hits = []
+          for (const entry of entries) {
+            if (!entry.isFile() || !/\.(svg|png)$/i.test(entry.name) || !entry.name.includes(digits)) continue
+            const full = CHARTS_DIR + entry.name
+            const stat = await fsp.stat(full)
+            hits.push({ path: full, name: entry.name, mtime: stat.mtimeMs, size: stat.size })
+          }
+          hits.sort((a, b) => b.mtime - a.mtime)
+          writeJson(res, 200, { code, charts: hits.slice(0, 24), total: hits.length })
+        } catch (e) {
+          if (e && e.code === "ENOENT") { writeJson(res, 200, { code, charts: [], total: 0 }); return }
           writeJson(res, 500, { error: String(e).slice(0, 200) })
         }
       },

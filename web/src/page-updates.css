@@ -454,3 +454,14 @@
 .update-nohl { padding: 12px 0 2px; color: var(--text-2); font-size: 12px; line-height: 1.65; }
 .update-nohl a { color: var(--accent); }
 .update-card .whatsnew-foot { flex-wrap: wrap; }
+
+/* ===== v0.53.0 ===== */
+/* 持有期止盈价倒挂（低于成本/止损）：目标数字标红，不再装作正常目标 */
+.target-bad { color: var(--red); }
+.target-cell small { color: var(--muted); }
+/* 档案监控卡片：被拒绝同步的价位审计说明（中性小字，不与真警告抢注意力） */
+.watch-sync-ignored { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: -6px 0 12px; padding: 8px 11px; border: 1px dashed var(--line-soft); border-radius: 8px; }
+.watch-sync-ignored small { color: var(--muted); font-size: 10.5px; line-height: 1.6; }
+/* 阅读器图表画廊：知识库放大层按标的归集的图表，两列自适应铺开 */
+.reader-chart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; margin-top: 8px; }
+.reader-chart-grid .report-chart { margin: 0; }

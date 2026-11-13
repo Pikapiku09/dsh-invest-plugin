@@ -321,3 +321,31 @@ test('已清仓标的重新买入 → 档案回到持有', async (t) => {
   assert.equal(it.state, '持有', '重新买入后档案应回到持有')
   assert.equal(it.position.shares, 300)
 })
+
+// ===== v0.53.0：持有期价位语义校验 =====
+
+test('脏止盈（低于成本/低于止损）不触发止盈提醒（超声电子事故回归）', async (t) => {
+  // 复刻线上事故形态：止盈 16.68 < 止损 17.35 < 成本 18.855。
+  // 桩行情：代码末位 4 → 现价 17.43 ≥ 16.68，若无屏蔽必触发止盈提醒。
+  const h = makeHarness([
+    watchItem('600004.SH', '超声电子', '持有', {}, { cost: 18.855, shares: 1000, stop: 17.35, target: 16.68 }),
+  ])
+  t.after(h.cleanup)
+
+  const { json } = await h.call('POST', '/dsh-invest/api/watchlist/refresh', {})
+  const targetAlert = (json.alerts || []).find((alert) => alert.kind === 'target')
+  assert.equal(targetAlert, undefined, '价格倒挂的止盈目标不得触发止盈提醒')
+})
+
+test('合法止盈（高于成本与止损）照常触发提醒，行为不回归', async (t) => {
+  // 代码末位 2 → 现价 12.0 ≥ 目标 12；成本 10、止损 9 → 全部语义合法
+  const h = makeHarness([
+    watchItem('600002.SH', '止盈样例', '持有', {}, { cost: 10, shares: 800, stop: 9, target: 12 }),
+  ])
+  t.after(h.cleanup)
+
+  const { json } = await h.call('POST', '/dsh-invest/api/watchlist/refresh', {})
+  const targetAlert = (json.alerts || []).find((alert) => alert.kind === 'target')
+  assert.ok(targetAlert, '合法止盈目标仍应触发提醒')
+  assert.match(targetAlert.message, /止盈提醒/)
+})

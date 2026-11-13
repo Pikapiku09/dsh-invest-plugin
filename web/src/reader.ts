@@ -18,15 +18,26 @@ export function closeReader(): void {
   previousFocus = null;
 }
 
-/** 直接渲染一段 Markdown（不读文件）：用于「放大查看」知识库这类已有内容的场景 */
-export function openMarkdown(title: string, markdown: string, meta = ''): void {
+/** 图表画廊：报告阅读器与个股知识库放大层共用（v0.53.0） */
+function chartGallery(charts: string[], label: string): string {
+  if (!charts.length) return '';
+  const items = charts.slice(0, 12).map((chart) =>
+    `<img class="report-chart" data-chart-path="${escapeHtml(chart)}" alt="${escapeHtml(fileName(chart))}" title="${escapeHtml(fileName(chart))}" loading="lazy" />`,
+  ).join('');
+  const count = charts.length > 12 ? `最近 12 / 共 ${charts.length} 张` : `${charts.length} 张`;
+  return `<section class="reader-chart-gallery"><h3>${escapeHtml(label)} · ${count}</h3><div class="reader-chart-grid">${items}</div></section>`;
+}
+
+/** 直接渲染一段 Markdown（不读文件）：用于「放大查看」知识库这类已有内容的场景
+ *  charts 为该标的归集到的图表路径，会作为画廊放在知识库正文之前。 */
+export function openMarkdown(title: string, markdown: string, meta = '', charts: string[] = []): void {
   requestSerial += 1;
   const reader = readerElement();
   const content = document.getElementById('readerContent')!;
   previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   document.getElementById('readerTitle')!.textContent = title;
   document.getElementById('readerMeta')!.textContent = meta;
-  content.innerHTML = `<article class="markdown-body">${renderMarkdown(markdown) || '<p>内容为空。</p>'}</article>`;
+  content.innerHTML = `${chartGallery(charts, '相关图表')}<article class="markdown-body">${renderMarkdown(markdown) || '<p>内容为空。</p>'}</article>`;
   reader.hidden = false;
   document.body.classList.add('reader-open');
   document.getElementById('readerClose')!.focus({ preventScroll: true });
@@ -59,7 +70,7 @@ export async function openReport(path: string, charts: string[] = []): Promise<v
       seenCharts.add(normalized);
       return true;
     });
-    const chartSection = extraCharts.length ? `<section class="reader-chart-gallery"><h3>相关图表</h3>${extraCharts.slice(0, 12).map((chart) => `<img class="report-chart" data-chart-path="${escapeHtml(chart)}" alt="运行图表" loading="lazy" />`).join('')}</section>` : '';
+    const chartSection = chartGallery(extraCharts, '相关图表');
     content.innerHTML = `${chartSection}<article class="markdown-body">${renderMarkdown(text) || '<p>报告内容为空。</p>'}</article>`;
     void hydrateCharts(content);
   } catch (error) {
