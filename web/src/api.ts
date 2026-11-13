@@ -107,8 +107,8 @@ export const api = {
   conclusionsImport: (text: string) => post<ImportResponse>(`${BASE}/conclusions-import`, { text }),
   /** 本机实例改名（v0.48.0）：多人共享数据时给分组表一个可读名字 */
   setInstanceName: (name: string) => post<{ ok: true; instance: { id: string; name: string } }>(`${BASE}/instance-name`, { name }),
-  /** 更新检查（v0.50.0）：只读，返回是否有新版 + 对应更新命令 */
-  updateCheck: () => request<UpdateCheckResponse>(`${BASE}/update-check`),
+  /** 更新检查（v0.50.0）：只读，返回是否有新版 + 对应更新命令；force 绕过 30 分钟缓存（v0.51.0） */
+  updateCheck: (force = false) => request<UpdateCheckResponse>(`${BASE}/update-check${force ? '?force=1' : ''}`),
   /** 「本次更新」说明（v0.50.0）：由 CHANGELOG.md 生成 */
   whatsNew: () => request<WhatsNewResponse>(`${BASE}/whats-new`),
   // ===== 标的档案（观察 + 持仓统一监控）=====

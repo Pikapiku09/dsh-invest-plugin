@@ -1,17 +1,32 @@
 {
-  "latest": "0.50.0",
-  "generatedAt": "2026-11-13T02:23:22.930Z",
+  "latest": "0.51.0",
+  "generatedAt": "2026-11-13T03:04:45.039Z",
   "releases": [
+    {
+      "version": "0.51.0",
+      "date": "2026-11-13",
+      "title": "弹窗不再自己跑掉，更新变成一件你说了算的事",
+      "items": [
+        "修一个真 bug：弹层会「自动关闭」。v0.50.0 把关闭动作挂在整个遮罩上，用户想看清内容时随手一点（甚至只是想滚一下）就关掉了；而关闭同时写入了「已读」——内容就此永久消失。现在点遮罩不关、没有任何定时器，只有「开始使用」和右上角 × 能关。",
+        "左上角新增「检测更新」按钮：随时点、随时查，绕过 30 分钟缓存取实时结果。已是最新会明确回一句「已是最新版本 vX」，不再是一片沉默。",
+        "红点提示：检测到新版本时按钮右上角挂红点、按钮转琥珀色——一眼看得见，但不弹窗打断。",
+        "「发现新版本」弹层：列出远端比本机新的各版本要点（从仓库的 whats-new.json 读，本机那份只含已装版本），给出可直接复制的更新命令，并写明「更新完要重启 DSH」。",
+        "点版本号可回看「本次更新」：关闭后不再是「只此一次」，随时能再读一遍。",
+        "两条触发路径：① 启动时静默检测，若这是第一次见到该新版本，1.5 秒后询问一次（点「稍后再说」后只留红点，不再打扰）；② 使用中随时点「检测更新」手动查。",
+        "用「复制命令」代替「假装能一键升级」：DSH 插件宿主半部进程内加载，无法热更新，界面上如实写清，不做点了没反应的假按钮。",
+        "测试：新增 5 个（?force=1 绕过缓存、失败不污染缓存、远端要点过滤排序截断、要点拉取失败降级为空、无更新时不多打网络），总数 144 → 149。"
+      ]
+    },
     {
       "version": "0.50.0",
       "date": "2026-11-13",
       "title": "会自己检查更新，也会在升级后告诉你这个版本变了什么",
       "items": [
-        "更新检查：工作台启动时静默问一次 GitHub（raw.githubusercontent.com 上的本包 package.json）， 与本地版本比语义化版本号；有新版就在左上角版本徽标旁挂一个小标 ↑ vX.Y.Z，点一下复制更新命令。 30 分钟内存缓存，网络失败静默（不弹窗、不拦截、不影响任何功能）。",
-        "命令按安装方式给：自动扫 ~/.dsh/profiles/*/package.json 判断是 link:（本地克隆）还是 github: 源安装——前者提示「先 git pull 再 install」，后者直接给 dsh plugin --profile web update。 只读探测，不改任何文件。",
-        "为什么不做全自动：宿主半部是进程内加载的，更新后必须重启 DSH 才生效。 所以能做到「自动发现 + 一条命令」，做不到热更新。这一点在界面上如实说明，不假装。",
-        "更新说明 + 致谢：升级后首次进入工作台，弹一次「本次更新」，列出这个版本（以及跨过的版本） 的要点，末尾致谢。见过的版本记在 localStorage，只在版本变化时出现，不打扰。 文案来源是 CHANGELOG.md，由 tools/gen-whats-new.js 生成 lib/whats-new.json …",
-        "测试：新增 5 个（语义化版本比较 1 + 更新检查路由 3 + what's-new 与版本号一致性 1）， 总数 138 → 143。cmpVersion 抽到 pure.js 以便纯函数测试。"
+        "更新检查：工作台启动时静默问一次 GitHub（raw.githubusercontent.com 上的本包 package.json），与本地版本比语义化版本号；有新版就在左上角版本徽标旁挂一个小标 ↑ vX.Y.Z，点一下复制更新命令。 30 分钟内存缓存，网络失败静默（不弹窗、不拦截、不影响任何功能）。",
+        "命令按安装方式给：自动扫 ~/.dsh/profiles/*/package.json 判断是 link:（本地克隆）还是 github: 源安装——前者提示「先 git pull 再 install」，后者直接给 dsh plugin --profile web update。只读探测，不改任何文件。",
+        "为什么不做全自动：宿主半部是进程内加载的，更新后必须重启 DSH 才生效。所以能做到「自动发现 + 一条命令」，做不到热更新。这一点在界面上如实说明，不假装。",
+        "更新说明 + 致谢：升级后首次进入工作台，弹一次「本次更新」，列出这个版本（以及跨过的版本）的要点，末尾致谢。见过的版本记在 localStorage，只在版本变化时出现，不打扰。文案来源是 CHANGELOG.md，由 tools/gen-whats-new.js 生成 lib/whats-new.json 随包分发——不手抄第二份，避免说明与 CHANGELOG 漂移。",
+        "测试：新增 5 个（语义化版本比较 1 + 更新检查路由 3 + what's-new 与版本号一致性 1），总数 138 → 143。cmpVersion 抽到 pure.js 以便纯函数测试。"
       ]
     },
     {
@@ -20,10 +35,10 @@
       "title": "真正的根因：Loader 行名 / 包名 / bundle id 三者必须一致，否则客户端半部从不加载",
       "items": [
         "现象：v0.49.0 加了左侧栏入口，两次重启都没出现；v0.49.1 改 id 也无效。",
-        "根因（读 @deepseek-ai/dsh-client-modules/lib/index.js 确认，比 v0.49.1 的判断更靠前一层）： 1. resolveMeta() 用 Loader 行名调 locatePkgJson()；行名是裸包名时算出 expectedPackageName； 2. near…",
-        "修复：把包名改为 dsh-invest，与行名、bundle id 三者统一。 这是 metadata 改动，link: 指向的路径不变，无需重新 pnpm install。",
-        "影响（此前一直存在）：该包的客户端半部从未加载过——工具卡片（tool.call.toolview） 与 v0.49.0 的侧栏入口都不会出现；界面上见过的卡片来自动态插件那条独立路径。",
-        "验证：写了 verify-client-resolution.mjs 复刻宿主判定链路（exactPackageSpecifier → createRequire.resolve → nearestPackage 上溯），对 dsh-invest 与 @pikapiku09/dsh-invest 两个行名分别跑：前…",
+        "根因（读 @deepseek-ai/dsh-client-modules/lib/index.js 确认，比 v0.49.1 的判断更靠前一层）： 1. resolveMeta() 用 Loader 行名调 locatePkgJson()；行名是裸包名时算出 expectedPackageName；…",
+        "修复：把包名改为 dsh-invest，与行名、bundle id 三者统一。这是 metadata 改动，link: 指向的路径不变，无需重新 pnpm install。",
+        "影响（此前一直存在）：该包的客户端半部从未加载过——工具卡片（tool.call.toolview）与 v0.49.0 的侧栏入口都不会出现；界面上见过的卡片来自动态插件那条独立路径。",
+        "验证：写了 verify-client-resolution.mjs 复刻宿主判定链路（exactPackageSpecifier → createRequire.resolve → nearestPackage 上溯），对 dsh-invest 与 @pikapiku09/dsh-invest 两个行名分别跑：前者现在 name/dsh.client/./client/bundle/id 全部命中，后者直接解析失败。",
         "测试：client-bundle.test.js 的首个用例改为三方一致性断言——直接读 cordis.patch.yml 的行名，与包名、bundle id 比对。这是本次踩坑最直接的防线。测试总数 138。"
       ]
     },
@@ -33,10 +48,10 @@
       "title": "修复：客户端 bundle 的 `id` 用了短名，整条客户端条目从未激活",
       "items": [
         "现象：v0.49.0 加了左侧栏入口，重启后什么也没出现。",
-        "根因（读 @deepseek-ai/dsh-client-modules/lib/client.js:610-640 的 arrive(row) 确认）： 宿主以包名作为浏览器模块身份查 factory —— const { id } = row（WebBootEntry.id 注释：Entry name == p…",
-        "影响：不只新功能。该客户端半部的工具卡片注册（tool.call.toolview）同样从未生效 （此前若见过卡片，是动态插件 dist/invest-run.client.js 那条路径提供的）。",
-        "修复：id 改为 @pikapiku09/dsh-invest；三个 slots.register 各自独立 try/catch， 避免动态插件已认领同一 key 时互相连累。",
-        "测试：新增断言「bundle 的 id 必须等于 package.json 的 name」—— 这是本次踩坑的直接防线。测试总数 138 → 138（3 个 bundle 用例就地加强，未新增文件）。"
+        "根因（读 @deepseek-ai/dsh-client-modules/lib/client.js:610-640 的 arrive(row) 确认）：宿主以包名作为浏览器模块身份查 factory —— const { id } = row（WebBootEntry.id 注释：Entry name == package name），找不到就 throw new Error('client-modules: could not l…",
+        "影响：不只新功能。该客户端半部的工具卡片注册（tool.call.toolview）同样从未生效（此前若见过卡片，是动态插件 dist/invest-run.client.js 那条路径提供的）。",
+        "修复：id 改为 @pikapiku09/dsh-invest；三个 slots.register 各自独立 try/catch，避免动态插件已认领同一 key 时互相连累。",
+        "测试：新增断言「bundle 的 id 必须等于 package.json 的 name」——这是本次踩坑的直接防线。测试总数 138 → 138（3 个 bundle 用例就地加强，未新增文件）。"
       ]
     },
     {
@@ -44,11 +59,11 @@
       "date": "2026-11-13",
       "title": "工作台内嵌进 DSH：左侧栏图标入口 + 主面板，不必再手输端口号",
       "items": [
-        "问题：工作台只是插件注册在 /dsh-invest/app 的独立 SPA。启动 DSH 后没有任何入口—— 既不自启浏览器，也没有图标或角标，必须自己敲地址，朋友那边基本等于「没这个功能」。",
-        "DSH 原生机制（读 dsh-client-ui-sidebar / -layout 的 slot 契约确认，不是自创）： ① 往 root 作用域的 sidebar.panellist（list）注册一个图标入口，带 id / order / label； ② 再用同一个 id 往布局的 root 作用域 mai…",
-        "实现：packages/dsh-invest/lib/client.js 追加两个注册（slots.inject 声明感知， 旧版 DSH 缺 seat 时静默跳过，不影响工具卡片）。面板是 iframe 载入 /dsh-invest/app （同源，工作台路由未设 X-Frame-Options/CSP，可嵌），…",
-        "依赖声明：dsh.client.inject 补 @deepseek-ai/dsh-client-ui-sidebar 与 @deepseek-ai/dsh-client-ui-layout——侧栏与布局的 slot 声明必须先于我们到达， 否则注册会因 seat 未声明而跳过。",
-        "测试（新增 3 个，132 → 138）：bundle 可解析并注册 factory；package.json 的 dsh.client / ./client 导出与 inject 完整性；apply 确实同时注册了 sidebar.panellist 与同名 main（id === key 是「点了能切过去」的唯…",
+        "问题：工作台只是插件注册在 /dsh-invest/app 的独立 SPA。启动 DSH 后没有任何入口——既不自启浏览器，也没有图标或角标，必须自己敲地址，朋友那边基本等于「没这个功能」。",
+        "DSH 原生机制（读 dsh-client-ui-sidebar / -layout 的 slot 契约确认，不是自创）： ① 往 root 作用域的 sidebar.panellist（list）注册一个图标入口，带 id / order / label； ② 再用同一个 id 往布局的 root 作用域 main（keyed）注册主面板组件。点侧栏图标即把主面板切成工作台。…",
+        "实现：packages/dsh-invest/lib/client.js 追加两个注册（slots.inject 声明感知，旧版 DSH 缺 seat 时静默跳过，不影响工具卡片）。面板是 iframe 载入 /dsh-invest/app （同源，工作台路由未设 X-Frame-Options/CSP，可嵌），顶部有「刷新 / 新窗口」两个按钮。",
+        "依赖声明：dsh.client.inject 补 @deepseek-ai/dsh-client-ui-sidebar 与 @deepseek-ai/dsh-client-ui-layout——侧栏与布局的 slot 声明必须先于我们到达，否则注册会因 seat 未声明而跳过。",
+        "测试（新增 3 个，132 → 138）：bundle 可解析并注册 factory；package.json 的 dsh.client / ./client 导出与 inject 完整性；apply 确实同时注册了 sidebar.panellist 与同名 main（id === key 是「点了能切过去」的唯一契约）。",
         "纯客户端改动，重启 DSH GUI 后刷新页面生效（Host 扫描 package.json 在启动时）。"
       ]
     },
@@ -57,27 +72,13 @@
       "date": "2026-11-13",
       "title": "多人协作：结论一键导出/导入 + 来源实例标识",
       "items": [
-        "背景：插件分享给朋友后，双方各自积累判断数据。但同一时间跑，行情维度（市场状态） 完全重复——真正的增量是「个股层面」与「跨实例的判断一致性」，前提是能分清「谁的结论」。",
+        "背景：插件分享给朋友后，双方各自积累判断数据。但同一时间跑，行情维度（市场状态）完全重复——真正的增量是「个股层面」与「跨实例的判断一致性」，前提是能分清「谁的结论」。",
         "实例身份：store/instance.json 记本机 { id, name }，id 首次启动随机生成、永久不变； name 可在判断质量页直接改（回车或失焦生效，默认显示「本机」）。 persistConclusions 落库时带 instance；v0.48.0 之前的旧记录无此字段，回测时归本机。",
-        "导出（GET /api/conclusions-export）：一键下载单文件 conclusions-<实例>-<日期>.jsonl， 首行是 _manifest（来源实例/名字/导出时间/条数），其余为结论行原样。 只含结构化结论——不含 token、持仓账本、报告正文；question/thesis 是判断内…",
-        "导入（POST /api/conclusions-import）：选文件即合并。按 (callId + code) 去重、 只追加不改写、单次上限 5000 条；非法行计数不阻断；同一份文件重复导入全部跳过，无副作用。 导入来源自动登记进 store/instances.json，分组表按名字显示而非随机短码。",
+        "导出（GET /api/conclusions-export）：一键下载单文件 conclusions-<实例>-<日期>.jsonl，首行是 _manifest（来源实例/名字/导出时间/条数），其余为结论行原样。只含结构化结论——不含 token、持仓账本、报告正文；question/thesis 是判断内容本身。",
+        "导入（POST /api/conclusions-import）：选文件即合并。按 (callId + code) 去重、只追加不改写、单次上限 5000 条；非法行计数不阻断；同一份文件重复导入全部跳过，无副作用。导入来源自动登记进 store/instances.json，分组表按名字显示而非随机短码。",
         "新增「按来源」分组表（市场状态之后），明细保持不动；数据面板加「导出/导入数据」按钮与本机标识输入框。",
         "后端 + 前端均有改动，需重启 DSH GUI 生效（前端部分刷新即可）。",
-        "新增 3 个测试：instance 归组（含旧数据归本机、未登记短码）、导出 manifest 结构、 导入去重与来源归属（含重复导入幂等、instances.json 登记）。测试总数 132 → 135。"
-      ]
-    },
-    {
-      "version": "0.47.0",
-      "date": "2026-11-13",
-      "title": "判断质量页：市场状态维度 + S0/S1 读数纪律",
-      "items": [
-        "为什么：现有 70 条结论全部落在 7 个交易日内——这不是「36 个独立观测」， 是「1 个市场状态下的 36 次抽样」。普涨周的命中率天然好看，会让人把行情记成能力。 样本量当进度条是错的，状态覆盖度才是。",
-        "市场状态（regime）：回测时对每条结论的基准日，用已取的上证序列判定—— 收盘 vs MA20、20 日涨跌双确认（同向定上/下行，混合为震荡）；指数历史不足 20 根为 null。 在回测时联算而非流水线落库时算：70 条历史结论全部可回溯归类，且不给流水线热路径加失败点。",
-        "新增「按市场状态」分组表（角色之后），明细表加「市况」列； 方法说明写明口径与「同一周内的结论共享同一段行情」的警示。",
-        "S0/S1 纪律入界面：⚠ 门槛从 n<10 提到 n<30（单桶 30 条以下只算记录，不算结论）， 汇总卡提示语同步；README 新增「4.10 判断质量（回测）与读数须知」五条纪律。",
-        "与收益基准同日判定市况（多数结论盘后生成，当日收盘即当时可见状态）——已在方法说明中注明。",
-        "后端改动（computeBacktest），需重启 DSH GUI 生效。",
-        "新增 2 个测试：上行/下行/震荡三态判定 + byRegime 分组、指数历史不足 → null 归「—」组。 测试总数 130 → 132。"
+        "新增 3 个测试：instance 归组（含旧数据归本机、未登记短码）、导出 manifest 结构、导入去重与来源归属（含重复导入幂等、instances.json 登记）。测试总数 132 → 135。"
       ]
     }
   ]

@@ -24,7 +24,15 @@
       <aside class="app-sidebar" id="appSidebar" aria-label="主导航">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="brand-copy"><strong>衡知</strong><small>INVEST WORKBENCH</small><span class="brand-version" id="appVersion" title="插件版本（来源 packages/dsh-invest/package.json）">v—</span></span>
+          <span class="brand-copy"><strong>衡知</strong><small>INVEST WORKBENCH</small>
+            <span class="brand-meta">
+              <button class="brand-version" id="appVersion" type="button" data-action="show-whats-new" title="插件版本（来源 packages/dsh-invest/package.json）。点击查看本版本更新说明">v—</button>
+              <button class="brand-update" id="updateCheckBtn" type="button" data-action="check-update" title="检测是否有新版本">
+                <span data-icon="refresh"></span><span class="brand-update-label">检测更新</span>
+                <i class="brand-dot" id="updateDot" hidden aria-hidden="true"></i>
+              </button>
+            </span>
+          </span>
         </div>
         <div class="nav-caption">工作空间</div>
         <nav class="main-nav">

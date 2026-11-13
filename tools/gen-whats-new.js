@@ -21,6 +21,18 @@ const OUT = path.join(root, 'packages', 'dsh-invest', 'lib', 'whats-new.json')
 const keepArg = process.argv.indexOf('--keep')
 const KEEP = keepArg > -1 ? Math.max(1, parseInt(process.argv[keepArg + 1], 10) || 6) : 6
 const MAX_ITEMS = 8
+/** 单条要点的展示上限：到句号/分号处收口，实在没有才硬截 */
+const MAX_LEN = 220
+
+function clip(t) {
+  if (t.length <= MAX_LEN) return t
+  const cut = t.slice(0, MAX_LEN)
+  for (const mark of ['。', '；', '！', '？']) {
+    const p = cut.lastIndexOf(mark)
+    if (p > MAX_LEN * 0.5) return cut.slice(0, p + 1) + '…'
+  }
+  return cut.slice(0, MAX_LEN - 1).replace(/[，,、]$/, '') + '…'
+}
 
 const text = fs.readFileSync(CHANGELOG, 'utf8')
 
@@ -45,14 +57,29 @@ function clean(s) {
     .trim()
 }
 
-/** 把一段 CHANGELOG 正文压成可展示的要点（正确处理多行折行与缩进子项） */
+/** CJK 与全角标点：中文折行是排版换行，不是词间空格 */
+const CJK = /[\u2013\u2014\u2018\u2019\u201c\u201d\u2026\u3001\u3002\u3008-\u3011\u3014-\u301f\uff01-\uff60\uffe0-\uffe6\u4e00-\u9fff]/
+
+/**
+ * 把一段 CHANGELOG 正文压成可展示的要点（正确处理多行折行与缩进子项）
+ *
+ * 折行拼接规则：两侧都是中文/全角标点时直接相连，否则补一个空格。
+ * 中文 Markdown 折行纯粹是源码排版，若一律补空格会得到「内容时 随手一点」这种断词。
+ */
 function toItems(body) {
   const items = []
   let cur = null
+  const join = (prev, next) => {
+    if (!prev) return next
+    const a = prev.slice(-1)
+    // 行首的 Markdown 标记（**加粗**、`代码`）不参与判断，否则中文会被误加空格
+    const b = next.replace(/^[*_`]+/, '').slice(0, 1)
+    return CJK.test(a) && CJK.test(b) ? prev + next : prev + ' ' + next
+  }
   const flush = () => {
     if (cur !== null) {
       const t = clean(cur)
-      if (t.length >= 4) items.push(t.length > 160 ? t.slice(0, 158) + '…' : t)
+      if (t.length >= 4) items.push(clip(t))
     }
     cur = null
   }
@@ -67,7 +94,7 @@ function toItems(body) {
     if (!t) { flush(); continue }
     // 标题/表格/引用/代码块：视为要点结束
     if (t.startsWith('#') || t.startsWith('|') || t.startsWith('>') || t.startsWith('```')) { flush(); continue }
-    cur += ' ' + t
+    cur = join(cur, t)
   }
   flush()
   return items.slice(0, MAX_ITEMS)

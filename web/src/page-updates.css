@@ -364,12 +364,13 @@
 .field-check input { width: 15px; height: 15px; accent-color: var(--accent); }
 
 /* 左上角品牌区：当前插件版本号（首页可见，唯一来源 packages/dsh-invest/package.json，构建期注入） */
+.brand-meta { display: flex; align-items: center; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
 .brand-version {
   width: fit-content;
-  margin-top: 7px;
   padding: 1px 6px;
   border: 1px solid rgba(111, 159, 248, .26);
   border-radius: 5px;
+  background: transparent;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 9.5px;
@@ -377,10 +378,35 @@
   letter-spacing: .06em;
   line-height: 1.5;
   white-space: nowrap;
-  cursor: default;
+  cursor: pointer;
   user-select: all;
 }
 .brand-version:hover { color: var(--text-2); border-color: rgba(111, 159, 248, .45); }
+
+/* 「检测更新」（v0.51.0）：常驻小按钮；有新版时转琥珀色并在右上角挂红点 */
+.brand-update {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.5;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color .15s ease, background .15s ease, border-color .15s ease;
+}
+.brand-update .icon { width: 10px; height: 10px; }
+.brand-update:hover { color: var(--text-2); background: var(--surface-2, rgba(148, 163, 184, .1)); }
+.brand-update[disabled] { cursor: progress; opacity: .55; }
+.brand-update.has-update { color: var(--accent-amber, #d08700); border-color: rgba(208, 135, 0, .35); }
+.brand-dot { position: absolute; top: -2px; right: -2px; width: 6px; height: 6px; border-radius: 50%; background: var(--red, #e5484d); box-shadow: 0 0 0 1px var(--sidebar); }
+.brand-dot[hidden] { display: none; }
 /* ===== 判断质量回测（v0.44.0）===== */
 /* 说明条：与 inline-warning 同构但走中性色，避免和「数据异常」抢注意力 */
 .inline-note { display: flex; align-items: flex-start; gap: 8px; margin: -8px 0 18px; padding: 10px 13px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm, 8px); background: var(--panel-2, rgba(255, 255, 255, .02)); color: var(--text-2); font-size: 12px; line-height: 1.65; }
@@ -416,3 +442,14 @@
 .whatsnew-list li { margin: 3px 0; color: var(--text-soft, #a9b6c6); font-size: 12.5px; line-height: 1.62; }
 .whatsnew-foot { display: flex; align-items: center; gap: 14px; padding: 13px 18px; border-top: 1px solid var(--line-soft); background: var(--surface-2, rgba(148, 163, 184, .06)); }
 .whatsnew-thanks { flex: 1; color: var(--muted, #7c8b9c); font-size: 12px; line-height: 1.55; }
+
+/* ===== 「发现新版本」弹层（v0.51.0）===== */
+.update-lead { padding: 12px 0 4px; color: var(--text-2, #a9b6c6); font-size: 12.5px; line-height: 1.65; }
+.update-lead b { color: var(--text); font-weight: 650; }
+.update-how { margin-top: 14px; }
+.update-how-h { margin-bottom: 5px; color: var(--muted, #7c8b9c); font-size: 11.5px; }
+.update-cmd { padding: 9px 11px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--panel-2, rgba(255, 255, 255, .03)); overflow-x: auto; }
+.update-cmd code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11.5px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-all; user-select: all; }
+.update-nohl { padding: 12px 0 2px; color: var(--muted, #7c8b9c); font-size: 12px; line-height: 1.65; }
+.update-nohl a { color: var(--accent); }
+.update-card .whatsnew-foot { flex-wrap: wrap; }

@@ -22,9 +22,9 @@ import { fileToBase64, positionsForConfirm, prepareScreenshotForUpload, renderHo
 import type { PreparedScreenshot } from './holdings';
 import { LEDGER_DEFAULT_COLUMNS } from './types';
 import { APP_VERSION } from './version';
-import { lastSeenVersion, markVersionSeen, renderWhatsNew, unseenReleases } from './whats-new';
+import { lastPromptedVersion, lastSeenVersion, markVersionPrompted, markVersionSeen, renderUpdateDialog, renderWhatsNew, shouldPromptUpdate, unseenReleases } from './whats-new';
 import { compareStockName } from './stock-index';
-import type { ConclusionRecord, HoldingPosition, HoldingsImportInput, Job, ModelSettingsSaveInput, TaskTemplate, WatchAlert, WorkbenchView, WatchlistUpdateInput, LedgerColKey } from './types';
+import type { ConclusionRecord, HoldingPosition, HoldingsImportInput, Job, ModelSettingsSaveInput, TaskTemplate, UpdateCheckResponse, WatchAlert, WorkbenchView, WatchlistUpdateInput, LedgerColKey } from './types';
 
 const viewElement = document.getElementById('view')!;
 const pollingJobs = new Set<string>();
@@ -182,27 +182,8 @@ function render(): void {
     ask: '个股知识库', 'model-settings': '模型设置', holdings: '持仓工作区', backtest: '判断质量',
   };
   document.getElementById('topbarContext')!.textContent = labels[state.view];
-  // 左上角品牌区的插件版本号（构建期由 packages/dsh-invest/package.json 注入，前端不硬编码）
-  const versionEl = document.getElementById('appVersion');
-  if (versionEl) {
-    versionEl.textContent = 'v' + APP_VERSION;
-    versionEl.title = '插件版本 v' + APP_VERSION + '（来源 packages/dsh-invest/package.json）';
-    // 有新版时在旁边挂一个可点的小标（v0.50.0）：DSH 无插件自动更新，更新后必须重启
-    const info = state.updateInfo;
-    const old = document.getElementById('updateHint');
-    if (old) old.remove();
-    if (info && info.updateAvailable) {
-      const chip = document.createElement('button');
-      chip.id = 'updateHint';
-      chip.type = 'button';
-      chip.textContent = '↑ v' + (info.latest || '');
-      chip.title = `${info.hint || '有新版本'}（当前 v${info.current}）。点击复制命令。`;
-      chip.style.cssText = 'margin-left:6px;padding:0 6px;font-size:11px;line-height:16px;border-radius:8px;cursor:pointer;'
-        + 'border:1px solid var(--accent-amber, #d08700);background:transparent;color:var(--accent-amber, #d08700)';
-      chip.addEventListener('click', () => { if (info.command) void copyUpdateCommand(info.command); });
-      versionEl.insertAdjacentElement('afterend', chip);
-    }
-  }
+  // 左上角品牌区：版本号 + 「检测更新」（v0.51.0）
+  renderUpdateBadge();
   document.querySelectorAll<HTMLElement>('.nav-item').forEach((item) => {
     const selected = item.dataset.view === state.view;
     item.classList.toggle('active', selected);
@@ -426,22 +407,124 @@ async function saveInstanceName(name: string): Promise<void> {
   }
 }
 
-/** 更新检查（v0.50.0）：只读；失败静默，绝不打扰使用 */
-async function loadUpdateCheck(): Promise<void> {
-  try {
-    const info = await api.updateCheck();
-    if (info && info.ok && info.updateAvailable) {
-      state.updateInfo = info;
-      render();
-    }
-  } catch { /* 网络不可用时静默 */ }
+// ===== 更新检测（v0.50.0 起；v0.51.0 拆成「手动按钮 + 红点」与「启动静默检测」两条路径）=====
+
+/** 手动检测进行中（只用于按钮 disabled 态；不进 AppState，避免无谓的全局重绘） */
+let updateChecking = false;
+
+/** 版本徽标 + 「检测更新」按钮状态：有新版时按钮转琥珀并在右上角挂红点 */
+function renderUpdateBadge(): void {
+  const versionEl = document.getElementById('appVersion');
+  if (versionEl) {
+    versionEl.textContent = 'v' + APP_VERSION;
+    versionEl.title = `插件版本 v${APP_VERSION}（来源 packages/dsh-invest/package.json）。点击查看本版本更新说明`;
+  }
+  const info = state.updateInfo;
+  const has = !!(info && info.ok && info.updateAvailable && info.latest);
+  const btn = document.getElementById('updateCheckBtn');
+  if (btn) {
+    btn.classList.toggle('has-update', has);
+    btn.toggleAttribute('disabled', updateChecking);
+    btn.title = updateChecking ? '正在检测…'
+      : has ? `有新版本 v${info && info.latest}（当前 v${APP_VERSION}）。点击查看更新方式。`
+        : `已是最新版本 v${APP_VERSION}。点击重新检测。`;
+  }
+  const dot = document.getElementById('updateDot');
+  if (dot) dot.hidden = !has;
 }
 
-/** 把更新命令复制到剪贴板，并说明「重启才生效」 */
-async function copyUpdateCommand(command: string): Promise<void> {
+/** 弹层挂载点：两个弹层各有独立容器，互斥显示，便于分别清理 */
+function modalRoot(id: string): HTMLElement {
+  let root = document.getElementById(id);
+  if (!root) {
+    root = document.createElement('div');
+    root.id = id;
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+/** 打开「发现新版本」 */
+function openUpdateDialog(info: UpdateCheckResponse | null): void {
+  if (!info || !info.latest) return;
+  modalRoot('whatsNewRoot').innerHTML = '';   // 不与「本次更新」叠加
+  modalRoot('updateRoot').innerHTML = renderUpdateDialog(info);
+}
+
+/** 关闭「发现新版本」。关闭即视为「已告知过这个版本」，下次启动不再主动弹——红点仍在，随时可点开 */
+function closeUpdateDialog(): void {
+  const latest = state.updateInfo && state.updateInfo.latest ? state.updateInfo.latest : '';
+  modalRoot('updateRoot').innerHTML = '';
+  if (latest) markVersionPrompted(latest);
+}
+
+/** 手动「检测更新」：绕过 30 分钟缓存，必须实时；成功失败都有明确反馈 */
+async function runUpdateCheck(): Promise<void> {
+  if (updateChecking) return;
+  updateChecking = true;
+  renderUpdateBadge();
+  try {
+    const info = await api.updateCheck(true);
+    if (!info || !info.ok) {
+      toast(`检测更新失败：${(info && info.error) || '网络不可用或仓库不可达'}`, 'error');
+      return;
+    }
+    state.updateInfo = info;
+    if (info.updateAvailable) {
+      openUpdateDialog(info);
+    } else {
+      closeUpdateDialog();
+      toast(`已是最新版本 v${info.current}。`, 'success');
+    }
+  } catch (error) {
+    toast(`检测更新失败：${errorMessage(error)}`, 'error');
+  } finally {
+    updateChecking = false;
+    renderUpdateBadge();
+  }
+}
+
+/** 启动时静默检测：有新版且是第一次见 → 弹一次询问；否则只留红点，绝不打断 */
+async function bootUpdateCheck(): Promise<void> {
+  try {
+    const info = await api.updateCheck(false);
+    if (!info || !info.ok) return;
+    state.updateInfo = info;
+    renderUpdateBadge();
+    if (info.updateAvailable && shouldPromptUpdate(info.current, info.latest, lastPromptedVersion())) {
+      // 等首屏渲染完再弹，避免和正在加载的数据抢注意力
+      window.setTimeout(() => {
+        // 用户已经自己点开了，或者正在读「本次更新」——都不去打断
+        if (document.getElementById('updateRoot')?.innerHTML) return;
+        if (document.getElementById('whatsNewRoot')?.innerHTML) return;
+        openUpdateDialog(info);
+      }, 1500);
+    }
+  } catch { /* 静默：检测不到更新不影响任何功能 */ }
+}
+
+/** 点版本号回看「本次更新」：不依赖「已读」状态，随时能再读一遍 */
+async function showWhatsNewAgain(): Promise<void> {
+  try {
+    const r = await api.whatsNew();
+    if (!r || !r.ok || !Array.isArray(r.releases)) { toast('更新说明读取失败。', 'error'); return; }
+    const self = r.releases.filter((x) => x.version === APP_VERSION);
+    const list = self.length ? self : r.releases.slice(-1);
+    if (!list.length) { toast('这个版本没有更新说明。', 'info'); return; }
+    modalRoot('updateRoot').innerHTML = '';
+    modalRoot('whatsNewRoot').innerHTML = renderWhatsNew(list, APP_VERSION);
+  } catch (error) {
+    toast(`更新说明读取失败：${errorMessage(error)}`, 'error');
+  }
+}
+
+/** 复制更新命令：DSH 插件无法热更新（宿主半部进程内加载），只能复制命令由用户自己执行 */
+async function copyUpdateCommand(): Promise<void> {
+  const command = (state.updateInfo && state.updateInfo.command) || '';
+  if (!command) { toast('没有识别出安装方式，请按仓库 README 手动更新。', 'info'); return; }
   try {
     await navigator.clipboard.writeText(command);
-    toast(`已复制：${command}　执行完请重启 DSH。`, 'success');
+    toast(`命令已复制，粘贴到终端执行，完成后重启 DSH 即可生效。`, 'success');
   } catch {
     toast(`请手动执行：${command}`, 'info');
   }
@@ -455,20 +538,14 @@ async function loadWhatsNew(): Promise<void> {
     const seen = lastSeenVersion();
     const list = unseenReleases(r.releases, APP_VERSION, seen);
     if (!list.length) { markVersionSeen(APP_VERSION); return; }
-    let root = document.getElementById('whatsNewRoot');
-    if (!root) {
-      root = document.createElement('div');
-      root.id = 'whatsNewRoot';
-      document.body.appendChild(root);
-    }
-    root.innerHTML = renderWhatsNew(list, APP_VERSION);
+    modalRoot('updateRoot').innerHTML = '';
+    modalRoot('whatsNewRoot').innerHTML = renderWhatsNew(list, APP_VERSION);
   } catch { /* 静默 */ }
 }
 
-/** 关闭「本次更新」并把当前版本记为已读（同一版本不再弹） */
+/** 关闭「本次更新」并把当前版本记为已读（同一版本不再自动弹；点版本号仍可回看） */
 function closeWhatsNew(): void {
-  const root = document.getElementById('whatsNewRoot');
-  if (root) root.innerHTML = '';
+  modalRoot('whatsNewRoot').innerHTML = '';
   markVersionSeen(APP_VERSION);
 }
 
@@ -1775,6 +1852,11 @@ document.addEventListener('click', (event) => {
   else if (action === 'conclusions-export') void exportConclusions();
   else if (action === 'conclusions-import') openImportFilePicker();
   else if (action === 'whatsnew-close') closeWhatsNew();
+  else if (action === 'show-whats-new') void showWhatsNewAgain();
+  else if (action === 'check-update') void runUpdateCheck();
+  else if (action === 'update-close') closeUpdateDialog();
+  else if (action === 'update-later') closeUpdateDialog();
+  else if (action === 'update-copy') void copyUpdateCommand();
   else if (action === 'back-to-top') window.scrollTo({ top: 0, behavior: 'smooth' });
   else if (action === 'ask-latest-report' && target.dataset.code) {
     // 标的档案的「追问」入口：直接进这只股票的知识库
@@ -2093,8 +2175,9 @@ initialiseReader();
 state.lastRefreshAt = readLastRefreshAt();
 render();
 const bootLoaded = Promise.all([loadIndex(), loadHoldings(), loadJobs(), loadWatchlist(), loadWatchDaily(), loadAskStocks()]);
-// 更新检查（v0.50.0）：独立异步，失败静默；不与首屏加载争带宽
-void loadUpdateCheck();
+// 更新检测（v0.51.0）：启动时静默查一次，有新版只在左上角挂红点；
+// 首次见到某个新版本会弹一次询问，之后交给用户自己点「检测更新」。
+void bootUpdateCheck();
 // 「本次更新」弹层（v0.50.0）：只在版本变化时出现一次
 void loadWhatsNew();
 // 每天首次打开自动刷新（含现价与信号比对）

@@ -419,6 +419,10 @@ export interface UpdateCheckResponse {
   /** GitHub main 上的最新版本 */
   latest?: string;
   updateAvailable?: boolean;
+  /** v0.51.0：远端「比本机新」的版本变更要点（拉取失败为空数组，不影响检查本身） */
+  highlights?: WhatsNewRelease[];
+  /** v0.51.0：结果来自 30 分钟内存缓存（仅自动检查会出现；手动检测恒为实时） */
+  cached?: boolean;
   /** link = 本地克隆（需先 git pull）；github = 从 GitHub 源安装（pnpm update 即可） */
   installKind?: 'link' | 'github' | 'unknown';
   profile?: string;

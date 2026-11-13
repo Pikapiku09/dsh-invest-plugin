@@ -320,6 +320,7 @@ function apply(ctx, config) {
   // 不下载、不安装、不改文件——一切写操作留给用户自己执行。
   let updateCache = null
   const REPO_RAW_PKG = "https://raw.githubusercontent.com/Pikapiku09/dsh-invest-plugin/main/packages/dsh-invest/package.json"
+  const REPO_RAW_WHATSNEW = "https://raw.githubusercontent.com/Pikapiku09/dsh-invest-plugin/main/packages/dsh-invest/lib/whats-new.json"
   const REPO_URL = "https://github.com/Pikapiku09/dsh-invest-plugin"
   // 语义化版本比较：统一用 pure.js 的实现（可测试），这里不再重复定义
   const cmpVersion = cmpVersionPure
@@ -354,6 +355,28 @@ function apply(ctx, config) {
     }
     return { kind: "unknown", profile: "web", command: "" }
   }
+  // 远端「比本机新」的版本变更要点（v0.51.0）
+  //
+  // 只用于「发现新版本」弹窗里说清改了什么。本机安装的 whats-new.json 只含已装版本及以下，
+  // 所以更新版本的内容必须从仓库读。拉不到就返回空数组——绝不因为这一步让更新检查整体失败。
+  const remoteHighlights = async (current) => {
+    try {
+      const r = await fetch(REPO_RAW_WHATSNEW, { signal: AbortSignal.timeout(5000), headers: { "cache-control": "no-cache" } })
+      if (!r.ok) return []
+      const j = await r.json()
+      const rels = Array.isArray(j && j.releases) ? j.releases : []
+      return rels
+        .filter((x) => x && x.version && cmpVersion(String(x.version), current) > 0)
+        .sort((a, b) => cmpVersion(String(b.version), String(a.version)))
+        .slice(0, 6)
+        .map((x) => ({
+          version: String(x.version),
+          date: String(x.date || ""),
+          title: String(x.title || ""),
+          items: Array.isArray(x.items) ? x.items.slice(0, 8).map((i) => String(i)) : [],
+        }))
+    } catch (e) { return [] }
+  }
   const checkForUpdate = async () => {
     const current = await localVersion()
     const install = await detectInstall()
@@ -372,9 +395,12 @@ function apply(ctx, config) {
       return { ok: false, ...base, error: "检查更新失败（网络不可用或仓库不可达）：" + String(e && e.message || e).slice(0, 120) }
     }
     const diff = cmpVersion(latest, current)
+    const updateAvailable = diff > 0
     return {
       ok: true, ...base, latest,
-      updateAvailable: diff > 0,
+      updateAvailable,
+      // 有更新才去拉要点：正常无更新时一次网络请求都不多打
+      highlights: updateAvailable ? await remoteHighlights(current) : [],
       // 安装方式决定命令；link 方式还要先 git pull，这里给出可直接复制的一行
       hint: install.kind === "link"
         ? "先到插件目录执行 git pull，再跑下面的命令；完成后重启 DSH"
@@ -3082,9 +3108,15 @@ function apply(ctx, config) {
         if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
         try {
           const now = Date.now()
-          if (updateCache && now - updateCache.at < 30 * 60 * 1000) { writeJson(res, 200, updateCache.value); return }
+          // ?force=1 = 用户手动点「检测更新」，绕过 30 分钟缓存（v0.51.0）。
+          // 只缓存成功结果：一次网络抖动不该把「已知有新版」抹掉，也不该让下次重试等 30 分钟。
+          const force = /[?&]force=1(?:&|$)/.test(String(req.url || ""))
+          if (!force && updateCache && now - updateCache.at < 30 * 60 * 1000) {
+            writeJson(res, 200, { ...updateCache.value, cached: true })
+            return
+          }
           const result = await checkForUpdate()
-          updateCache = { at: now, value: result }
+          if (result.ok) updateCache = { at: now, value: result }
           writeJson(res, 200, result)
         } catch (e) { writeJson(res, 200, { ok: false, error: String(e).slice(0, 200) }) }
       },
