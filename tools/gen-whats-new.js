@@ -47,18 +47,31 @@ for (let i = 0; i < heads.length; i++) {
   sections.push({ version: heads[i].version, date: heads[i].date, body })
 }
 
-/** 清洗一段 Markdown 行内标记，保留可读文本 */
+/**
+ * 清洗一段 Markdown 行内标记，保留可读文本
+ *
+ * 注意：**故意保留 `**加粗**` 标记**。CHANGELOG 里每条要点都以 `**小标题**：说明` 开头，
+ * 前端会把成对的 `**` 转成 <b>，读者一眼能扫到重点；若在这里抹掉，弹窗就只剩一大段灰字。
+ */
 function clean(s) {
   return String(s)
-    .replace(/\*\*/g, '')
     .replace(/`/g, '')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
+/** `**` 必须成对，否则前端无法安全转 <b>：数量为奇数时全部去掉，宁可没重点也不出半个标记 */
+function balancedBold(t) {
+  const count = (t.match(/\*\*/g) || []).length
+  return count % 2 === 0 ? t : t.replace(/\*\*/g, '')
+}
+
 /** CJK 与全角标点：中文折行是排版换行，不是词间空格 */
 const CJK = /[\u2013\u2014\u2018\u2019\u201c\u201d\u2026\u3001\u3002\u3008-\u3011\u3014-\u301f\uff01-\uff60\uffe0-\uffe6\u4e00-\u9fff]/
+
+/** 「测试」类要点是给开发者看的，用户不需要知道多跑了几个用例：更新说明只留行为变化 */
+const DEV_ONLY = /^\*\*测试\*\*[:：]/
 
 /**
  * 把一段 CHANGELOG 正文压成可展示的要点（正确处理多行折行与缩进子项）
@@ -79,7 +92,8 @@ function toItems(body) {
   const flush = () => {
     if (cur !== null) {
       const t = clean(cur)
-      if (t.length >= 4) items.push(clip(t))
+      // 先截断再校验粗体配对：截断本身可能切断一对 **，所以平衡检查必须放在后面
+      if (t.length >= 4 && !DEV_ONLY.test(t)) items.push(balancedBold(clip(t)))
     }
     cur = null
   }

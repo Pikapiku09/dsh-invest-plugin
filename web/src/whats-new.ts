@@ -8,6 +8,7 @@
 //  ② 跨版本合并展示——用户可能一次跨过好几个版本（比如 v0.48 → v0.50），
 //     就把中间所有没看过的版本一并列出，而不是只报最新那个；
 //  ③ 内容来自 CHANGELOG.md（经 lib/whats-new.json 分发），不在前端手抄第二份文案；
+//     生成器保留 `**加粗**` 标记，这里转成 <b>——每条要点的小标题就是阅读锚点；
 //  ④ **弹层永不自动关闭**（v0.51.0 起）——点遮罩不关、无定时器，只有用户显式点关闭才关。
 //     这一条是修 bug：v0.50.0 把关闭动作挂在整个遮罩上，用户想看清内容时随手一点就关掉，
 //     而关闭同时写入了「已读」，内容就此永久消失。信息型弹层不该有这种代价。
@@ -47,8 +48,7 @@ export function isNewer(a: string, b: string): boolean {
   return false;
 }
 
-/** 取出「用户没看过的」版本段落（含跨版本），最新在前 */
-export function unseenReleases(releases: WhatsNewRelease[], current: string, seen: string): WhatsNewRelease[] {
+/** 取出「用户没看过的」版本段落（含跨版本），最新在前 */export function unseenReleases(releases: WhatsNewRelease[], current: string, seen: string): WhatsNewRelease[] {
   if (!current) return [];
   if (seen === current) return [];
   // 只看当前版本及以下（更新更的版本不属于本次更新的内容），且要比「已见版本」新
@@ -69,13 +69,21 @@ export function shouldPromptUpdate(current: string, latest: string | undefined, 
   return prompted !== latest;
 }
 
+/**
+ * 把生成器保留下来的 `**加粗**` 标记转成 <b>，其余一律转义。
+ * 先转义再替换：`**` 不含 HTML 特殊字符，顺序安全；这样既能加粗又不可能注入标签。
+ */
+function rich(text: string): string {
+  return escapeHtml(text).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+}
+
 /** 版本变更块（两个弹层共用同一套排版） */
 function releaseBlocks(releases: WhatsNewRelease[]): string {
   return releases.map((r) => `<section class="whatsnew-block">
     <div class="whatsnew-ver"><span class="whatsnew-tag">v${escapeHtml(r.version)}</span>
       <span class="whatsnew-date">${escapeHtml(r.date || '')}</span></div>
-    ${r.title ? `<div class="whatsnew-title">${escapeHtml(r.title)}</div>` : ''}
-    <ul class="whatsnew-list">${r.items.map((i) => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
+    ${r.title ? `<div class="whatsnew-title">${rich(r.title)}</div>` : ''}
+    <ul class="whatsnew-list">${r.items.map((i) => `<li>${rich(i)}</li>`).join('')}</ul>
   </section>`).join('');
 }
 
@@ -94,7 +102,7 @@ export function renderWhatsNew(releases: WhatsNewRelease[], current: string): st
       </div>
       <div class="whatsnew-body">${releaseBlocks(releases)}</div>
       <div class="whatsnew-foot">
-        <div class="whatsnew-thanks">谢谢你在用这套投研工作台。数据都在你自己机器上，判断也在你自己手上。</div>
+        <div class="whatsnew-thanks">诚挚感谢您使用衡知投研插件，欢迎与作者交流共建</div>
         <button class="button button-primary" type="button" data-action="whatsnew-close">开始使用</button>
       </div>
     </div>

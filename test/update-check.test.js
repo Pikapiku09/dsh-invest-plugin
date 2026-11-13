@@ -143,6 +143,15 @@ test('whats-new：最新版本必须等于当前包版本（防止改了版本�
   for (const it of self.items) {
     assert.ok(typeof it === 'string' && it.trim().length >= 4, '要点内容有效')
     assert.ok(!it.endsWith('，') && !it.endsWith(','), '要点不应在逗号处被截断：' + it)
+    // v0.51.1：生成器保留 **加粗** 标记供前端转 <b>，必须成对，否则会漏出裸标记
+    const bold = (it.match(/\*\*/g) || []).length
+    assert.equal(bold % 2, 0, '粗体标记必须成对：' + it)
+  }
+  // 所有版本的要点都要能安全渲染，不只是最新版本
+  for (const rel of wn.releases) {
+    for (const it of rel.items) {
+      assert.equal(((it.match(/\*\*/g) || []).length) % 2, 0, `v${rel.version} 粗体标记不成对：` + it)
+    }
   }
 })
 
