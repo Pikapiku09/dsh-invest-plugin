@@ -71,7 +71,7 @@ function balancedBold(t) {
 const CJK = /[\u2013\u2014\u2018\u2019\u201c\u201d\u2026\u3001\u3002\u3008-\u3011\u3014-\u301f\uff01-\uff60\uffe0-\uffe6\u4e00-\u9fff]/
 
 /** 「测试」类要点是给开发者看的，用户不需要知道多跑了几个用例：更新说明只留行为变化 */
-const DEV_ONLY = /^\*\*测试\*\*[:：]/
+const DEV_ONLY = /^\*\*测试[^*]*\*\*[:：]/
 
 /**
  * 把一段 CHANGELOG 正文压成可展示的要点（正确处理多行折行与缩进子项）

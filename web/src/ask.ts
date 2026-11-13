@@ -4,7 +4,7 @@ import { icon } from './icons';
 import { renderMarkdown } from './markdown';
 import { groupStocks } from './stock-index';
 import type { AppState } from './state';
-import type { StockNoteDetail, StockNoteEntry, StockNoteMeta } from './types';
+import type { StockNoteDetail, StockNoteMeta } from './types';
 
 /** 追问线程按股票代码分组存（localStorage）：换报告不影响，同一只股票的对话始终连续 */
 export const stockThreadKey = (code: string): string => 'stock:' + String(code || '').toUpperCase();
@@ -31,7 +31,7 @@ function threadHtml(state: AppState, code: string, name: string): string {
   const thread = state.askThreads[key] || [];
   const updated = state.askNote && state.askNote.updated_at ? state.askNote.updated_at : '';
   if (!thread.length) {
-    return `<div class="ask-hint">${icon('chat', 20)}<div><strong>就 ${escapeHtml(name || code)} 的知识库提问</strong><p>回答只依据这份知识库${updated ? `（更新于 ${escapeHtml(updated)}）` : ''}；知识库没写的会明确说「未涉及」，涉及更晚的行情会提示你跑任务更新。支持连续追问，历史轮次会一起带上。</p></div></div>
+    return `<div class="ask-hint">${icon('chat', 20)}<div><strong>就 ${escapeHtml(name || code)} 的知识库提问</strong><p>回答只依据这份知识库${updated ? `（更新于 ${escapeHtml(updated)}）` : ''}；知识库没写的会明确说「未涉及」，涉及更晚的行情会提示你跑任务更新。支持连续追问，历史轮次会一起带上。</p><p class="ask-hint-kb">整理后的知识库已收起，点右上角「知识库」可放大查看。</p></div></div>
       ${suggestionsHtml(state)}`;
   }
   return thread.map((turn) => `<div class="ask-turn ask-${turn.role}">
@@ -40,15 +40,20 @@ function threadHtml(state: AppState, code: string, name: string): string {
     </div>`).join('') + suggestionsHtml(state);
 }
 
-function kindLabel(kind: string): string {
-  if (kind === 'mention') return '节选';
-  if (kind === 'report') return '整份';
-  return '分段';
-}
-
-function entryDate(ts: string): string {
-  const m = String(ts || '').match(/^\d{4}-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
-  return m ? `${m[1]}-${m[2]} ${m[3]}:${m[4]}` : (String(ts || '') || '—');
+/**
+ * 标的档案里的「在管」状态（v0.52.0）
+ *
+ * 左侧索引按字母排，持仓/观察的票会散落在 192 只里，靠肉眼找很费劲。
+ * 这里从 watchlist 读状态，给行加个标记——只认「持有 / 观察」，已清仓/已移除不算在管。
+ * watchlist 尚未加载时返回空，页面会在 loadWatchlist 完成后重绘，标记自然出现。
+ */
+function watchMark(state: AppState, code: string): { cls: string; label: string } {
+  const items = state.watchlist?.items || [];
+  const hit = items.find((item) => String(item.code || '').toUpperCase() === String(code || '').toUpperCase());
+  if (!hit) return { cls: '', label: '' };
+  if (hit.state === '持有') return { cls: 'held', label: '持有' };
+  if (hit.state === '观察') return { cls: 'watching', label: '观察' };
+  return { cls: '', label: '' };
 }
 
 /** 距今天数：知识库太久没整理时提示去跑任务 */
@@ -72,8 +77,11 @@ function stockBadge(stock: StockNoteMeta): string {
 
 function stockRow(state: AppState, stock: StockNoteMeta): string {
   const selected = String(state.askStock || '').toUpperCase() === stock.code;
-  return `<button class="ask-stock-row${selected ? ' selected' : ''}" data-action="ask-stock-select" data-code="${escapeHtml(stock.code)}" title="${escapeHtml(stock.name || stock.code)} · ${stock.count} 段分析${stock.curated_at ? ' · 更新于 ' + escapeHtml(stock.curated_at) : ' · 尚未整理'}">
+  const mark = watchMark(state, stock.code);
+  const stateText = mark.cls === 'held' ? ' · 持仓中' : mark.cls === 'watching' ? ' · 观察中' : '';
+  return `<button class="ask-stock-row${selected ? ' selected' : ''}${mark.cls ? ' ask-stock-row-' + mark.cls : ''}" data-action="ask-stock-select" data-code="${escapeHtml(stock.code)}" title="${escapeHtml(stock.name || stock.code)} · ${stock.count} 段分析${stock.curated_at ? ' · 更新于 ' + escapeHtml(stock.curated_at) : ' · 尚未整理'}${stateText}">
     <span class="ask-stock-name">${escapeHtml(stock.name || stock.code)}</span>
+    ${mark.label ? `<span class="ask-watch-tag ${mark.cls}">${mark.label}</span>` : ''}
     <span class="ask-stock-code">${escapeHtml(stock.code)}</span>
     ${stockBadge(stock)}
   </button>`;
@@ -97,6 +105,7 @@ function stockListHtml(state: AppState): string {
     .filter((group) => group.items.length);
   const total = state.askStocks.length;
   const segments = state.askStocks.reduce((sum, stock) => sum + stock.count, 0);
+  const activeCount = state.askStocks.reduce((n, stock) => n + (watchMark(state, stock.code).cls ? 1 : 0), 0);
 
   if (!groups.length) {
     return `<div class="ask-report-list"><p class="muted compact">${query ? '没有匹配的标的' : '还没有按个股归集的分析，跑一次任务后再刷新。'}</p></div>`;
@@ -116,7 +125,7 @@ function stockListHtml(state: AppState): string {
     <div class="ask-report-list">${body}</div>
     <nav class="ask-letter-rail" aria-label="按首字母跳转">${rail}</nav>
   </div>
-  <p class="ask-list-foot">${total} 只标的 · ${segments} 段分析${state.askStocksBuiltAt ? ` · 归集于 ${escapeHtml(state.askStocksBuiltAt)}` : ''} · <button class="text-button inline" data-action="ask-stocks-rebuild">重建索引</button></p>`;
+  <p class="ask-list-foot">${total} 只标的 · ${segments} 段分析${activeCount ? ` · <span class="ask-foot-active">在管 ${activeCount} 只</span>` : ''}${state.askStocksBuiltAt ? ` · 归集于 ${escapeHtml(state.askStocksBuiltAt)}` : ''} · <button class="text-button inline" data-action="ask-stocks-rebuild">重建索引</button></p>`;
 }
 
 function kbStateBanner(note: StockNoteDetail): string {
@@ -139,19 +148,12 @@ function kbStateBanner(note: StockNoteDetail): string {
   return '';
 }
 
-function rawEntryRow(entry: StockNoteEntry): string {
-  return `<div class="ask-raw-item">
-    <div class="ask-raw-line"><b>${escapeHtml(entryDate(entry.ts))}</b><em>${escapeHtml(entry.mode || '投研')}</em><i>${escapeHtml(kindLabel(entry.kind))}</i></div>
-    <div class="ask-raw-text">${escapeHtml(entry.snippet || '（无摘录）')}</div>
-  </div>`;
-}
-
 function mainPane(state: AppState): string {
   const code = state.askStock;
   const stock = state.askStocks.find((item) => item.code === String(code).toUpperCase());
   const note = state.askNote;
   if (!code) {
-    return `<section class="panel ask-main">${emptyState('选择一只股票', '左侧按名称或首字母索引找到标的，右侧会显示它的知识库与追问。', 'chat')}</section>`;
+    return `<section class="panel ask-main">${emptyState('选择一只股票', '左侧按名称或首字母索引找到标的，这里就可以直接就它的知识库追问。持仓/观察中的标的在左侧已高亮。', 'chat')}</section>`;
   }
   if (state.askNoteLoading && !note) {
     return `<section class="panel ask-main"><div class="ask-kb-loading"><span class="spinner"></span><span>正在读取 ${escapeHtml(stock?.name || code)} 的知识库…</span></div></section>`;
@@ -178,16 +180,16 @@ function mainPane(state: AppState): string {
         <div class="ask-meta">${meta}</div>
       </div>
       <div class="ask-head-actions">
+        <button class="button button-secondary" data-action="ask-kb-expand" title="放大查看整理后的个股知识库">${icon('book', 15)}知识库</button>
         <button class="button button-secondary" data-action="ask-curate" data-code="${escapeHtml(code)}">${icon('refresh', 15)}重新整理</button>
         <button class="button button-secondary" data-action="ask-run" data-code="${escapeHtml(code)}">${icon('sparkles', 15)}更新数据</button>
       </div>
     </header>
     ${kbStateBanner(note)}
-    <div class="ask-kb-wrap">
-      <button class="ask-kb-expand" data-action="ask-kb-expand" title="放大查看知识库" aria-label="放大查看知识库">${icon('external', 15)}</button>
-      <div class="ask-kb markdown-body" id="ask-kb">${renderMarkdown(note.markdown)}</div>
+    <div class="ask-kb-collapsed">
+      ${icon('book', 15)}<span>整理后的知识库已收起。这里是追问工作区，需要看全文时点右上角「知识库」放大查看。</span>
+      <button class="text-button" data-action="ask-kb-expand">查看知识库 ${icon('arrow', 13)}</button>
     </div>
-    ${note.entries.length ? `<details class="ask-raw"><summary>原始记录（${note.count} 段分析，点开看每份来源）</summary><div class="ask-raw-list">${note.entries.map(rawEntryRow).join('')}</div></details>` : ''}
     <div class="ask-thread" id="ask-thread">${threadHtml(state, code, name)}</div>
     ${state.askError ? `<div class="inline-warning">${icon('alert', 15)}${escapeHtml(state.askError)}</div>` : ''}
     <div class="ask-compose">
@@ -217,6 +219,6 @@ export function renderAsk(state: AppState): string {
       : `<div class="ask-list-body"><div class="ask-report-list"><p class="muted compact">${state.askStocksLoading ? '正在读取知识库清单…' : '还没有可展示的个股知识库，先跑一次任务。'}</p></div></div>
         ${state.askStocksError ? `<p class="ask-list-foot">知识库不可用：${escapeHtml(state.askStocksError)}</p>` : ''}`}
   </aside>`;
-  const head = pageHeader('个股知识库', '按股票归档：左侧按名称/首字母索引，右侧是这只股票的整理后知识库，可直接就知识库追问。');
+  const head = pageHeader('个股知识库', '按股票归档：左侧索引里持仓/观察中的标的会高亮；中间是追问工作区，整理后的知识库收在右上角，点开即放大查看。');
   return head + `<div class="ask-layout">${list}${mainPane(state)}</div>`;
 }
