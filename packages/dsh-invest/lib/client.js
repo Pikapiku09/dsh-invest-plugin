@@ -4,11 +4,12 @@
 // 与 Host 的通信走 /api/dsh-invest/* 路由（浏览器 fetch）
 
 window.__ModuleLoader__.load({
-  // 必须是包名本身：dsh-client-modules 的 arrive(row) 以「包名」为模块身份查 factory
-  // （client.js:610-640 —— 注册不到就 throw "loaded without registering"）。
-  // 早期这里写的是 "dsh-invest"，与包名 @pikapiku09/dsh-invest 不符，整条客户端条目激活失败，
-  // 工具卡片与侧栏入口都不会出现。v0.49.1 修正。
-  id: "@pikapiku09/dsh-invest",
+  // 必须与 package.json 的 name 完全一致，也必须与 cordis.patch.yml 的 Loader 行名一致：
+  // dsh-client-modules 的 resolveMeta() 用「行名」推出期望包名，nearestPackage() 要求
+  // 找到的 package.json 的 name 严格等于它，否则判为「不是客户端包」，dsh.client 根本不被扫描。
+  // 历史坑：行名 dsh-invest / 包名 @pikapiku09/dsh-invest / bundle id dsh-invest 三者不一致，
+  // 导致客户端半部（工具卡片 + 侧栏入口）从未加载。v0.49.2 起三者统一为 dsh-invest。
+  id: "dsh-invest",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;

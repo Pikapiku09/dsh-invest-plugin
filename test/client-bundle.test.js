@@ -31,14 +31,18 @@ function loadBundle() {
   return registered
 }
 
-test('客户端 bundle：可解析并注册 factory（id 必须等于包名）', () => {
+test('客户端 bundle：三方名字必须一致（行名 = 包名 = bundle id）', () => {
   const def = loadBundle()
   const pkg = JSON.parse(fs.readFileSync(PKG, 'utf8'))
-  // dsh-client-modules 的 arrive(row) 用 row.id（= 包名）查 factory，
-  // 注册不到就 throw "loaded without registering" → 整条客户端条目失效。
-  // v0.49.1 之前这里写的是 "dsh-invest"，与包名不符，工具卡片与侧栏入口都没生效。
-  assert.equal(def.id, pkg.name, 'bundle 的 id 必须等于 package.json 的 name')
-  assert.equal(def.id, '@pikapiku09/dsh-invest')
+  // 宿主链路：Loader 行名 → resolveMeta 推出期望包名 → nearestPackage 要求 package.json 的
+  // name 严格相等 → 否则判为「不是客户端包」，dsh.client 不被扫描、bundle 从不加载。
+  // 因此 行名（cordis.patch.yml）、包名、bundle id 三者必须完全一致。
+  const patch = fs.readFileSync(path.join(here, '..', 'packages', 'dsh-invest', 'cordis.patch.yml'), 'utf8')
+  const rowName = /^\s*name:\s*'([^']+)'/m.exec(patch)
+  assert.ok(rowName, 'cordis.patch.yml 必须声明 Loader 行名')
+  assert.equal(pkg.name, rowName[1], '包名必须等于 Loader 行名')
+  assert.equal(def.id, pkg.name, 'bundle 的 id 必须等于包名')
+  assert.equal(pkg.name, 'dsh-invest')
 })
 
 test('客户端 bundle：package.json 声明了 dsh.client 与 ./client 导出', () => {

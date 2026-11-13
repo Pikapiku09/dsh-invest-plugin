@@ -2,6 +2,29 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.49.2（2026-11-13）
+
+**真正的根因：Loader 行名 / 包名 / bundle id 三者必须一致，否则客户端半部从不加载**
+
+- **现象**：v0.49.0 加了左侧栏入口，两次重启都没出现；v0.49.1 改 `id` 也无效。
+- **根因**（读 `@deepseek-ai/dsh-client-modules/lib/index.js` 确认，比 v0.49.1 的判断更靠前一层）：
+  1. `resolveMeta()` 用 **Loader 行名**调 `locatePkgJson()`；行名是裸包名时算出 `expectedPackageName`；
+  2. `nearestPackage(moduleUrl, expectedPackageName)` 从模块所在目录**向上逐级找 `package.json`**，
+     要求 `name === expectedPackageName`（第 781 行严格相等），否则一路上溯、最终返回 `undefined`；
+  3. `undefined` → `pkgMeta` 记 `null` → **该包被判为「不是客户端包」，`pkg.dsh.client` 从未被读取**，
+     `./client` 导出也就不会被加载。
+  我们三处名字是：行名 `dsh-invest`、包名 `@pikapiku09/dsh-invest`、bundle id `dsh-invest` ——
+  第一层就断了，所以 v0.49.1 改 bundle id 属于「二楼修灯」，二楼其实没通电。
+- **修复**：把包名改为 `dsh-invest`，与行名、bundle id 三者统一。
+  这是 metadata 改动，`link:` 指向的路径不变，**无需重新 `pnpm install`**。
+- **影响**（此前一直存在）：该包的客户端半部从未加载过——工具卡片（`tool.call.toolview`）
+  与 v0.49.0 的侧栏入口都不会出现；界面上见过的卡片来自动态插件那条独立路径。
+- **验证**：写了 `verify-client-resolution.mjs` 复刻宿主判定链路（`exactPackageSpecifier` →
+  `createRequire.resolve` → `nearestPackage` 上溯），对 `dsh-invest` 与 `@pikapiku09/dsh-invest`
+  两个行名分别跑：前者现在 `name`/`dsh.client`/`./client`/bundle/id 全部命中，后者直接解析失败。
+- **测试**：`client-bundle.test.js` 的首个用例改为**三方一致性断言**——直接读 `cordis.patch.yml`
+  的行名，与包名、bundle id 比对。这是本次踩坑最直接的防线。测试总数 138。
+
 ## v0.49.1（2026-11-13）
 
 **修复：客户端 bundle 的 `id` 用了短名，整条客户端条目从未激活**

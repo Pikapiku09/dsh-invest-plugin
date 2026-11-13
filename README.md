@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件。把「选股 → 消息 → 深度诊断 → 综合决策」做成一条可复用的多角色子代理流水线，
 > 并配一个本机网页工作台：一键任务、模型配置、持仓管理、结论记忆、标的档案、明暗主题。
 
-**当前版本：v0.49.1**
+**当前版本：v0.49.2**
 
 ---
 
@@ -416,11 +416,24 @@ pnpm build                        # = tsc --noEmit && vite build → ../../.dsh-
 - 缓存目录超过 30 天的文件自动清理（宿主 fs 不支持删除则静默跳过）。
 - 图表需要在报告中引用完整绝对路径（提示词已强制）。
 
+> **⚠ 命名硬约束（v0.49.2 踩过，别再踩）**：下面三个名字**必须完全一致**，否则客户端半部静默不加载——
+> 右侧栏图标、工具卡片都不会出现，且**没有任何报错提示**（包被判定为「不是客户端包」）。
+>
+> | 位置 | 当前值 |
+> |---|---|
+> | `cordis.patch.yml` 的 Loader 行名 | `dsh-invest` |
+> | `packages/dsh-invest/package.json` 的 `name` | `dsh-invest` |
+> | `lib/client.js` 里 `__ModuleLoader__.load({ id })` | `dsh-invest` |
+>
+> 原因：`dsh-client-modules` 的 `resolveMeta()` 用 Loader 行名推出期望包名，
+> `nearestPackage()` 向上找 `package.json` 并要求 `name` **严格相等**；不等则返回 `undefined`，
+> `pkg.dsh.client` 根本不会被读取。`test/client-bundle.test.js` 已把三者一致性写成断言。
+
 ---
 
 ## 十一、版本与变更
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.49.1**（修复：客户端 bundle 的 `id` 必须等于包名，否则整条客户端条目激活失败）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.49.2**（修复：Loader 行名 / 包名 / bundle id 必须三者一致，否则客户端半部从不加载）。
 
 > **维护约定（勿跳过）**：版本号只有一个事实来源 —— `packages/dsh-invest/package.json`。
 > 每次发版必须同步：① 根 `package.json` 与 `package-lock.json`；② 本文件顶部「当前版本」与本节摘要；
