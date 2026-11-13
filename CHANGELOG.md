@@ -2,6 +2,25 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.49.1（2026-11-13）
+
+**修复：客户端 bundle 的 `id` 用了短名，整条客户端条目从未激活**
+
+- **现象**：v0.49.0 加了左侧栏入口，重启后什么也没出现。
+- **根因**（读 `@deepseek-ai/dsh-client-modules/lib/client.js:610-640` 的 `arrive(row)` 确认）：
+  宿主以**包名**作为浏览器模块身份查 factory ——
+  `const { id } = row`（`WebBootEntry.id` 注释：Entry name == package name），
+  找不到就 `throw new Error('client-modules: could not load "${id}": ... loaded without registering "${id}" via __ModuleLoader__.load')`。
+  而 `lib/client.js` 写的是 `id: "dsh-invest"`，包名是 `@pikapiku09/dsh-invest` ——
+  工厂注册在错误的 key 上，宿主永远查不到，**整条客户端条目在 arrive 阶段就抛错**，
+  `apply()` 从未执行。官方侧栏包写的正是 `id: "@deepseek-ai/dsh-client-ui-sidebar"`（等于其包名）。
+- **影响**：不只新功能。该客户端半部的工具卡片注册（`tool.call.toolview`）同样从未生效
+  （此前若见过卡片，是动态插件 `dist/invest-run.client.js` 那条路径提供的）。
+- **修复**：`id` 改为 `@pikapiku09/dsh-invest`；三个 `slots.register` 各自独立 try/catch，
+  避免动态插件已认领同一 key 时互相连累。
+- **测试**：新增断言「bundle 的 `id` 必须等于 `package.json` 的 `name`」——
+  这是本次踩坑的直接防线。测试总数 138 → **138**（3 个 bundle 用例就地加强，未新增文件）。
+
 ## v0.49.0（2026-11-13）
 
 **工作台内嵌进 DSH：左侧栏图标入口 + 主面板，不必再手输端口号**

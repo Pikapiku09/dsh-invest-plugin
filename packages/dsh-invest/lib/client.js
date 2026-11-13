@@ -4,7 +4,11 @@
 // 与 Host 的通信走 /api/dsh-invest/* 路由（浏览器 fetch）
 
 window.__ModuleLoader__.load({
-  id: "dsh-invest",
+  // 必须是包名本身：dsh-client-modules 的 arrive(row) 以「包名」为模块身份查 factory
+  // （client.js:610-640 —— 注册不到就 throw "loaded without registering"）。
+  // 早期这里写的是 "dsh-invest"，与包名 @pikapiku09/dsh-invest 不符，整条客户端条目激活失败，
+  // 工具卡片与侧栏入口都不会出现。v0.49.1 修正。
+  id: "@pikapiku09/dsh-invest",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
@@ -264,10 +268,13 @@ window.__ModuleLoader__.load({
           zoomIdx >= 0 && charts[zoomIdx] && charts[zoomIdx].svg !== null ? React.createElement("div", { className: "invr-zoom", onClick: () => setZoomIdx(-1) },
             React.createElement("img", { className: "invr-zoomimg", src: "data:image/svg+xml;charset=utf-8," + encodeURIComponent(charts[zoomIdx].svg), alt: charts[zoomIdx].path })) : null);
       }
-      slots.inject("tool.call.toolview", () => slots.register(
-        { name: "tool.call.toolview", key: "invest_run" },
-        (props) => React.createElement(Card, props),
-      ));
+      // 三个注册彼此隔离：任一失败（如动态插件已认领同一 key）不连累其余。
+      try {
+        slots.inject("tool.call.toolview", () => slots.register(
+          { name: "tool.call.toolview", key: "invest_run" },
+          (props) => React.createElement(Card, props),
+        ));
+      } catch (e) { /* 已由动态插件提供同一卡片时忽略 */ }
 
       // 左侧栏入口 + 主面板（v0.49.0）。声明感知：DSH 版本没有这两个 seat 时不会注册，也不报错。
       try {
@@ -275,11 +282,13 @@ window.__ModuleLoader__.load({
           { name: "sidebar.panellist", id: WB_PANEL_ID, order: 50, label: "投研工作台" },
           (props) => React.createElement(WorkbenchIcon, props),
         )), "dsh-invest: workbench entry");
+      } catch (e) { /* 旧版 DSH 没有 sidebar.panellist */ }
+      try {
         ctx.effect(() => slots.inject("main", () => slots.register(
           { name: "main", key: WB_PANEL_ID },
           () => React.createElement(WorkbenchPanel, null),
         )), "dsh-invest: workbench panel");
-      } catch (e) { /* 旧版 DSH 没有对应 seat：保持工具卡片可用 */ }
+      } catch (e) { /* 旧版 DSH 没有 main 的 keyed 席位 */ }
     }
 
     exports.name = name;

@@ -31,9 +31,14 @@ function loadBundle() {
   return registered
 }
 
-test('客户端 bundle：可解析并注册 factory（id 与包名一致）', () => {
+test('客户端 bundle：可解析并注册 factory（id 必须等于包名）', () => {
   const def = loadBundle()
-  assert.equal(def.id, 'dsh-invest')
+  const pkg = JSON.parse(fs.readFileSync(PKG, 'utf8'))
+  // dsh-client-modules 的 arrive(row) 用 row.id（= 包名）查 factory，
+  // 注册不到就 throw "loaded without registering" → 整条客户端条目失效。
+  // v0.49.1 之前这里写的是 "dsh-invest"，与包名不符，工具卡片与侧栏入口都没生效。
+  assert.equal(def.id, pkg.name, 'bundle 的 id 必须等于 package.json 的 name')
+  assert.equal(def.id, '@pikapiku09/dsh-invest')
 })
 
 test('客户端 bundle：package.json 声明了 dsh.client 与 ./client 导出', () => {
