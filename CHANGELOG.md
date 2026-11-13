@@ -2,6 +2,27 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.49.0（2026-11-13）
+
+**工作台内嵌进 DSH：左侧栏图标入口 + 主面板，不必再手输端口号**
+
+- **问题**：工作台只是插件注册在 `/dsh-invest/app` 的独立 SPA。启动 DSH 后没有任何入口——
+  既不自启浏览器，也没有图标或角标，必须自己敲地址，朋友那边基本等于「没这个功能」。
+- **DSH 原生机制**（读 `dsh-client-ui-sidebar` / `-layout` 的 slot 契约确认，不是自创）：
+  ① 往 root 作用域的 `sidebar.panellist`（list）注册一个图标入口，带 `id` / `order` / `label`；
+  ② 再用**同一个 `id`** 往布局的 root 作用域 `main`（keyed）注册主面板组件。
+  点侧栏图标即把主面板切成工作台。`main` 保留键只有 `conversation`，其余 key 不绑 Session。
+- **实现**：`packages/dsh-invest/lib/client.js` 追加两个注册（`slots.inject` 声明感知，
+  旧版 DSH 缺 seat 时静默跳过，不影响工具卡片）。面板是 iframe 载入 `/dsh-invest/app`
+  （同源，工作台路由未设 `X-Frame-Options`/CSP，可嵌），顶部有「刷新 / 新窗口」两个按钮。
+- **依赖声明**：`dsh.client.inject` 补 `@deepseek-ai/dsh-client-ui-sidebar` 与
+  `@deepseek-ai/dsh-client-ui-layout`——侧栏与布局的 slot 声明必须先于我们到达，
+  否则注册会因 seat 未声明而跳过。
+- **测试**（新增 3 个，132 → **138**）：bundle 可解析并注册 factory；package.json 的
+  `dsh.client` / `./client` 导出与 inject 完整性；**apply 确实同时注册了
+  `sidebar.panellist` 与同名 `main`**（id === key 是「点了能切过去」的唯一契约）。
+- 纯客户端改动，**重启 DSH GUI 后刷新页面生效**（Host 扫描 package.json 在启动时）。
+
 ## v0.48.0（2026-11-13）
 
 **多人协作：结论一键导出/导入 + 来源实例标识**

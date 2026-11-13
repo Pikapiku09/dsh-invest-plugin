@@ -39,7 +39,57 @@ window.__ModuleLoader__.load({
       ".invr-reason{margin-top:8px;border:1px dashed var(--dsw-alias-border-l1, rgba(128,128,128,.35));border-radius:8px;padding:6px 10px;background:var(--dsw-alias-bg-base, transparent)}",
       ".invr-reason summary{cursor:pointer;color:var(--dsw-alias-label-secondary, rgba(128,128,128,.9));font-size:12px;user-select:none}",
       ".invr-stagehead{font-weight:600;margin:8px 0 2px;color:var(--dsw-alias-label-primary, inherit)}",
+      // 投研工作台内嵌面板（v0.49.0）
+      ".invr-wb{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-base, transparent)}",
+      ".invr-wb-bar{display:flex;align-items:center;gap:10px;padding:6px 12px;flex:none;border-bottom:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.28))}",
+      ".invr-wb-title{font-weight:600;font-size:13px;color:var(--dsw-alias-label-primary, inherit)}",
+      ".invr-wb-hint{font-size:12px;margin-right:auto;color:var(--dsw-alias-label-secondary, rgba(128,128,128,.9))}",
+      ".invr-wb-btn{font-size:12px;padding:2px 10px;cursor:pointer;border-radius:6px;color:var(--dsw-alias-label-secondary, inherit);background:var(--dsw-alias-bg-hover, rgba(128,128,128,.14));border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3))}",
+      ".invr-wb-btn:hover{background:var(--dsw-alias-bg-active, rgba(128,128,128,.24))}",
+      ".invr-wb-frame{flex:1 1 auto;width:100%;min-height:0;border:0;background:transparent}",
     ].join("\n");
+
+    // ===== 投研工作台面板（v0.49.0）：把工作台内嵌进 DSH 主面板 =====
+    // DSH 原生机制（dsh-client-ui-sidebar / -layout 的 slot 契约）：
+    //   ① sidebar.panellist（list, root）注册左侧图标入口，id 即主面板 key；
+    //   ② main（keyed, root）用同一个 key 注册主面板组件。
+    // 点左侧图标即把主面板切成工作台，不必再手输端口号。
+    // 缺这两个 seat 的旧版 DSH 上静默跳过，不影响工具卡片。
+    const WB_PANEL_ID = "invest-workbench";
+    const WB_URL = "/dsh-invest/app";
+
+    /** 侧栏入口图标：走马灯式走势线，active 时加粗（owner props: size, active） */
+    function WorkbenchIcon(props) {
+      const size = (props && typeof props.size === "number") ? props.size : 18;
+      const active = !!(props && props.active);
+      return React.createElement("svg", {
+        width: size, height: size, viewBox: "0 0 24 24", fill: "none",
+        stroke: "currentColor", strokeWidth: active ? 2.2 : 1.7,
+        strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true",
+      }, React.createElement("path", { d: "M4 19V5M4 19h16M7 15l4-4 3 2 5-7" }));
+    }
+
+    /** 主面板：iframe 载入工作台 SPA（同源，复用其全部功能） */
+    function WorkbenchPanel() {
+      const [nonce, setNonce] = React.useState(0);
+      return React.createElement("div", { className: "invr-wb" },
+        React.createElement("div", { className: "invr-wb-bar" },
+          React.createElement("span", { className: "invr-wb-title" }, "投研工作台"),
+          React.createElement("span", { className: "invr-wb-hint" }, "判断质量 · 持仓 · 个股知识库 · 一键任务"),
+          React.createElement("button", {
+            className: "invr-wb-btn", type: "button", onClick: () => setNonce(nonce + 1), title: "重新载入工作台",
+          }, "刷新"),
+          React.createElement("button", {
+            className: "invr-wb-btn", type: "button", title: "在新窗口打开（便于并排看盘）",
+            onClick: () => { try { window.open(WB_URL, "_blank", "noopener") } catch (e) { /* 弹窗被拦时忽略 */ } },
+          }, "新窗口"),
+        ),
+        React.createElement("iframe", {
+          key: nonce, className: "invr-wb-frame", src: WB_URL,
+          title: "投研工作台", allow: "clipboard-write",
+        }),
+      );
+    }
 
     function apply(ctx) {
       const slots = ctx.get("slots");
@@ -218,6 +268,18 @@ window.__ModuleLoader__.load({
         { name: "tool.call.toolview", key: "invest_run" },
         (props) => React.createElement(Card, props),
       ));
+
+      // 左侧栏入口 + 主面板（v0.49.0）。声明感知：DSH 版本没有这两个 seat 时不会注册，也不报错。
+      try {
+        ctx.effect(() => slots.inject("sidebar.panellist", () => slots.register(
+          { name: "sidebar.panellist", id: WB_PANEL_ID, order: 50, label: "投研工作台" },
+          (props) => React.createElement(WorkbenchIcon, props),
+        )), "dsh-invest: workbench entry");
+        ctx.effect(() => slots.inject("main", () => slots.register(
+          { name: "main", key: WB_PANEL_ID },
+          () => React.createElement(WorkbenchPanel, null),
+        )), "dsh-invest: workbench panel");
+      } catch (e) { /* 旧版 DSH 没有对应 seat：保持工具卡片可用 */ }
     }
 
     exports.name = name;

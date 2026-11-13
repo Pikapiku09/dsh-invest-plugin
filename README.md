@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件。把「选股 → 消息 → 深度诊断 → 综合决策」做成一条可复用的多角色子代理流水线，
 > 并配一个本机网页工作台：一键任务、模型配置、持仓管理、结论记忆、标的档案、明暗主题。
 
-**当前版本：v0.48.0**
+**当前版本：v0.49.0**
 
 ---
 
@@ -103,6 +103,18 @@ invest_run({
 
 ### 4.1 地址与启动
 
+**在 DSH 里直接用（v0.49.0 起，推荐）**：重启并刷新 DSH 后，左侧栏会多一个**「投研工作台」**图标，
+点一下主面板就是工作台，不必再手输地址。面板顶部有「刷新」与「新窗口」两个按钮
+（并排看盘时用新窗口）。
+
+机制（DSH 原生 slot 契约，非自创）：往 `sidebar.panellist`（list, root）注册图标入口
+（`id` / `order` / `label`），再用**同一个 id** 往布局的 `main`（keyed, root）注册面板组件。
+`main` 除了保留键 `conversation` 外不绑 Session，所以工作台是全局页而不是会话页。
+我们包在 `dsh.client.inject` 里声明依赖 `dsh-client-ui-sidebar` 与 `dsh-client-ui-layout`，
+保证这两个 slot 的声明先于我们到达；旧版 DSH 没有这两个 seat 时静默跳过，不影响工具卡片。
+
+**直接开浏览器（仍然可用）**：
+
 ```
 http://127.0.0.1:<DSH端口>/dsh-invest/app
 ```
@@ -110,6 +122,7 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 - 仅 loopback（`isLoopbackRequest` 守卫），未做公网/多用户/自动下单。
 - 前端产物 `dist/index.html + workbench.js + workbench.css`，插件**每次请求实时读取**（`no-store`），
   改前端后 `pnpm build` 即生效，**无需重启**；改插件 JS 需重启。
+- 工作台路由未设 `X-Frame-Options`/CSP，因此可被同源 iframe 内嵌。
 
 ### 4.2 一键任务（7 模板）
 
@@ -407,7 +420,7 @@ pnpm build                        # = tsc --noEmit && vite build → ../../.dsh-
 
 ## 十一、版本与变更
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.48.0**（多人协作：结论一键导出/导入 + 来源实例标识，只追加去重）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.49.0**（工作台内嵌进 DSH：左侧栏图标入口 + 主面板，不必再手输端口号）。
 
 > **维护约定（勿跳过）**：版本号只有一个事实来源 —— `packages/dsh-invest/package.json`。
 > 每次发版必须同步：① 根 `package.json` 与 `package-lock.json`；② 本文件顶部「当前版本」与本节摘要；
