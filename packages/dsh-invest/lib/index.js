@@ -319,9 +319,37 @@ function apply(ctx, config) {
   // 因此这里只做两件事：① 告诉用户「有没有新版」；② 给出与其安装方式匹配的那一条命令。
   // 不下载、不安装、不改文件——一切写操作留给用户自己执行。
   let updateCache = null
-  const REPO_RAW_PKG = "https://raw.githubusercontent.com/Pikapiku09/dsh-invest-plugin/main/packages/dsh-invest/package.json"
-  const REPO_RAW_WHATSNEW = "https://raw.githubusercontent.com/Pikapiku09/dsh-invest-plugin/main/packages/dsh-invest/lib/whats-new.json"
   const REPO_URL = "https://github.com/Pikapiku09/dsh-invest-plugin"
+  // 读仓库文件的两个来源（v0.51.2）
+  //
+  // v0.51.0 只用 raw.githubusercontent.com，而本机实测这个域名直接 connect failed
+  // （github.com 与 api.github.com 都正常）——「检测更新」会永远报「网络不可用」，
+  // 是个从没在真人环境验证过的死路。现在 API 优先、raw 兜底：不同网络环境总有一条能通。
+  const REPO_API = "https://api.github.com/repos/Pikapiku09/dsh-invest-plugin/contents"
+  const REPO_RAW = "https://raw.githubusercontent.com/Pikapiku09/dsh-invest-plugin/main"
+  const readRepoFile = async (relPath) => {
+    const errors = []
+    try {
+      const r = await fetch(REPO_API + "/" + relPath + "?ref=main", {
+        signal: AbortSignal.timeout(6000),
+        headers: { accept: "application/vnd.github+json", "user-agent": "dsh-invest-plugin" },
+      })
+      if (!r.ok) throw new Error("api HTTP " + r.status)
+      const j = await r.json()
+      if (!j || typeof j.content !== "string") throw new Error("api 返回格式异常")
+      return Buffer.from(j.content, j.encoding === "base64" ? "base64" : "utf8").toString("utf8")
+    } catch (e) { errors.push("api: " + String(e && e.message || e).slice(0, 80)) }
+    try {
+      const r = await fetch(REPO_RAW + "/" + relPath, {
+        signal: AbortSignal.timeout(6000),
+        headers: { "cache-control": "no-cache" },
+      })
+      if (!r.ok) throw new Error("raw HTTP " + r.status)
+      return await r.text()
+    } catch (e) { errors.push("raw: " + String(e && e.message || e).slice(0, 80)) }
+    // 两个来源都断：把两条具体错误都带出去，用户/排查时才知道断在哪一层
+    throw new Error(errors.join("；"))
+  }
   // 语义化版本比较：统一用 pure.js 的实现（可测试），这里不再重复定义
   const cmpVersion = cmpVersionPure
   // 读本包版本：相对 lib/index.js 的 ../package.json（link: 与 github 安装都成立）
@@ -361,9 +389,7 @@ function apply(ctx, config) {
   // 所以更新版本的内容必须从仓库读。拉不到就返回空数组——绝不因为这一步让更新检查整体失败。
   const remoteHighlights = async (current) => {
     try {
-      const r = await fetch(REPO_RAW_WHATSNEW, { signal: AbortSignal.timeout(5000), headers: { "cache-control": "no-cache" } })
-      if (!r.ok) return []
-      const j = await r.json()
+      const j = JSON.parse(await readRepoFile("packages/dsh-invest/lib/whats-new.json"))
       const rels = Array.isArray(j && j.releases) ? j.releases : []
       return rels
         .filter((x) => x && x.version && cmpVersion(String(x.version), current) > 0)
@@ -387,12 +413,11 @@ function apply(ctx, config) {
     if (!current) return { ok: false, ...base, error: "无法读取本包版本号" }
     let latest = ""
     try {
-      const r = await fetch(REPO_RAW_PKG, { signal: AbortSignal.timeout(5000), headers: { "cache-control": "no-cache" } })
-      if (!r.ok) throw new Error("HTTP " + r.status)
-      const j = await r.json()
-      latest = String(j.version || "")
+      const remote = JSON.parse(await readRepoFile("packages/dsh-invest/package.json"))
+      latest = String((remote && remote.version) || "")
+      if (!latest) throw new Error("远端 package.json 没有 version 字段")
     } catch (e) {
-      return { ok: false, ...base, error: "检查更新失败（网络不可用或仓库不可达）：" + String(e && e.message || e).slice(0, 120) }
+      return { ok: false, ...base, error: "检查更新失败（网络不可用或仓库不可达）：" + String(e && e.message || e).slice(0, 160) }
     }
     const diff = cmpVersion(latest, current)
     const updateAvailable = diff > 0

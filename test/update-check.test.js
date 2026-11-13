@@ -76,7 +76,12 @@ function stubFetchByUrl(map) {
     if (typeof v === 'function') v = v()      // 函数用于计数 / 动态取值，返回的仍是 body
     if (v instanceof Error) throw v
     if (v && v.ok === false) return v          // 允许显式给一个失败响应
-    return { ok: true, json: async () => v }
+    const text = typeof v === 'string' ? v : JSON.stringify(v)
+    // v0.51.2：宿主优先走 GitHub contents API（base64 包装），失败才回退 raw（纯文本）
+    if (u.includes('api.github.com')) {
+      return { ok: true, json: async () => ({ content: Buffer.from(text, 'utf8').toString('base64'), encoding: 'base64' }), text: async () => text }
+    }
+    return { ok: true, json: async () => v, text: async () => text }
   }
 }
 
@@ -107,8 +112,8 @@ test('更新检查：远端版本更高 → updateAvailable=true，并给出命�
 test('更新检查：远端同版本 → updateAvailable=false', async (t) => {
   const h = await makeHarness()
   t.after(() => { restore(); h.cleanup() })
-  // 远端返回与当前一致的版本：先探一次拿到 current，再据此回放
-  stubFetch(async () => ({ ok: true, json: async () => ({ version: '0.0.1' }) }))
+  // 远端返回低于当前版本的版本号：不应提示更新
+  stubFetchByUrl({ [PKG_URL]: { version: '0.0.1' } })
   const r = await h.get('/dsh-invest/api/update-check')
   assert.equal(r.json.ok, true)
   assert.equal(r.json.updateAvailable, false, '本机版本高于 0.0.1，不应提示更新')
@@ -257,4 +262,36 @@ test('检测更新：没有新版本时不请求更新要点', async (t) => {
   assert.equal(r.json.updateAvailable, false)
   assert.equal(wnCalls, 0, '无更新时不该多打一次网络')
   assert.deepEqual(r.json.highlights, [])
+})
+
+// ===== 双源读取（v0.51.2）：raw.githubusercontent 在国内常被阻断 =====
+
+test('检测更新：GitHub API 不通时回退 raw（双源兜底）', async (t) => {
+  const h = await makeHarness()
+  t.after(() => { restore(); h.cleanup() })
+  let apiCalls = 0, rawCalls = 0
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    if (u.includes('api.github.com')) { apiCalls++; throw new Error('api blocked') }
+    rawCalls++
+    const body = u.includes('whats-new') ? JSON.stringify({ releases: [] }) : JSON.stringify({ version: '99.0.0' })
+    return { ok: true, json: async () => JSON.parse(body), text: async () => body }
+  }
+  const r = await h.get('/dsh-invest/api/update-check')
+  assert.equal(r.json.ok, true, 'raw 可用时仍应成功')
+  assert.equal(r.json.latest, '99.0.0')
+  assert.ok(apiCalls >= 1 && rawCalls >= 1, `两个来源都应被尝试过：api=${apiCalls} raw=${rawCalls}`)
+})
+
+test('检测更新：两个来源都断 → 错误信息里带上两条具体原因', async (t) => {
+  const h = await makeHarness()
+  t.after(() => { restore(); h.cleanup() })
+  globalThis.fetch = async (url) => {
+    throw new Error(String(url).includes('api.github.com') ? 'api boom' : 'raw boom')
+  }
+  const r = await h.get('/dsh-invest/api/update-check')
+  assert.equal(r.json.ok, false)
+  const msg = String(r.json.error || '')
+  assert.ok(msg.includes('api boom'), '错误里应包含 api 层原因：' + msg)
+  assert.ok(msg.includes('raw boom'), '错误里应包含 raw 层原因：' + msg)
 })

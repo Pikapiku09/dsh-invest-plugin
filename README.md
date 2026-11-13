@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件。把「选股 → 消息 → 深度诊断 → 综合决策」做成一条可复用的多角色子代理流水线，
 > 并配一个本机网页工作台：一键任务、模型配置、持仓管理、结论记忆、标的档案、明暗主题。
 
-**当前版本：v0.51.1**
+**当前版本：v0.51.2**
 
 ---
 
@@ -469,6 +469,9 @@ dsh plugin --profile web add "link:<仓库路径>/packages/dsh-invest"
 | 首次见到某个新版本 | 启动 1.5 秒后弹一次「发现新版本」询问；点「稍后再说」后该版本不再主动问，只留红点 |
 | **使用中点「检测更新」** | 绕过缓存取实时结果。已是最新 → 明确回一句提示；有新版 → 弹「发现新版本」；网络失败 → 明说失败原因 |
 
+读取远端版本走**双通道**：先 `api.github.com` 的 contents 接口，失败回退 `raw.githubusercontent.com`
+（后者在国内网络常被阻断，实测本机直连 `fetch failed`）。两条都断时错误信息会同时给出两层的具体原因。
+
 左上角控件（`vX.Y.Z` 与「检测更新」并排）：
 
 - **红点 + 琥珀色** = 检测到比本机新的版本；
@@ -500,7 +503,7 @@ node tools/gen-whats-new.js      # 从 CHANGELOG.md 生成 lib/whats-new.json
 
 ## 十二、版本与变更
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.51.1**（检测更新按钮 + 红点提示 + 弹层不再自动关闭；说明文字的可读性修复）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.51.2**（检测更新 + 红点提示 + 更新源双通道兜底；说明文字可读性修复）。
 
 > **维护约定（勿跳过）**：版本号只有一个事实来源 —— `packages/dsh-invest/package.json`。
 > 每次发版必须同步：① 根 `package.json` 与 `package-lock.json`；② 本文件顶部「当前版本」与本节摘要；

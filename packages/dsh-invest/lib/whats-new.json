@@ -1,7 +1,18 @@
 {
-  "latest": "0.51.1",
-  "generatedAt": "2026-11-13T03:19:28.856Z",
+  "latest": "0.51.2",
+  "generatedAt": "2026-11-13T03:43:22.896Z",
   "releases": [
+    {
+      "version": "0.51.2",
+      "date": "2026-11-13",
+      "title": "「检测更新」之前其实一直在失败：换了个能通的更新源",
+      "items": [
+        "**原来的源连不上**：只用了 raw.githubusercontent.com 一个地址取远端版本号，而这个域名在本机实测直接 fetch failed（同一网络下 github.com 和 api.github.com 都正常）。所以这个按钮在真实环境里只会回一句「网络不可用」——功能写了，但从没跑通过。",
+        "**现在双源**：优先 GitHub 的 contents 接口读文件内容，失败自动回退 raw。两个网络环境总有一条通；两条都断时，错误信息里同时给出两层的具体原因，排查时知道断在哪。",
+        "**配额**：匿名 API 每小时 60 次，启动查一次 + 手动查 + 30 分钟缓存，正常使用每小时 2–3 次。",
+        "**测试 149 → 151**：API 挂掉时回退 raw、双源都断时错误可定位。"
+      ]
+    },
     {
       "version": "0.51.1",
       "date": "2026-11-13",
@@ -59,19 +70,6 @@
         "**根因**（读 @deepseek-ai/dsh-client-modules/lib/client.js:610-640 的 arrive(row) 确认）：宿主以**包名**作为浏览器模块身份查 factory —— const { id } = row（WebBootEntry.id 注释：Entry name == package name），找不到就 throw new Error('client-modules: cou…",
         "**影响**：不只新功能。该客户端半部的工具卡片注册（tool.call.toolview）同样从未生效（此前若见过卡片，是动态插件 dist/invest-run.client.js 那条路径提供的）。",
         "**修复**：id 改为 @pikapiku09/dsh-invest；三个 slots.register 各自独立 try/catch，避免动态插件已认领同一 key 时互相连累。"
-      ]
-    },
-    {
-      "version": "0.49.0",
-      "date": "2026-11-13",
-      "title": "工作台内嵌进 DSH：左侧栏图标入口 + 主面板，不必再手输端口号",
-      "items": [
-        "**问题**：工作台只是插件注册在 /dsh-invest/app 的独立 SPA。启动 DSH 后没有任何入口——既不自启浏览器，也没有图标或角标，必须自己敲地址，朋友那边基本等于「没这个功能」。",
-        "**DSH 原生机制**（读 dsh-client-ui-sidebar / -layout 的 slot 契约确认，不是自创）： ① 往 root 作用域的 sidebar.panellist（list）注册一个图标入口，带 id / order / label； ② 再用**同一个 id** 往布局的 root 作用域 main（keyed）注册主面板组件。点侧栏图标即把主面板切成工作台。…",
-        "**实现**：packages/dsh-invest/lib/client.js 追加两个注册（slots.inject 声明感知，旧版 DSH 缺 seat 时静默跳过，不影响工具卡片）。面板是 iframe 载入 /dsh-invest/app （同源，工作台路由未设 X-Frame-Options/CSP，可嵌），顶部有「刷新 / 新窗口」两个按钮。",
-        "**依赖声明**：dsh.client.inject 补 @deepseek-ai/dsh-client-ui-sidebar 与 @deepseek-ai/dsh-client-ui-layout——侧栏与布局的 slot 声明必须先于我们到达，否则注册会因 seat 未声明而跳过。",
-        "**测试**（新增 3 个，132 → **138**）：bundle 可解析并注册 factory；package.json 的 dsh.client / ./client 导出与 inject 完整性；**apply 确实同时注册了 sidebar.panellist 与同名 main**（id === key 是「点了能切过去」的唯一契约）。",
-        "纯客户端改动，**重启 DSH GUI 后刷新页面生效**（Host 扫描 package.json 在启动时）。"
       ]
     }
   ]
