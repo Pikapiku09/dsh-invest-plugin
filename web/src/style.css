@@ -936,3 +936,81 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
 .theme-light .stock-note-tab:hover { color: #26313f; background: rgba(36, 56, 84, .06); }
 .theme-light .stock-note-tab.active { background: #ffffff; color: #2b3849; box-shadow: inset 0 0 0 1px #b9c9de; }
 
+
+/* ===== 策略健康页（v0.59.0）=====
+   只读展示 LihuQuantify 模拟盘契约。用既有 token，深浅色主题自动跟随。 */
+.health-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 16px 18px; margin: 0 0 16px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow);
+}
+.health-banner-main { display: flex; align-items: center; gap: 14px; }
+.health-banner strong { font-size: 15px; }
+.health-banner p { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+.health-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.health-ok .health-dot { background: var(--green); box-shadow: 0 0 0 4px rgba(84, 200, 147, .16); }
+.health-warn .health-dot { background: var(--amber); box-shadow: 0 0 0 4px rgba(217, 174, 100, .16); }
+.health-breach .health-dot { background: var(--red); box-shadow: 0 0 0 4px rgba(238, 123, 132, .18); }
+.health-ok { border-color: rgba(84, 200, 147, .38); }
+.health-warn { border-color: rgba(217, 174, 100, .42); }
+.health-breach { border-color: rgba(238, 123, 132, .46); }
+
+.paper-badge {
+  flex: none; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  color: var(--amber); background: rgba(217, 174, 100, .14);
+  border: 1px solid rgba(217, 174, 100, .4); letter-spacing: .04em;
+}
+
+.stale-note {
+  margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; font-size: 12px;
+  color: var(--amber); background: rgba(217, 174, 100, .1);
+  border-left: 3px solid var(--amber);
+}
+
+.health-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+@media (max-width: 860px) { .health-columns { grid-template-columns: 1fr; } }
+
+.metric-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px;
+}
+.metric-cell {
+  display: flex; flex-direction: column; gap: 3px; padding: 11px 12px;
+  border-radius: 10px; background: var(--bg); border: 1px solid var(--line-soft);
+}
+.metric-cell span { font-size: 11px; color: var(--muted); }
+.metric-cell strong { font-size: 17px; font-variant-numeric: tabular-nums; }
+.metric-cell small { font-size: 11px; color: var(--muted); }
+
+.finding-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.finding {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+  border-radius: 10px; font-size: 13px; background: var(--bg); border: 1px solid var(--line-soft);
+}
+.finding-tag {
+  flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+}
+.finding-breach .finding-tag { color: var(--red); background: rgba(238, 123, 132, .14); }
+.finding-warn .finding-tag { color: var(--amber); background: rgba(217, 174, 100, .14); }
+.finding-info .finding-tag { color: var(--accent); background: var(--accent-soft); }
+.finding-breach { border-color: rgba(238, 123, 132, .34); }
+.finding-warn { border-color: rgba(217, 174, 100, .34); }
+
+.research-bars { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.research-bar {
+  padding: 10px 12px; border-radius: 10px; background: var(--bg);
+  border: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 2px;
+}
+.research-bar span { font-size: 11px; color: var(--muted); }
+.research-bar strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.research-bar.pass strong { color: var(--green); }
+.research-bar.fail strong { color: var(--red); }
+.research-bar.pending strong { color: var(--amber); }
+
+.research-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.research-list li { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.research-list code { font-size: 11px; color: var(--accent); }
+.research-title { color: var(--text); }
+.research-status { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 600; }
+.research-passed { color: var(--green); background: rgba(84, 200, 147, .14); }
+.research-failed { color: var(--red); background: rgba(238, 123, 132, .14); }
+.research-inconclusive, .research-neutral { color: var(--muted); background: var(--accent-soft); }

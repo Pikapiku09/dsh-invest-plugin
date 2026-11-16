@@ -3,7 +3,7 @@ import type {
   HoldingsQuotesResponse, HoldingsRefreshQuotesResponse, HoldingsResponse, IndexResponse, Job, ModelSettingsResponse, ModelSettingsSaveInput,
   HoldingPosition, HoldingsAccount, StockResolveResponse, TaskTemplate,
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
-  StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, FundamentalsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse,
+  StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, FundamentalsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse, StrategyHealthResponse,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -67,6 +67,9 @@ function post<T>(url: string, body?: unknown): Promise<T> {
 
 export const api = {
   index: () => request<IndexResponse>(`${BASE}/index`),
+  /** 策略健康：只读 LihuQuantify 导出的模拟盘契约（v0.59.0）。
+   *  失败时服务端返 200 + ok:false + reason，这里不做异常处理，交给视图渲染失败态。 */
+  strategyHealth: () => request<StrategyHealthResponse>(`${BASE}/strategy-health`),
   holdings: () => request<HoldingsResponse>(`${BASE}/holdings`),
   /** 截图 OCR 识别可能要 1–2 分钟，超时放宽到 3 分钟 */
   importHoldings: (input: HoldingsImportInput) => postSlow<HoldingsDraftResponse>(`${BASE}/holdings/import`, input, 180_000),

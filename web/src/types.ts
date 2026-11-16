@@ -298,7 +298,70 @@ export interface Job {
   question?: string;
 }
 
-export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest';
+export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health';
+
+// ===== 策略健康（v0.59.0）=====
+// 只读消费 LihuQuantify 导出的模拟盘契约（outputs/strategy_health.json，schema_version=1）。
+// 账本边界：account_type 恒为 "paper"。Lihu 跑的是模拟盘验证，与 .dsh-invest/持仓.json 实盘严格分开，
+// 服务端遇到非 paper 会直接拒（reason="not_paper_account"）。
+export interface StrategyHealthRisk {
+  max_single_position: number;
+  min_concurrent_positions: number;
+  mdd_limit: number;
+  n_positions: number | null;
+  max_single_weight: number | null;
+  current_drawdown: number | null;
+  drawdown_note?: string;
+  status: 'ok' | 'warn' | 'breach' | 'unknown';
+  largest_position?: string;
+}
+
+export interface StrategyHealthFinding {
+  level: 'info' | 'warn' | 'error';
+  text: string;
+}
+
+export interface StrategyHealthSnapshot {
+  schema_version: number;
+  source: string;
+  account_type: string;
+  generated_at: string;
+  strategy: {
+    main: string | null;
+    market_filter?: boolean;
+    market_filter_mode?: string;
+    shadow_declared: number;
+    shadow_found: number;
+    shadow_drift: number;
+  };
+  risk: StrategyHealthRisk | null;
+  behavior: Record<string, Record<string, number | string | null>> | null;
+  research: {
+    total: number;
+    passed: number;
+    failed: number;
+    rejected: number;
+    inconclusive: number;
+    pending: number;
+    decisions: { id: string; title: string; status: string; decided_at: string | null }[];
+  } | null;
+  findings: StrategyHealthFinding[];
+  missing: string[];
+}
+
+export interface StrategyHealthResponse {
+  ok: boolean;
+  path: string;
+  supported_schema: number;
+  stale_hours: number | null;
+  data: StrategyHealthSnapshot | null;
+  /** 失败原因：missing / invalid_json / schema_mismatch / not_paper_account */
+  reason?: string;
+  hint?: string;
+  found_schema?: number | null;
+  found_account_type?: string | null;
+}
+
 
 // ===== 判断质量回测（v0.44.0）=====
 // 口径：结论日后第一个交易日收盘为基准，看第 5/20 个交易日涨跌；超额 = 个股区间收益 − 上证同区间收益

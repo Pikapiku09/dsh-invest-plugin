@@ -1,7 +1,7 @@
 import { LEDGER_DEFAULT_COLUMNS } from './types';
 import type {
   ConclusionRecord, HoldingsDraftResponse, HoldingsResponse, IndexResponse, Job,
-  ModelSettingsResponse, TaskTemplate, WorkbenchView, WatchlistResponse, LedgerColKey, BacktestResponse, ConclusionAuditResponse, WatchDailyStatus,
+  ModelSettingsResponse, TaskTemplate, WorkbenchView, WatchlistResponse, LedgerColKey, BacktestResponse, ConclusionAuditResponse, WatchDailyStatus, StrategyHealthResponse,
   StockNoteMeta, StockNoteDetail, UpdateCheckResponse, FundamentalsResponse,
 } from './types';
 import type { WatchDistMode } from './watch-metrics';
@@ -194,6 +194,10 @@ export interface AppState {
   /** 运行记录页：隐藏「报告归档」回填条目，只看真实运行日志 */
   runHideBackfill: boolean;
   /** 判断质量回测（v0.44.0） */
+  // 策略健康（v0.59.0）：只读 LihuQuantify 模拟盘契约
+  strategyHealth: StrategyHealthResponse | null;
+  strategyHealthLoading: boolean;
+  strategyHealthError: string;
   backtest: BacktestResponse | null;
   backtestLoading: boolean;
   backtestError: string;
@@ -271,6 +275,7 @@ export const state: AppState = {
   indexError: '', holdingsError: '', templatesError: '', jobsError: '',
   selectedCode: null, archiveQuery: '', archiveRecords: [], archiveLoading: false,
   archiveError: '', archiveNotice: '', runQuery: '', runStatus: 'all', runMode: 'all', runHideBackfill: false,
+  strategyHealth: null, strategyHealthLoading: false, strategyHealthError: '',
   backtest: null, backtestLoading: false, backtestError: '',
   audit: null, auditLoading: false, auditError: '', backfillRunning: false, importRunning: false, updateInfo: null,
   askQuery: '', askThreads: readAskThreads(), askDraft: '', askLoading: false, askError: '',

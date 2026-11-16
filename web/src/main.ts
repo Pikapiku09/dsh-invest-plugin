@@ -15,6 +15,7 @@ import type { TaskDraft } from './state';
 import { NAME_INPUT_TEMPLATES, orderedTemplates, primaryJobReport, renderTasks } from './tasks';
 import { renderRuns } from './runs';
 import { renderBacktest } from './backtest';
+import { renderStrategyHealth } from './strategy-health';
 import { renderModelSettings, modelRouteFor, modelPresetFor, isValidModelRoute, serverHostValue, modelStockKb, modelStockKbAuto, modelStockKbConcurrency, splitStockKbRoute } from './model-settings';
 import { ensureNotifyPermission, notifyEnabled, notifyPermission, pushAlertsToSystem, setNotifyEnabled } from './notify';
 import type { SystemNotice } from './notify';
@@ -178,12 +179,14 @@ function render(): void {
 : state.view === 'ask' ? renderAsk(state)
         : state.view === 'tasks' ? renderTasks(state)
           : state.view === 'model-settings' ? renderModelSettings(state)
-          : state.view === 'backtest' ? renderBacktest(state) : renderHoldings(state);
+          : state.view === 'backtest' ? renderBacktest(state)
+: state.view === 'strategy-health' ? renderStrategyHealth(state) : renderHoldings(state);
   // 追问回答以 Markdown 渲染，若回答里引用了 .svg 图表路径，需要按需加载成 data URL
   if (state.view === 'ask') void hydrateCharts(viewElement);
   const labels: Record<WorkbenchView, string> = {
     overview: '投研概览', archive: '标的档案', runs: '运行记录', tasks: '一键任务',
     ask: '个股知识库', 'model-settings': '模型设置', holdings: '持仓工作区', backtest: '判断质量',
+    'strategy-health': '策略健康（模拟盘）',
   };
   document.getElementById('topbarContext')!.textContent = labels[state.view];
   // 左上角品牌区：版本号 + 「检测更新」（v0.51.0）
@@ -362,6 +365,23 @@ function dispatchAlertNotifications(alerts: WatchAlert[]): void {
 
 // 判断质量回测（v0.44.0）：结论库 × 日线 → 命中率。force=false 时有缓存直接渲染，不重复跑。
 // v0.45.0 起同时拉「采集审计」：让用户看得见数据从哪来、有没有漏。
+/** 策略健康（v0.59.0）：只读 LihuQuantify 模拟盘契约。失败态由视图渲染，不在这里抛。 */
+async function loadStrategyHealth(force: boolean): Promise<void> {
+  if (state.strategyHealthLoading) return;
+  if (!force && state.strategyHealth) { render(); return; }
+  state.strategyHealthLoading = true;
+  state.strategyHealthError = '';
+  render();
+  try {
+    state.strategyHealth = await api.strategyHealth();
+  } catch (error) {
+    state.strategyHealthError = errorMessage(error);
+    if (force) state.strategyHealth = null;
+  } finally {
+    state.strategyHealthLoading = false;
+    render();
+  }
+}
 async function loadBacktest(force: boolean): Promise<void> {
   if (state.backtestLoading) return;
   if (!force && state.backtest) { render(); return; }
@@ -1089,6 +1109,7 @@ function navigate(view: WorkbenchView): void {
   if (view === 'ask' && !state.index && !state.indexLoading) void loadIndex();
   if (view === 'ask') void loadAskStocks();
   if (view === 'backtest' && !state.backtest && !state.backtestLoading) void loadBacktest(false);
+  if (view === 'strategy-health' && !state.strategyHealth && !state.strategyHealthLoading) void loadStrategyHealth(false);
   if (view === 'holdings') {
     // v0.55.1：不再因为「正在加载」就跳过——之前一旦卡在 loading=true 就永远进不来
     if (!state.holdings) void loadHoldings();
@@ -1192,6 +1213,7 @@ async function refreshAll(): Promise<void> {
   const jobs: Promise<void>[] = [loadIndex(), loadHoldings(), loadWatchlist(), loadWatchDaily()];
   if (state.view === 'tasks') { jobs.push(loadTemplates(), loadJobs()); }
   if (state.view === 'model-settings') jobs.push(loadModelSettings());
+  if (state.view === 'strategy-health') jobs.push(loadStrategyHealth(true));
   // 只重读结论链，不重置选中与编辑表单：刷新期间用户正在填的监控规则不被打断
   if (state.selectedCode) jobs.push(reloadArchiveConclusions(state.selectedCode));
   try {
