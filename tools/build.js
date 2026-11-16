@@ -7,16 +7,27 @@ const path = require('path')
 
 const root = path.join(__dirname, '..')
 const prompts = require(path.join(root, 'src', 'prompts.js'))
+// 从源码里剥掉末尾的 CJS 导出行，作为内联进 dist 的纯函数核心。
+// 历史教训（2026-11-16）：这里原本用两个精确字符串常量做 split/join，
+// 后来 pure.js 的导出名增加（isSafeServePath/extractInvestCodes/...），
+// 常量再也匹配不上，于是 dist 里被静默内联了 `module.exports = {...}` 这一行；
+// 一旦宿主以 CJS 上下文执行该函数体，就会覆盖宿主的 module.exports。
+// 现在统一用行锚定的正则剥离，匹配不到直接抛错，不再静默产出坏文件。
+const CJS_EXPORT_RE = /^(?:if\s*\([^)]*\)\s*)?module\.exports\s*=\s*\{([^}]*)\}\s*$/m
+function stripCjsExport(source, label) {
+  if (!CJS_EXPORT_RE.test(source)) {
+    throw new Error(label + ': 未找到 CJS 导出行 `module.exports = { ... }`，无法剥离')
+  }
+  return source.replace(CJS_EXPORT_RE, '').trimEnd()
+}
+
 const pure = fs.readFileSync(path.join(root, 'src', 'lib', 'pure.js'), 'utf8')
 const routes = fs.readFileSync(path.join(root, 'src', 'lib', 'routes.js'), 'utf8')
 
-// pure 去掉末尾的 CJS 导出行，作为内联进 dist 的纯函数核心
-const PURE_EXPORT = "if (typeof module !== 'undefined' && module.exports) module.exports = { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks }"
-const pureCore = pure.split(PURE_EXPORT).join('').trimEnd()
+const pureCore = stripCjsExport(pure, 'src/lib/pure.js')
 
 // routes 同样去掉 CJS 导出行：dist 内联，packages/lib 转 ESM
-const ROUTES_EXPORT = "if (typeof module !== 'undefined' && module.exports) module.exports = { ROLE_CODES, PRESETS, DEFAULT_PRESET, parseRoute, parseRouteList, mergeRoutes, formatRoute, formatRouteChain, routeShort, parseRoutesJson }"
-const routesCore = routes.split(ROUTES_EXPORT).join('').trimEnd()
+const routesCore = stripCjsExport(routes, 'src/lib/routes.js')
 
 // 2026-11-11：banner 去掉"生成时间"——时间戳会让每次构建的 dist 都变化，
 // 导致 `git diff --exit-code` 永远失败、无法在 CI 里校验构建产物是否最新。
@@ -41,8 +52,8 @@ fs.writeFileSync(path.join(root, 'dist', 'invest-run.client.js'), clientBody)
 // 历史教训：这里曾用精确字符串替换，src/prompts.js 后来新增 KB_* 符号后
 // 精确匹配静默失效 → lib/prompts.js 仍是 CommonJS → profile 加载时报
 // `does not provide an export named 'DATA_BASE'`，且不报错、只静默产出坏文件。
-// 现在改为按导出行结构匹配，匹配不到直接抛错（fail fast，不再静默产出坏文件）。
-const CJS_EXPORT_RE = /^(?:if\s*\([^)]*\)\s*)?module\.exports\s*=\s*\{([^}]*)\}\s*$/m
+// 现在改为按导出行结构匹配（CJS_EXPORT_RE 定义在文件顶部，dist 内联与 ESM 转换共用），
+// 匹配不到直接抛错（fail fast，不再静默产出坏文件）。
 function toEsm(source, label) {
   if (!CJS_EXPORT_RE.test(source)) {
     throw new Error(label + ': 未找到 CJS 导出行 `module.exports = { ... }`，无法转换为 ESM')

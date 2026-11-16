@@ -288,6 +288,9 @@ function isSafeServePath(p, root) {
 
 // 语义化版本比较（v0.50.0）：a 比 b 新返回 1，相同 0，更旧 -1。忽略前缀 v 与 prerelease 后缀。
 // 只用于「有没有新版」判断，不参与任何依赖解析。
+// 注意：本函数必须留在 src/ 里 —— 曾经只存在于 lib/pure.js 的产品中，
+// 一次 `node tools/build.js` 就把它冲掉，导致 index.js 报
+// `does not provide an export named 'cmpVersion'`，整个插件加载失败。
 function cmpVersion(a, b) {
   const norm = (v) => String(v || '').trim().replace(/^v/i, '').split('-')[0]
     .split('.').map((n) => parseInt(n, 10) || 0)

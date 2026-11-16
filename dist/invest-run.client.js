@@ -288,7 +288,22 @@ function isSafeServePath(p, root) {
   return s.length > 0 && !s.includes('..') && s.startsWith(String(root || ''))
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { z2, localYmd, extractBoth, collectCharts, buildGroups, isLoopbackRequest, fmt, isSepRow, splitBlocks, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv }
+// 语义化版本比较（v0.50.0）：a 比 b 新返回 1，相同 0，更旧 -1。忽略前缀 v 与 prerelease 后缀。
+// 只用于「有没有新版」判断，不参与任何依赖解析。
+// 注意：本函数必须留在 src/ 里 —— 曾经只存在于 lib/pure.js 的产品中，
+// 一次 `node tools/build.js` 就把它冲掉，导致 index.js 报
+// `does not provide an export named 'cmpVersion'`，整个插件加载失败。
+function cmpVersion(a, b) {
+  const norm = (v) => String(v || '').trim().replace(/^v/i, '').split('-')[0]
+    .split('.').map((n) => parseInt(n, 10) || 0)
+  const x = norm(a), y = norm(b)
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const p = x[i] || 0, q = y[i] || 0
+    if (p > q) return 1
+    if (p < q) return -1
+  }
+  return 0
+}
 
 // DSH 动态插件 Client 半部（invest_run 专属工具卡片：分阶段标签页 + 推理过程折叠 + 图表渲染/放大 + Markdown 表格）
 // 由 tools/build.js 复制为 dist/invest-run.client.js
