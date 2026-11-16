@@ -182,14 +182,14 @@ function mainPane(state: AppState): string {
         <div class="ask-meta">${meta}</div>
       </div>
       <div class="ask-head-actions">
-        <button class="button button-secondary" data-action="ask-kb-expand" title="放大查看整理后的个股知识库与图表">${icon('book', 15)}知识库${charts.length ? ` · ${charts.length} 图` : ''}</button>
+        <button class="button button-secondary" data-action="ask-kb-expand" title="放大查看整理后的个股知识库（基本面 / 技术面 / 时间线分页）与图表">${icon('book', 15)}知识库${charts.length ? ` · ${charts.length} 图` : ''}</button>
         <button class="button button-secondary" data-action="ask-curate" data-code="${escapeHtml(code)}">${icon('refresh', 15)}重新整理</button>
         <button class="button button-secondary" data-action="ask-run" data-code="${escapeHtml(code)}">${icon('sparkles', 15)}更新数据</button>
       </div>
     </header>
     ${kbStateBanner(note)}
     <div class="ask-kb-collapsed">
-      ${icon('book', 15)}<span>整理后的知识库${chartsHint}已收起。这里是追问工作区，需要看全文或图表时点右上角「知识库」放大查看。</span>
+      ${icon('book', 15)}<span>整理后的知识库${chartsHint}已收起。这里是追问工作区；要读全文（放大后按「基本面 / 技术面 / 时间线」分页）或看图，点右上角「知识库」。</span>
       <button class="text-button" data-action="ask-kb-expand">查看知识库${chartsHint ? '与图表' : ''} ${icon('arrow', 13)}</button>
     </div>
     <div class="ask-thread" id="ask-thread">${threadHtml(state, code, name)}</div>

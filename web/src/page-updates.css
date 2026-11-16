@@ -502,3 +502,97 @@
 }
 .ledger-loading-hint .icon { flex: none; color: var(--muted); }
 .ledger-loading-hint .text-button { color: var(--accent); }
+
+/* ===== 基本面评级卡片（v0.58.0）：五维分位 + 风险标记 + 升降 =====
+   只用既有主题变量（--text / --text-2 / --muted / --line / --line-soft / --accent / --mint / --red），
+   --amber / --surface-2 带 fallback；明暗两套主题下正文与免责都保持可读。 */
+.fund-page-actions { display: inline-flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.fund-card { margin-bottom: 16px; }
+.fund-card.is-loading { opacity: .92; }
+.fund-head { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 12px 0 14px; margin-bottom: 12px; border-bottom: 1px solid var(--line-soft); }
+.fund-grade { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; min-width: 62px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2, #151d26); }
+.fund-grade b { font-size: 24px; font-weight: 700; line-height: 1.1; letter-spacing: .02em; }
+.fund-grade small { color: var(--text-2); font-size: 10px; white-space: nowrap; }
+.fund-grade-good { border-color: rgba(80, 200, 172, .48); background: rgba(80, 200, 172, .12); }
+.fund-grade-good b { color: var(--mint); }
+.fund-grade-neutral { border-color: rgba(111, 159, 248, .45); background: rgba(111, 159, 248, .10); }
+.fund-grade-neutral b { color: var(--accent); }
+.fund-grade-bad { border-color: rgba(238, 123, 132, .48); background: rgba(238, 123, 132, .12); }
+.fund-grade-bad b { color: var(--red); }
+.fund-grade-unknown { border-color: var(--line-soft); }
+.fund-grade-unknown b { color: var(--muted); }
+.fund-head-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 220px; }
+.fund-head-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+.fund-head-title strong { color: var(--text); font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.fund-head-title > span { color: var(--text-2); font-size: 11.5px; }
+.fund-head-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; color: var(--text-2); font-size: 11.5px; line-height: 1.55; }
+.fund-head-meta em { margin-right: 4px; color: var(--muted); font-style: normal; }
+.fund-refresh { flex: none; }
+.fund-delta { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 12px; padding: 6px 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface-2, rgba(255, 255, 255, .03)); color: var(--text-2); font-size: 11.5px; line-height: 1.5; }
+.fund-delta .icon { flex: none; color: var(--muted); }
+.fund-delta b { font-variant-numeric: tabular-nums; }
+.fund-delta.is-up b { color: var(--mint); }
+.fund-delta.is-down b { color: var(--red); }
+.fund-delta.is-flat b { color: var(--text-2); }
+.fund-warnings { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; padding: 8px 11px; border: 1px dashed var(--line); border-radius: 8px; }
+.fund-warnings small { display: flex; align-items: flex-start; gap: 5px; color: var(--text-2); font-size: 11px; line-height: 1.5; }
+.fund-warnings .icon { flex: none; margin-top: 2px; color: var(--muted); }
+.fund-subhead { display: flex; align-items: center; gap: 6px; margin: 14px 0 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .03em; }
+.fund-dims { display: flex; flex-direction: column; gap: 8px; }
+.fund-dim { padding: 8px 10px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--surface-2, rgba(255, 255, 255, .02)); }
+.fund-dim-head { display: grid; grid-template-columns: 72px minmax(80px, 1fr) 64px; align-items: center; gap: 10px; }
+.fund-dim-label { color: var(--text); font-size: 12.5px; font-weight: 600; }
+.fund-dim-score { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.fund-dim-score.is-good { color: var(--mint); }
+.fund-dim-score.is-mid { color: var(--accent); }
+.fund-dim-score.is-bad { color: var(--red); }
+.fund-dim-score.is-empty { color: var(--muted); font-weight: 400; }
+.fund-bar { position: relative; height: 9px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.fund-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .25s ease; }
+.fund-bar.is-good > i { background: var(--mint); }
+.fund-bar.is-mid > i { background: var(--accent); }
+.fund-bar.is-bad > i { background: var(--red); }
+/* 数据不足：只画空槽，不画任何进度——绝不让人误读成 0 分 */
+.fund-bar.is-empty { background: repeating-linear-gradient(45deg, var(--line-soft) 0 4px, transparent 4px 8px); box-shadow: inset 0 0 0 1px var(--line); }
+.fund-dim-detail { margin: 5px 0 0; padding-left: 82px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.fund-flags { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.fund-flag { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 4px 8px; padding: 8px 11px; border: 1px solid var(--line-soft); border-left-width: 3px; border-radius: 8px; background: var(--surface-2, rgba(255, 255, 255, .02)); }
+.fund-flag-tag { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 1.5; }
+.fund-flag-label { color: var(--text); font-size: 12px; font-weight: 600; line-height: 1.55; word-break: break-word; }
+.fund-flag small { flex-basis: 100%; color: var(--text-2); font-size: 11px; line-height: 1.5; }
+.fund-flag-bad { border-left-color: var(--red); background: rgba(238, 123, 132, .09); }
+.fund-flag-bad .fund-flag-tag { color: var(--red); background: rgba(238, 123, 132, .16); }
+.fund-flag-warn { border-left-color: var(--amber, #d9ae64); background: rgba(217, 174, 100, .08); }
+.fund-flag-warn .fund-flag-tag { color: var(--amber, #d9ae64); background: rgba(217, 174, 100, .16); }
+.fund-flag-info { border-left-color: var(--line); }
+.fund-flag-info .fund-flag-tag { color: var(--text-2); background: var(--line-soft); }
+.fund-flags-empty { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 9px 11px; border: 1px dashed var(--line); border-radius: 8px; color: var(--text-2); font-size: 12px; line-height: 1.55; }
+.fund-flags-empty .icon { flex: none; margin-top: 3px; color: var(--mint); }
+/* 实证免责：常驻、不折叠。这是产品红线，别加 <details>、别默认隐藏 */
+.fund-caveat { display: flex; align-items: flex-start; gap: 6px; margin: 12px 0 0; padding-top: 10px; border-top: 1px dashed var(--line-soft); color: var(--text-2); font-size: 11px; line-height: 1.6; }
+.fund-caveat .icon { flex: none; margin-top: 2px; color: var(--muted); }
+.fund-error { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 10px; padding: 10px 12px; border: 1px solid rgba(238, 123, 132, .2); border-radius: 9px; background: rgba(238, 123, 132, .07); color: var(--red); font-size: 12px; line-height: 1.55; word-break: break-word; }
+.fund-error .icon { flex: none; margin-top: 2px; }
+.fund-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.fund-actions small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.fund-loading-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; color: var(--text-2); font-size: 12px; line-height: 1.55; }
+.fund-loading-hint .icon { flex: none; color: var(--muted); }
+.fund-loading-hint .text-button { color: var(--accent); }
+.fund-skeleton { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+.fund-skeleton-grade { width: 62px; height: 58px; border-radius: 12px; background: var(--line); animation: fund-pulse 1.4s ease-in-out infinite; }
+.fund-skeleton-lines { display: flex; flex: 1; flex-direction: column; gap: 8px; }
+.fund-skeleton-lines span { height: 10px; border-radius: 6px; background: var(--line); animation: fund-pulse 1.4s ease-in-out infinite; }
+.fund-skeleton-lines span:last-child { width: 62%; }
+.fund-skeleton-bars { display: flex; flex-direction: column; gap: 8px; }
+.fund-skeleton-bar { height: 30px; border-radius: 9px; background: var(--line); animation: fund-pulse 1.4s ease-in-out infinite; }
+@keyframes fund-pulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+.theme-light .fund-grade { background: #f2f5f9; border-color: #dde5ee; }
+.theme-light .fund-dim, .theme-light .fund-delta, .theme-light .fund-flag { background: #f7f9fc; }
+.theme-light .fund-flag-bad { background: rgba(207, 75, 82, .06); }
+.theme-light .fund-flag-warn { background: rgba(169, 123, 44, .07); }
+@media (max-width: 720px) {
+  .fund-head { gap: 10px; }
+  .fund-head-main { min-width: 0; }
+  .fund-dim-head { grid-template-columns: 64px minmax(60px, 1fr) 58px; gap: 8px; }
+  .fund-dim-detail { padding-left: 0; }
+}

@@ -667,6 +667,84 @@ export interface StockAskResponse {
   newEntries: number;
 }
 
+// ===== 基本面评级（v0.58.0）：行业横截面分位口径，排雷与理解质地，非买卖信号 =====
+
+/** 单个指标的横向分位结果 */
+export interface FundamentalMetric {
+  label: string;
+  /** 展示用原值，如 "19.47%" */
+  value: string;
+  /** 同业分位 0-100（已按方向反转：越大越好）；null = 样本不足或无数据 */
+  pct: number | null;
+  /** 分位口径说明，如 "同业中位" */
+  hint?: string;
+}
+
+/** 五个计分维度之一（风险标记走 flags，不参与计分） */
+export interface FundamentalDimension {
+  /** growth / valuation / profitability / quality / health */
+  key: string;
+  label: string;
+  /** 0-100；null = 该维度无足够数据，不参与总分 */
+  score: number | null;
+  /** 权重 0-1 */
+  weight: number;
+  /** 一句话摘要，如 "净利同比 +97.5%，同业前 20%" */
+  detail: string;
+  metrics: FundamentalMetric[];
+}
+
+/** 风险标记：不计分，独立展示（排雷价值高于评分） */
+export interface FundamentalFlag {
+  level: 'bad' | 'warn' | 'info';
+  label: string;
+  note: string;
+}
+
+/** 评级历史快照（P2：变化比绝对值更有信息量） */
+export interface FundamentalSnapshot {
+  period: string;
+  periodLabel: string;
+  total: number | null;
+  grade: string;
+  at: string;
+}
+
+export interface FundamentalsResponse {
+  ok: boolean;
+  error?: string;
+  code: string;
+  name: string;
+  industry: string;
+  /** 同业样本数（同一 Tushare industry 分类；退回全市场时为全市场样本数） */
+  peerCount: number;
+  /** 分位基准：industry=同行业（首选）；market=同业样本不足时退回全市场 */
+  peerBaseline?: 'industry' | 'market';
+  /** 财报报告期 YYYYMMDD */
+  period: string;
+  periodLabel: string;
+  announceDate: string;
+  /** 估值取数的交易日 */
+  priceDate: string;
+  total: number | null;
+  grade: string;
+  gradeLabel: string;
+  /** 如 "5/5 维" */
+  coverage: string;
+  dims: FundamentalDimension[];
+  flags: FundamentalFlag[];
+  warnings: string[];
+  /** 最近几次评级快照（新→旧），用于看升降 */
+  history: FundamentalSnapshot[];
+  /** 与上一期比较 */
+  delta: { periodLabel: string; total: number | null; change: number | null } | null;
+  /** 实证提示：基本面不区分盈亏，本评级不构成买卖信号 */
+  caveat: string;
+  /** 快照缓存时间 */
+  cachedAt: string;
+}
+
+
 // ===== 个股知识库「相关图表」（v0.53.0）=====
 export interface StockChartItem {
   path: string;

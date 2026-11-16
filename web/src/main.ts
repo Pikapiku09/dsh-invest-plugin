@@ -32,6 +32,8 @@ const localJobMetadata = new Map<string, Partial<Job>>();
 let archiveRequestSerial = 0;
 /** 账本读取的请求序号（v0.55.1）：并发/重入时只让最后一次请求写状态，防止旧响应覆盖新结果 */
 let holdingsSerial = 0;
+/** 基本面评级的请求序号（v0.58.0）：切换标的时旧响应不得覆盖新结果 */
+let fundamentalsSerial = 0;
 /** 全量重绘时需要保持滚动位置的滚动容器（标的档案左侧栏、标的索引列表、账本列设置、追问会话与报告列表） */
 const SCROLL_KEEP_SELECTOR = '.archive-browser, .code-list, .ledger-col-list, .ask-thread, .ask-report-list';
 /** 上一次渲染的视图：同视图重绘保持滚动位置，切换视图回到顶部 */
@@ -305,6 +307,38 @@ async function loadHoldings(withFeedback = false): Promise<void> {
   } finally {
     // 只有最后一次请求有资格清理加载态，避免先返回的请求把后来者的转圈关掉
     if (serial === holdingsSerial) { state.holdingsLoading = false; render(); }
+  }
+}
+
+/**
+ * 读当前标的的基本面评级（v0.58.0）。
+ *
+ * - 带请求序号：切换标的时旧响应直接丢弃，不许把 A 的评级画到 B 的档案上；
+ * - force=true 强制重拉全市场快照（刷新按钮 / 重试），force=false 走服务端快照缓存；
+ * - 失败只写 fundamentalsError 并留在卡片里显示，不抛异常、不影响结论链与监控卡渲染。
+ */
+async function loadFundamentals(code: string, force = false): Promise<void> {
+  const serial = ++fundamentalsSerial;
+  state.fundamentalsLoading = true;
+  state.fundamentalsError = '';
+  render();
+  try {
+    const data = await api.fundamentals(code, force);
+    if (serial !== fundamentalsSerial) return;
+    if (state.selectedCode && state.selectedCode !== code) return;
+    state.fundamentals = data;
+    if (force) {
+      const totalText = typeof data.total === 'number' && Number.isFinite(data.total) ? `${data.total} 分` : '数据不足';
+      toast(`基本面已重算：${data.grade || '—'} ${data.gradeLabel || ''} · 综合 ${totalText}`.trim(), 'success');
+    }
+  } catch (error) {
+    if (serial !== fundamentalsSerial) return;
+    if (state.selectedCode && state.selectedCode !== code) return;
+    state.fundamentalsError = errorMessage(error);
+    if (force) toast(`基本面刷新失败：${state.fundamentalsError}`, 'error');
+  } finally {
+    // 只有最后一次请求有资格清理加载态（与 loadHoldings 同一套路）
+    if (serial === fundamentalsSerial) { state.fundamentalsLoading = false; render(); }
   }
 }
 
@@ -1010,10 +1044,17 @@ async function reloadArchiveConclusions(code: string): Promise<void> {
 }
 
 async function selectCode(code: string, navigateToArchive = true): Promise<void> {
+  const switched = state.selectedCode !== code;
   state.selectedCode = code;
   if (navigateToArchive) state.view = 'archive';
   state.sidebarOpen = false;
   state.watchEditOpen = false;
+  // 基本面：换标的立即作废旧评级（防串码）；同一标的已有数据就不重复拉取
+  if (switched || !state.fundamentals || state.fundamentals.code !== code) {
+    state.fundamentals = null;
+    state.fundamentalsError = '';
+    void loadFundamentals(code);
+  }
   await reloadArchiveConclusions(code);
 }
 
@@ -1986,6 +2027,7 @@ document.addEventListener('click', (event) => {
   else if (action === 'confirm-holdings') void confirmHoldingsDraft();
   else if (action === 'refresh-holdings-quotes') void refreshHoldingsQuotes();
   else if (action === 'refresh-watchlist') void refreshWatchlist();
+  else if (action === 'fundamentals-refresh' && target.dataset.code) void loadFundamentals(target.dataset.code, true);
   else if (action === 'watch-daily-toggle') void toggleWatchDaily();
   else if (action === 'watch-daily-run') void runWatchDaily();
   else if (action === 'toggle-notify') void toggleSystemNotify();

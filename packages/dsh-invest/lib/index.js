@@ -8,6 +8,7 @@ import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServe
 import { DEFAULT_PRESET, PRESETS, ROLE_CODES, mergeRoutes, formatRoute, formatRouteChain, parseRoute, parseRouteList, parseRoutesJson } from "./routes.js"
 import { buildStockNotes, normalizeCode, stockFileName } from "./stock-notes.js"
 import { buildCuratePrompt, sanitizeCurated, validateCurated, rawTimelineMarkdown } from "./stock-curator.js"
+import { num, dedupeByCode, latestDisclosedPeriod, buildFundamentals, CAVEAT, MIN_PEERS } from "./fundamentals.js"
 
 // 插件配置：路由预置档 + 按角色覆盖（写在 profile 的 cordis.patch.yml 的 - id: invest → config）
 const Config = z.object({
@@ -2772,6 +2773,323 @@ function apply(ctx, config) {
     }
   }
 
+  // ============ 基本面评级（v0.58.0）============
+  // 口径：行业横截面分位（同 Tushare industry 分类），不联网算分——分位算在纯函数 fundamentals.js 里，
+  // 这里只负责「把全市场三张表拉下来缓存好」。一次刷新 = 3 次 API 调用覆盖全市场，
+  // 单只股票查询是纯查表，毫秒级、0 token。
+  const FUND_DIR = BASE_DIR + "/.dsh-invest/cache/fundamentals"
+  const FUND_STORE = BASE_DIR + "/.dsh-invest/store/fundamentals"
+  /** 全市场快照内存缓存：{ key, at, snapshot } */
+  let fundMemo = null
+  /** 同一时刻只允许一个刷新在跑，避免多标签页同时点刷新把 Tushare 打爆 */
+  let fundInflight = null
+
+  const fundToken = async () => {
+    try {
+      const { readFileSync } = await import("node:fs")
+      const t = String(readFileSync(BASE_DIR + "/.dsh-invest/tushare.token", "utf8")).trim()
+      if (t) return t
+    } catch (e) { /* 文件缺失，退回环境变量 */ }
+    return String((process.env && process.env.TUSHARE_TOKEN) || "").trim()
+  }
+  const fundReadJson = async (file) => {
+    try {
+      const { readFileSync } = await import("node:fs")
+      return JSON.parse(readFileSync(file, "utf8"))
+    } catch (e) { return null }
+  }
+  const fundWriteJson = async (file, data) => {
+    try {
+      const { mkdirSync, writeFileSync } = await import("node:fs")
+      mkdirSync(FUND_DIR, { recursive: true })
+      writeFileSync(file, JSON.stringify(data), "utf8")
+    } catch (e) { /* 缓存写失败不影响本次结果 */ }
+  }
+  /** 调 Tushare 并把 fields/items 转成对象数组 */
+  const fundApi = async (api_name, params, fields, token) => {
+    const r = await fetch("https://api.tushare.pro", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_name, token, params, fields }),
+    })
+    const j = JSON.parse(await r.text())
+    if (j.code !== 0) return { ok: false, error: String(j.msg || "tushare error").slice(0, 160), rows: [] }
+    if (!j.data || !Array.isArray(j.data.items)) return { ok: true, rows: [] }
+    const f = j.data.fields
+    const rows = j.data.items.map((it) => {
+      const o = {}
+      f.forEach((k, i) => { o[k] = it[i] })
+      return o
+    })
+    return { ok: true, rows }
+  }
+  /** 最近交易日：从今天往前退，最多试 12 天（含长假），零成交也照常返回该日期 */
+  let fundTradeDateMemo = null
+  const fundLatestTradeDate = async (token) => {
+    if (fundTradeDateMemo && Date.now() - fundTradeDateMemo.at < 30 * 60 * 1000) return fundTradeDateMemo.date
+    const { readdirSync } = await import("node:fs")
+    // 先看本地日线缓存里最新的日期，省一次 API 调用
+    try {
+      let best = ""
+      for (const f of readdirSync(BASE_DIR + "/.dsh-invest/cache/pack")) {
+        const m = f.match(/^daily_\d{6}_[A-Z]{2}_(\d{8})\.json$/)
+        if (m && m[1] > best) best = m[1]
+      }
+      if (best) { fundTradeDateMemo = { date: best, at: Date.now() }; return best }
+    } catch (e) { /* 没缓存 */ }
+    const d = new Date()
+    for (let i = 0; i < 12; i++) {
+      const ymd = "" + d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0")
+      const r = await fundApi("daily_basic", { trade_date: ymd }, "ts_code", token)
+      if (r.ok && r.rows.length > 100) { fundTradeDateMemo = { date: ymd, at: Date.now() }; return ymd }
+      d.setDate(d.getDate() - 1)
+    }
+    fundTradeDateMemo = { date: "", at: Date.now() }
+    return ""
+  }
+
+  /**
+   * 全市场快照：stock_basic（7 天缓存）+ fina_indicator_vip（按报告期缓存）+ daily_basic（按交易日缓存）
+   * 返回 { period, periodLabel, tradeDate, basic, fina, dailyBasic, warnings, cachedAt }
+   */
+  const loadFundSnapshot = async (force) => {
+    const token = await fundToken()
+    if (!token) throw new Error("缺少 Tushare token（.dsh-invest/tushare.token）")
+    const { period, label } = latestDisclosedPeriod()
+    // 先看快照缓存：命中就直接返回，连交易日都不必重新探测（省掉一串 daily_basic 试探）
+    if (!force && fundMemo && fundMemo.period === period && Date.now() - fundMemo.at < 30 * 60 * 1000) {
+      return { ...fundMemo.snapshot, memo: true }
+    }
+    const tradeDate = await fundLatestTradeDate(token)
+    const key = period + "|" + tradeDate
+    if (!force && fundMemo && fundMemo.key === key && Date.now() - fundMemo.at < 30 * 60 * 1000) {
+      return { ...fundMemo.snapshot, memo: true }
+    }
+    if (fundInflight) return fundInflight
+    fundInflight = (async () => {
+      const warnings = []
+      const ymd = (d) => "" + d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0")
+      const today = ymd(new Date())
+
+      // 1) 行业分类：低频数据，7 天内复用
+      let basicRows = []
+      const basicFile = FUND_DIR + "/basic_" + today + ".json"
+      let basicCache = force ? null : await fundReadJson(basicFile)
+      if (!basicCache && !force) {
+        // 复用最近 7 天内的任意一份（行业分类是低频数据）
+        // 注意：force=1 时必须跳过这段，否则「刷新」会被这里的 7 天复用悄悄抵消
+        try {
+          const { readdirSync } = await import("node:fs")
+          const files = readdirSync(FUND_DIR).filter((f) => /^basic_\d{8}\.json$/.test(f)).sort()
+          for (let i = files.length - 1; i >= 0; i--) {
+            const stamp = files[i].slice(6, 14)
+            const diff = (Date.parse(today.slice(0, 4) + "-" + today.slice(4, 6) + "-" + today.slice(6, 8))
+              - Date.parse(stamp.slice(0, 4) + "-" + stamp.slice(4, 6) + "-" + stamp.slice(6, 8))) / 86400000
+            if (diff <= 7) { basicCache = await fundReadJson(FUND_DIR + "/" + files[i]); break }
+          }
+        } catch (e) { /* 目录还没建 */ }
+      }
+      if (basicCache && Array.isArray(basicCache.rows)) {
+        basicRows = basicCache.rows
+      } else {
+        const r = await fundApi("stock_basic", { list_status: "L" }, "ts_code,name,industry,market", token)
+        if (r.ok) {
+          basicRows = r.rows
+          await fundWriteJson(basicFile, { rows: basicRows, at: new Date().toISOString() })
+        } else warnings.push("行业分类拉取失败：" + r.error)
+      }
+
+      // 2) 财报：按报告期缓存，报告期内不会变
+      const finaFile = FUND_DIR + "/fina_" + period + ".json"
+      let finaRows = []
+      const finaCache = force ? null : await fundReadJson(finaFile)
+      if (finaCache && Array.isArray(finaCache.rows) && finaCache.rows.length) {
+        finaRows = finaCache.rows
+      } else {
+        const r = await fundApi("fina_indicator_vip", { period },
+          "ts_code,ann_date,end_date,roe,roe_yearly,grossprofit_margin,netprofit_margin,netprofit_yoy,dt_netprofit_yoy,or_yoy,debt_to_assets,current_ratio,ocfps,eps,profit_dedt,bps", token)
+        if (r.ok) {
+          finaRows = r.rows
+          await fundWriteJson(finaFile, { rows: finaRows, at: new Date().toISOString() })
+        } else warnings.push("财务指标拉取失败（可能无 fina_indicator_vip 权限）：" + r.error)
+      }
+
+      // 3) 估值：按交易日缓存
+      let dbRows = []
+      if (tradeDate) {
+        const dbFile = FUND_DIR + "/db_" + tradeDate + ".json"
+        const dbCache = force ? null : await fundReadJson(dbFile)
+        if (dbCache && Array.isArray(dbCache.rows) && dbCache.rows.length) {
+          dbRows = dbCache.rows
+        } else {
+          const r = await fundApi("daily_basic", { trade_date: tradeDate }, "ts_code,pe_ttm,pb,total_mv,dv_ttm", token)
+          if (r.ok) {
+            dbRows = r.rows
+            await fundWriteJson(dbFile, { rows: dbRows, at: new Date().toISOString() })
+          } else warnings.push("估值拉取失败：" + r.error)
+        }
+      } else {
+        warnings.push("未能确定最近交易日，估值维度将缺失")
+      }
+
+      const snapshot = { period, periodLabel: label, tradeDate, basic: basicRows, fina: finaRows, dailyBasic: dbRows, warnings }
+      fundMemo = { key, period, at: Date.now(), snapshot }
+      return snapshot
+    })().finally(() => { fundInflight = null })
+    return fundInflight
+  }
+
+  /** 读本股历史评级快照（JSONL，追加写） */
+  const readFundHistory = async (code) => {
+    try {
+      const { readFileSync } = await import("node:fs")
+      const text = readFileSync(FUND_STORE + "/" + code.replace(/\./g, "_") + ".jsonl", "utf8")
+      return text.split("\n").filter((l) => l.trim()).map((l) => { try { return JSON.parse(l) } catch (e) { return null } }).filter(Boolean)
+    } catch (e) { return [] }
+  }
+  /** 追加一条评级快照；同一报告期只保留最后一次 */
+  const appendFundHistory = async (code, snap) => {
+    try {
+      const { mkdirSync, writeFileSync } = await import("node:fs")
+      const prev = await readFundHistory(code)
+      const kept = prev.filter((h) => h && h.period !== snap.period)
+      kept.push(snap)
+      kept.sort((a, b) => String(b.period).localeCompare(String(a.period)))
+      mkdirSync(FUND_STORE, { recursive: true })
+      writeFileSync(FUND_STORE + "/" + code.replace(/\./g, "_") + ".jsonl",
+        kept.slice(0, 12).map((h) => JSON.stringify(h)).join("\n") + "\n", "utf8")
+      return kept.slice(0, 12)
+    } catch (e) { return [] }
+  }
+
+  /** 单只股票：查表 + 算分 + 落历史快照 */
+  const fundamentalsFor = async (code, force) => {
+    const upper = String(code || "").trim().toUpperCase()
+    // ETF / LOF 没有财报主体，基本面评级不适用。若不特判，会走成「全空评级」——
+    // 用户持仓里就有 510500、159813 这类，看到一张空卡片会以为功能坏了。
+    const isFund = /^(5\d{5}\.SH|1[5-6]\d{4}\.SZ)$/.test(upper)
+    if (isFund) {
+      return {
+        ok: true, code: upper, name: upper, industry: "", peerCount: 0,
+        period: "", periodLabel: "", announceDate: "", priceDate: "",
+        total: null, grade: "—", gradeLabel: "不适用", coverage: "—",
+        dims: [],
+        flags: [{
+          level: "info",
+          label: "ETF / 基金不适用基本面评级",
+          note: "该标的没有财报主体（一篮子持仓），ROE/毛利/负债率等指标无从计算。要看质地请穿透到成分股或看跟踪指数的估值分位。",
+        }],
+        warnings: ["ETF / 基金不做基本面评级"],
+        history: [], delta: null, caveat: CAVEAT,
+        cachedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+      }
+    }
+    const snap = await loadFundSnapshot(force)
+    const basicMap = new Map(snap.basic.map((b) => [String(b.ts_code || "").toUpperCase(), b]))
+    const basic = basicMap.get(upper) || {}
+    const industry = String(basic.industry || "")
+
+    // 财报按股票去重（同报告期可能有多条公告版本）
+    const finaMap = dedupeByCode(snap.fina)
+    const me = finaMap.get(upper) || null
+
+    // 同业集合：同一 industry 分类
+    const peerCodes = new Set()
+    for (const [c, b] of basicMap) if (String(b.industry || "") === industry && industry) peerCodes.add(c)
+    const peers = []
+    for (const c of peerCodes) { const row = finaMap.get(c); if (row) peers.push(row) }
+
+    // 细分行业太小（白酒 19 只、水泥 20 只上下）时，硬套行业分位会让整片行业拿不到评级。
+    // 退回全市场分位：基准更宽松，但至少可比，且必须明确告诉用户换了基准。
+    const peerLabel = { kind: "industry", industry }
+    let effectivePeers = peers
+    const extraWarnings = []
+    if (peers.length < MIN_PEERS) {
+      effectivePeers = Array.from(finaMap.values())
+      peerLabel.kind = "market"
+      extraWarnings.push(
+        `「${industry || "未知行业"}」同业仅 ${peers.length} 只（少于 ${MIN_PEERS} 只），`
+        + `已退回全市场分位——基准比同业更宽松，读数仅供参考`,
+      )
+    }
+
+    const dbMap = new Map(snap.dailyBasic.map((d) => [String(d.ts_code || "").toUpperCase(), d]))
+    const meDb = dbMap.get(upper) || null
+    const peerDb = []
+    if (peerLabel.kind === "industry") {
+      for (const c of peerCodes) { const row = dbMap.get(c); if (row) peerDb.push(row) }
+    } else {
+      for (const row of dbMap.values()) peerDb.push(row)
+    }
+
+    // 近几期（趋势 + 连续亏损判定）：按股票单独查，缓存到报告期
+    let periodRows = []
+    const stockFile = FUND_DIR + "/stock_" + upper.replace(/\./g, "_") + ".json"
+    const stockCache = force ? null : await fundReadJson(stockFile)
+    if (stockCache && Array.isArray(stockCache.rows) && stockCache.rows.length) {
+      periodRows = stockCache.rows
+    } else if (me) {
+      const token = await fundToken()
+      const end = new Date()
+      const start = new Date(end.getTime() - 500 * 86400000)
+      const p2 = (n) => String(n).padStart(2, "0")
+      const ymd = (d) => "" + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate())
+      const r = await fundApi("fina_indicator", { ts_code: upper, start_date: ymd(start), end_date: ymd(end) },
+        "ts_code,ann_date,end_date,roe,roe_yearly,grossprofit_margin,netprofit_margin,netprofit_yoy,dt_netprofit_yoy,or_yoy,debt_to_assets,current_ratio,ocfps,eps,profit_dedt,bps", token)
+      if (r.ok && r.rows.length) {
+        periodRows = r.rows
+        await fundWriteJson(stockFile, { rows: periodRows, at: new Date().toISOString() })
+      }
+    }
+    // 按报告期去重排序（新→旧），取最新一期作为 me 的补充
+    const byEnd = new Map()
+    for (const row of periodRows) {
+      const k = String(row.end_date || "")
+      const prev = byEnd.get(k)
+      if (!prev || String(row.ann_date || "") > String(prev.ann_date || "")) byEnd.set(k, row)
+    }
+    const sortedPeriods = Array.from(byEnd.entries()).sort((a, b) => b[0].localeCompare(a[0])).map(([, v]) => v)
+    if (me && sortedPeriods.length) {
+      // 趋势：近三期净利同比是升还是降
+      const yoys = sortedPeriods.slice(0, 3).map((r) => num(r.netprofit_yoy)).filter((v) => v !== null)
+      if (yoys.length >= 2) me.__trend = yoys[0] > yoys[1] ? 1 : yoys[0] < yoys[1] ? -1 : 0
+    }
+
+    const history = await readFundHistory(upper)
+    const out = buildFundamentals({
+      code: upper,
+      name: String(basic.name || (me && me.name) || upper),
+      industry,
+      peerCount: effectivePeers.length,
+      period: snap.period,
+      periodLabel: snap.periodLabel,
+      announceDate: me ? String(me.ann_date || "") : "",
+      priceDate: snap.tradeDate,
+      me, peers: effectivePeers, meDb, peerDb,
+      periodRows: sortedPeriods,
+      history,
+      cachedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+    })
+    out.warnings = (out.warnings || []).concat(extraWarnings, snap.warnings || [])
+    // 告诉前端这一版用的是哪种基准（同业 / 全市场），界面要如实标注
+    out.peerBaseline = peerLabel.kind === "industry" ? "industry" : "market"
+    // 落快照：只在拿到分时写，避免把「数据不足」也记进历史污染升降对比
+    if (out.total !== null) {
+      const kept = await appendFundHistory(upper, {
+        period: out.period, periodLabel: out.periodLabel, total: out.total, grade: out.grade,
+        at: new Date().toISOString().slice(0, 10),
+      })
+      out.history = kept
+      const prev = kept.find((h) => h.period !== out.period) || null
+      out.delta = prev && prev.total !== null ? {
+        periodLabel: prev.periodLabel || prev.period,
+        total: prev.total,
+        change: Math.round((out.total - prev.total) * 100) / 100,
+      } : null
+    }
+    return out
+  }
+
   const routes = [
     {
       kind: "exact",
@@ -2828,6 +3146,32 @@ function apply(ctx, config) {
         } catch (e) {
           if (e && e.code === "ENOENT") { writeJson(res, 200, { code, charts: [], total: 0 }); return }
           writeJson(res, 500, { error: String(e).slice(0, 200) })
+        }
+      },
+    },
+    {
+      // 基本面评级（v0.58.0）：行业横截面分位 + 风险标记。
+      // 定位是「排雷与理解质地」，不是买卖信号——响应里始终带 caveat，前端必须常驻展示。
+      kind: "exact",
+      path: "/dsh-invest/api/fundamentals",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const url = new URL(req.url ?? "/", "http://localhost")
+        const code = String(queryParam(url, "code") || "").trim().toUpperCase()
+        if (!/^\d{6}\.(SH|SZ|BJ)$/.test(code)) { writeJson(res, 400, { error: "股票代码格式错误：" + code }); return }
+        const force = /[?&]refresh=1(?:&|$)/.test(String(req.url || ""))
+        try {
+          writeJson(res, 200, await fundamentalsFor(code, force))
+        } catch (e) {
+          // 取数失败也要把契约字段补齐，前端才能稳定渲染错误态而不是炸掉
+          writeJson(res, 200, {
+            ok: false, error: String(e && e.message ? e.message : e).slice(0, 300),
+            code, name: code, industry: "", peerCount: 0, period: "", periodLabel: "",
+            announceDate: "", priceDate: "", total: null, grade: "—", gradeLabel: "数据不足",
+            coverage: "0/5 维", dims: [], flags: [], warnings: [], history: [], delta: null,
+            caveat: CAVEAT, cachedAt: "",
+          })
         }
       },
     },

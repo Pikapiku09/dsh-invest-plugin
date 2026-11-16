@@ -3,7 +3,7 @@ import type {
   HoldingsQuotesResponse, HoldingsRefreshQuotesResponse, HoldingsResponse, IndexResponse, Job, ModelSettingsResponse, ModelSettingsSaveInput,
   HoldingPosition, HoldingsAccount, StockResolveResponse, TaskTemplate,
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
-  StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse,
+  StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, FundamentalsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -113,6 +113,12 @@ export const api = {
   /** 按 6 位代码归集 charts 目录里的图表（个股知识库「相关图表」区） */
   stockCharts: (code: string) => request<StockChartsResponse>(
     `${BASE}/stock-charts?code=${encodeURIComponent(code)}`,
+  ),
+  /** 基本面评级（v0.58.0）：行业横截面分位 + 风险标记；refresh=true 强制重拉全市场快照 */
+  fundamentals: (code: string, refresh = false) => request<FundamentalsResponse>(
+    `${BASE}/fundamentals?code=${encodeURIComponent(code)}${refresh ? '&refresh=1' : ''}`,
+    undefined,
+    120_000,
   ),
   // ===== 判断质量回测（v0.44.0）：结构化结论 × 日线 → 5/20 日命中率 =====
   backtest: () => request<BacktestResponse>(`${BASE}/backtest`, undefined, 120_000),

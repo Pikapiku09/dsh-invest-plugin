@@ -919,3 +919,20 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
 .watch-daily-progress .job-progress-copy small { color: var(--muted); font-size: 11px; }
 .watch-daily-progress.done { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
 
+/* ===== 个股知识库页签（v0.58.0：基本面 / 技术面 / 时间线）===== */
+/* 只服务于两段式知识库的放大层；存量旧稿仍走原来的整篇渲染，不出现这些元素 */
+.stock-note-scope { margin: 0 0 14px; color: #7f92a6; font-size: 11px; line-height: 1.7; }
+.stock-note-tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 4px; margin: 0 0 18px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: #0d141c; }
+.stock-note-tab { flex: 1; min-width: 0; padding: 8px 4px; border: 0; border-radius: 7px; background: transparent; color: #7d8fa2; font-size: 12px; font-weight: 550; white-space: nowrap; cursor: pointer; transition: background .15s ease, color .15s ease; }
+.stock-note-tab:hover { color: var(--text); background: rgba(255, 255, 255, .04); }
+.stock-note-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.stock-note-tab.active { background: var(--accent-soft); color: #cfe0ff; box-shadow: inset 0 0 0 1px rgba(111, 159, 248, .28); }
+.stock-note-panel { min-width: 0; }
+.stock-note-panel[hidden] { display: none !important; }
+.stock-note-panel > .markdown-body > h4:first-child { margin-top: 0; }
+.theme-light .stock-note-scope { color: #6b7b90; }
+.theme-light .stock-note-tabs { border-color: #dbe3ee; background: #eef3f9; }
+.theme-light .stock-note-tab { color: #5f7085; }
+.theme-light .stock-note-tab:hover { color: #26313f; background: rgba(36, 56, 84, .06); }
+.theme-light .stock-note-tab.active { background: #ffffff; color: #2b3849; box-shadow: inset 0 0 0 1px #b9c9de; }
+

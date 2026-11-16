@@ -2,7 +2,7 @@ import { LEDGER_DEFAULT_COLUMNS } from './types';
 import type {
   ConclusionRecord, HoldingsDraftResponse, HoldingsResponse, IndexResponse, Job,
   ModelSettingsResponse, TaskTemplate, WorkbenchView, WatchlistResponse, LedgerColKey, BacktestResponse, ConclusionAuditResponse, WatchDailyStatus,
-  StockNoteMeta, StockNoteDetail, UpdateCheckResponse,
+  StockNoteMeta, StockNoteDetail, UpdateCheckResponse, FundamentalsResponse,
 } from './types';
 import type { WatchDistMode } from './watch-metrics';
 
@@ -254,6 +254,11 @@ export interface AppState {
   watchDailyLoading: boolean;
   watchDailySaving: boolean;
   watchDailyRunning: boolean;
+  // ===== 基本面评级（v0.58.0）：行业横截面分位 + 风险标记（排雷与理解质地，非买卖信号）=====
+  /** 当前选中标的的评级；切换标的时立即置空，避免旧卡片冒充新标的 */
+  fundamentals: FundamentalsResponse | null;
+  fundamentalsLoading: boolean;
+  fundamentalsError: string;
   // ===== 持仓工作区「当前账本」表格偏好（localStorage 持久化）=====
   ledgerColumns: LedgerColKey[];
   ledgerSort: { key: LedgerColKey; dir: 'asc' | 'desc' } | null;
@@ -282,4 +287,5 @@ export const state: AppState = {
   watchlistSaving: false, watchlistError: '', watchEditOpen: false,
   watchDistMode: 'target', ledgerColumns: readLedgerColumns(), ledgerSort: readLedgerSort(),
   watchDaily: null, watchDailyLoading: false, watchDailySaving: false, watchDailyRunning: false,
+  fundamentals: null, fundamentalsLoading: false, fundamentalsError: '',
 };
