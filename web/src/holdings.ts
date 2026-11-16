@@ -122,6 +122,31 @@ function quotesNotice(state: AppState): string {
   return state.holdingsQuotesInfo ? `<p class="quotes-notice">${icon('check', 12)}${escapeHtml(state.holdingsQuotesInfo)}</p>` : '';
 }
 
+/**
+ * 账本更新时间的常驻徽标（v0.54.0）
+ *
+ * 原来只有「当前持仓」卡片底部一小行灰字，等于没提示。账本里的现价是会过期的东西，
+ * 放在「当前账本」标题旁才对得上它的重要性：超过 3 天没写入就转琥珀色并带上天数，
+ * 提示该刷新现价了。时间来源是账本的 updated_at——确认持仓、刷新现价、档案同步都会更新它。
+ */
+function ledgerUpdatedBadge(state: AppState): string {
+  const raw = state.holdings?.updated_at;
+  if (!raw) {
+    return `<span class="ledger-updated is-unknown" title="账本还没写入过：完成一次「确认并写入账本」后这里会显示更新时间">${icon('clock', 13)}更新于 —</span>`;
+  }
+  const then = Date.parse(raw);
+  if (!Number.isFinite(then)) {
+    return `<span class="ledger-updated is-unknown" title="账本时间字段格式无法识别：${escapeHtml(String(raw))}">${icon('clock', 13)}更新于 ${escapeHtml(String(raw))}</span>`;
+  }
+  const days = Math.floor((Date.now() - then) / 86400000);
+  const stale = days >= 3;
+  const suffix = stale ? `（${days} 天前）` : '';
+  const tip = stale
+    ? `账本最后一次写入是 ${days} 天前，现价可能已过期——建议点「一键刷新现价」`
+    : '账本最后一次写入时间：确认持仓、刷新现价、档案同步都会更新它';
+  return `<span class="ledger-updated${stale ? ' is-stale' : ''}" title="${escapeHtml(tip)}">${icon('clock', 13)}更新于 ${escapeHtml(formatDateTime(raw, true))}${escapeHtml(suffix)}</span>`;
+}
+
 function codeKey(code: unknown): string {
   return String(code ?? '').trim().toUpperCase();
 }
@@ -296,7 +321,7 @@ function currentSummary(state: AppState): string {
   return `<section class="holdings-summary">
     <article><span>账户总资产</span><strong>${escapeHtml(accountValue(account.total_asset ?? account.totalAsset ?? estimatedTotal(state)))}</strong><small>权重分母；未记录时按现金+持仓市值估算</small></article>
     <article><span>可用资金</span><strong>${escapeHtml(accountValue(account.available_cash ?? account.cash ?? account.availableCash))}</strong><small>确认草稿后随账户更新</small></article>
-    <article><span>当前持仓</span><strong>${formatNumber(positions.length)}<em>只</em></strong><small>更新于 ${formatDateTime(state.holdings?.updated_at, true)}</small></article>
+    <article><span>当前持仓</span><strong>${formatNumber(positions.length)}<em>只</em></strong><small>账本中实时生效的持仓，更新时间见「当前账本」</small></article>
     <article><span>持仓市值</span><strong>${hasMetrics ? escapeHtml(MONEY_FMT.format(marketSum)) : '—'}</strong><small>Σ 股数 × 现价</small></article>
     <article><span>累计持仓盈亏</span><strong>${hasMetrics ? signedCell(pnlSum) : '—'}</strong><small>Σ 股数 × (现价 − 成本)</small></article>
   </section>`;
@@ -338,7 +363,7 @@ function currentLedger(state: AppState): string {
     <div class="ledger-col-panel"><p class="field-help">用 ← → 调整列的先后展示顺序；顺序与排序偏好保存在本机浏览器。</p>
       <div class="ledger-col-list">${cols.map((c, idx) => `<div class="ledger-col-item"><span>${escapeHtml(c.label)}</span><span class="ledger-col-btns"><button class="icon-button small" data-action="ledger-col-move" data-key="${c.key}" data-dir="-1" ${idx === 0 ? 'disabled' : ''} aria-label="上移${escapeHtml(c.label)}">←</button><button class="icon-button small" data-action="ledger-col-move" data-key="${c.key}" data-dir="1" ${idx === cols.length - 1 ? 'disabled' : ''} aria-label="下移${escapeHtml(c.label)}">→</button></span></div>`).join('')}</div>
       <button class="text-button" data-action="ledger-col-reset">${icon('refresh', 13)}恢复默认顺序</button></div></details>`;
-  const headingActions = `<div class="ledger-actions">${colSettings}${quotesButton(state, positions.length > 0)}<button class="button button-secondary" data-action="edit-holdings" ${state.holdingsImporting ? 'disabled' : ''}>${icon('edit', 14)}编辑现有表格</button></div>`;
+  const headingActions = `<div class="ledger-actions">${ledgerUpdatedBadge(state)}${colSettings}${quotesButton(state, positions.length > 0)}<button class="button button-secondary" data-action="edit-holdings" ${state.holdingsImporting ? 'disabled' : ''}>${icon('edit', 14)}编辑现有表格</button></div>`;
   const sortHint = sort ? `<div class="ledger-sort-hint">当前排序：${escapeHtml(LEDGER_COLS[sort.key]?.label || sort.key)} ${sort.dir === 'asc' ? '从小到大 ↑' : '从大到小 ↓'} · 再点一次表头切换方向，第三次恢复账本原顺序</div>` : '';
   return `<section class="panel current-ledger">${sectionHeading('当前账本', '已生效数据；列顺序与排序可自定义，市值／盈亏／权重按 成本·股数·现价 自动重算', headingActions)}
      ${state.holdingsError ? `<div class="inline-warning">${icon('alert', 15)}刷新失败，当前为上次读取的数据：${escapeHtml(state.holdingsError)}</div>` : ''}

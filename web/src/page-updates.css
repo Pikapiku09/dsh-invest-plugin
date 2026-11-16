@@ -465,3 +465,26 @@
 /* 阅读器图表画廊：知识库放大层按标的归集的图表，两列自适应铺开 */
 .reader-chart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; margin-top: 8px; }
 .reader-chart-grid .report-chart { margin: 0; }
+
+/* 持仓工作区：账本更新时间常驻「当前账本」标题旁（v0.54.0） */
+.ledger-updated {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--panel-2, rgba(255, 255, 255, .03));
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.ledger-updated .icon { flex: none; color: var(--muted); }
+/* 超过 3 天没写入：现价大概率过期，转琥珀色提醒去刷新 */
+.ledger-updated.is-stale { border-color: rgba(217, 154, 43, .42); background: rgba(217, 154, 43, .1); color: #d99a2b; font-weight: 600; }
+.ledger-updated.is-stale .icon { color: #d99a2b; }
+.ledger-updated.is-unknown { color: var(--muted); }
+.theme-light .ledger-updated { background: #f2f5f9; border-color: #dde5ee; color: #4c5c70; }
+.theme-light .ledger-updated.is-stale { background: rgba(180, 120, 20, .1); border-color: rgba(180, 120, 20, .42); color: #a8760f; }
+.theme-light .ledger-updated.is-unknown { color: #8794a7; }
