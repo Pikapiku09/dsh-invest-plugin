@@ -97,6 +97,8 @@ function apply(ctx, config) {
   const PLUGIN_CONFIG = (config && typeof config === "object") ? config : {}
   const ROUTES_FILE = BASE_DIR + "/.dsh-invest/routes.json"
   const SETTINGS_FILE = BASE_DIR + "/.dsh-invest/settings.json"
+  // 策略健康快照（LihuQuantify → 工作台）支持的契约版本；版本不符就拒，不透传未知结构
+  const SUPPORTED_HEALTH_SCHEMA = 1
   // 最近任务持久化（跨 web 关闭/DSH 重启保留最近 5 个）
   const RECENT_JOBS_FILE = BASE_DIR + "/.dsh-invest/store/recent-jobs.json"
   const HOLDINGS_AUDIT = BASE_DIR + "/.dsh-invest/store/holdings_audit.jsonl"
@@ -3118,6 +3120,74 @@ function apply(ctx, config) {
         } catch (e) {
           writeJson(res, 500, { error: String(e).slice(0, 200) })
         }
+      },
+    },
+    {
+      // 策略健康（v0.59.0，2026-11-16）：只读消费 LihuQuantify 导出的契约快照。
+      //
+      // 为什么是「读文件」而不是「连 Lihu 的库或 HTTP」：
+      //   - Lihu 前端把 /api/ 与 /static/ 全写成根绝对路径，任何前缀反代都会打断它的 SPA；
+      //   - Lihu 没有 CORS，浏览器跨源 fetch 会被直接拦；
+      //   - DuckDB 由 Lihu 自己的 scheduler 独占写，第三方读会引入锁与漂移。
+      // 唯一低风险耦合面 = 它主动导出的 outputs/strategy_health.json（schema_version=1）。
+      //
+      // 账本边界（硬规则）：本接口只反映 Lihu 的**模拟盘**（account_type="paper"），
+      // 绝不与 BASE_DIR/.dsh-invest/持仓.json（实盘）混账；指向实盘会被这里的护栏拒掉。
+      kind: "exact",
+      path: "/dsh-invest/api/strategy-health",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const settings = await readJsonFile(SETTINGS_FILE, {})
+        const cfg = (settings && settings.strategyHealth) || {}
+        const url = new URL(req.url ?? "/", "http://localhost")
+        // 路径三级回退：settings.json → 环境变量 → 默认。不把 E:\LihuQuantify 写死在
+        // 代码里（跨仓硬编码是已知的隐性耦合来源，见 merge-survey/C）。
+        const target = String(
+          queryParam(url, "path") || cfg.path
+          || process.env.DSH_INVEST_LIHU_HEALTH
+          || "E:/LihuQuantify/outputs/strategy_health.json",
+        )
+        const body = {
+          ok: false,
+          path: target,
+          supported_schema: SUPPORTED_HEALTH_SCHEMA,
+          stale_hours: null,
+          data: null,
+        }
+        // 数据缺失/损坏一律回 200 + ok:false：这是「状态查询」接口，
+        // 让前端渲染可读的失败态，而不是在控制台里留一个 500。
+        let raw
+        try {
+          raw = await fsp.readFile(target, "utf8")
+        } catch {
+          body.reason = "missing"
+          body.hint = "先在 LihuQuantify 跑：python scripts/export_strategy_health.py"
+          writeJson(res, 200, body); return
+        }
+        let data
+        try { data = JSON.parse(raw) } catch {
+          body.reason = "invalid_json"
+          writeJson(res, 200, body); return
+        }
+        if (!data || typeof data !== "object" || data.schema_version !== SUPPORTED_HEALTH_SCHEMA) {
+          body.reason = "schema_mismatch"
+          body.found_schema = (data && data.schema_version) ?? null
+          writeJson(res, 200, body); return
+        }
+        if (data.account_type !== "paper") {
+          body.reason = "not_paper_account"
+          body.found_account_type = data.account_type ?? null
+          body.hint = "该快照不是模拟盘，拒绝展示以免与实盘账本混账"
+          writeJson(res, 200, body); return
+        }
+        try {
+          const st = await fsp.stat(target)
+          body.stale_hours = Math.round((Date.now() - st.mtimeMs) / 36e5 * 10) / 10
+        } catch { /* 拿不到 mtime 不影响主数据 */ }
+        body.ok = true
+        body.data = data
+        writeJson(res, 200, body)
       },
     },
     {

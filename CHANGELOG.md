@@ -2,6 +2,31 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.59.0（2026-11-16）
+
+**投研工作台接入 LihuQuantify 模拟盘健康度（只读契约）+ 行为实证回灌提示词**
+
+用户定调：dsh-invest 是主体入口，LihuQuantify 是补充（跑模拟盘验证收益）。
+合并形态定为「dsh-invest 原生视图 + 只读数据契约」，**不共用账本、不嵌 iframe、不重写语言**。
+
+- **新增路由 GET /dsh-invest/api/strategy-health**：只读消费 LihuQuantify 导出的
+  `outputs/strategy_health.json`（`schema_version=1`）。为什么读文件而不是连它的库或接口：
+  Lihu 前端把 `/api/`、`/static/` 全写成根绝对路径，任何前缀反代都会打断它的 SPA；
+  它没有 CORS；DuckDB 由它自己的 scheduler 独占写。读一份它主动导出的快照是唯一低风险耦合面。
+- **失败面比成功面重要**：文件缺失 / JSON 损坏 / schema 版本不符 / 不是模拟盘 →
+  一律返 **200 + `ok:false` + 可读 reason**，让前端渲染失败态而不是白屏。
+- **账本护栏**：`account_type` 不是 `"paper"` 直接拒并回 `data: null`——
+  Lihu 是模拟盘，`.dsh-invest/持仓.json` 是实盘，两边严禁混账（`host.js` 有对应硬规则）。
+- **路径三级回退**：`settings.json → strategyHealth.path` → 环境变量 → 默认。
+  不把 `E:\LihuQuantify` 写死在代码里（跨仓硬编码是已知的隐性耦合来源）。
+- **KB_BEHAVIOR 回灌本轮实证**（337→544 字）：市值/成长偏好不好使（122 波上买入市值分位中位
+  93.3%、ROE 82.1%，但盈亏波六维 p 全 >0.24）；小市值效应不迁移（CherryClaw 下 seed42 +32.5pp
+  → 实盘策略 IR −0.25pp、1/3 种子反转）；五日观察哨加「已有止损纪律时本项重叠」的限定。
+  `CHECKLIST` 第 9 项同步补适用前提。`P_DEEP`/`P_SWING` 压缩 271/219 字腾预算，未删任何实证数字。
+- **测试 232 通过**（新增 `test/strategy-health-api.test.js` 7 条，覆盖缺文件 / 损坏 /
+  schema 不符 / 非模拟盘护栏 / 路径回退 / loopback 403 / 方法 405）。
+- 一处澄清：`src/host.js`（动态插件形态，710 行）**不注册任何 web 路由**，
+  所以本路由无需镜像——此前「两个文件必须同步」的说法对路由部分不成立。
 ## v0.58.0（2026-11-16）
 
 **基本面评级：用行业横向分位看清公司质地（排雷用，不是买卖信号）**
