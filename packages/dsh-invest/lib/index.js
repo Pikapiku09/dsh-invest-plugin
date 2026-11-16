@@ -49,6 +49,10 @@ const INVEST_GUIDANCE = "本机已安装 dsh-invest 插件（A 股多角色投�
 function writeJson(res, status, body) {
   res.statusCode = status
   res.setHeader("content-type", "application/json")
+  // v0.54.1：这些接口全是「读当前状态」，浏览器不得缓存。
+  // 之前没有任何缓存头，重定向/启发式缓存会让「刷新现价」后前端仍读回旧账本，
+  // 表现为数字不跳动——数据其实已经落盘了。
+  res.setHeader("cache-control", "no-store, max-age=0")
   res.end(JSON.stringify(body))
 }
 

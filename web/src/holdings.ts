@@ -83,15 +83,27 @@ export function computeMetrics(position: HoldingPosition, totalAsset: number | n
   return { market_value: marketValue, pnl, pnl_pct: pnlPct, weight_pct: weightPct };
 }
 
-/** 账户总资产：优先账本显式字段，缺失时按 可用资金 + Σ市值 估算 */
-export function holdingsTotalAsset(positions: HoldingPosition[], account?: HoldingsAccount | null): number | null {
+/** 账本里记录的账户总资产（导入时的一次性快照，价格刷新不会改变它） */
+export function recordedTotalAsset(account?: HoldingsAccount | null): number | null {
   const explicit = numeric(account?.total_asset ?? account?.totalAsset);
-  if (explicit !== null && explicit > 0) return explicit;
+  return explicit !== null && explicit > 0 ? explicit : null;
+}
+
+/**
+ * 账户总资产（v0.54.1 改为实时口径）
+ *
+ * 口径：可用资金 + Σ(股数 × 现价)，所以「一键刷新现价」之后它会立刻跟着变。
+ * 之前优先取账本记录的 total_asset——那是导入时的一次性快照，价格怎么变它都不动，
+ * 于是用户看到「刷新现价后总资产没有任何跳动」，而按它当分母的权重也一起失真。
+ * 只有在缺现金字段、或所有持仓都取不到现价时才回退到记录值。
+ */
+export function holdingsTotalAsset(positions: HoldingPosition[], account?: HoldingsAccount | null): number | null {
   const cash = numeric(account?.cash ?? account?.available_cash ?? account?.availableCash);
-  if (cash === null) return null;
   const marketSum = positions.reduce((sum, p) => sum + (computeMetrics(p, null).market_value ?? 0), 0);
-  const total = cash + marketSum;
-  return total > 0 ? total : null;
+  const hasMarket = positions.some((p) => computeMetrics(p, null).market_value !== null);
+  const live = cash !== null && hasMarket ? cash + marketSum : null;
+  if (live !== null && live > 0) return live;
+  return recordedTotalAsset(account);
 }
 
 const MONEY_FMT = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -300,17 +312,6 @@ function accountValue(value: unknown): string {
   return Number.isFinite(number) ? formatNumber(number) : String(value);
 }
 
-function estimatedTotal(state: AppState): number | null {
-  const account = state.holdings?.account || {};
-  const cash = Number(account.available_cash ?? account.cash ?? account.availableCash);
-  if (!Number.isFinite(cash)) return null;
-  const cost = (state.holdings?.positions || []).reduce((sum, position) => {
-    const shares = Number(position.shares), price = Number(position.cost);
-    return Number.isFinite(shares) && Number.isFinite(price) ? sum + shares * price : sum;
-  }, 0);
-  return cash + cost;
-}
-
 function currentSummary(state: AppState): string {
   const positions = state.holdings?.positions || [];
   const account = state.holdings?.account || {};
@@ -318,8 +319,17 @@ function currentSummary(state: AppState): string {
   const hasMetrics = positions.some((p) => computeMetrics(p, totalAsset).market_value !== null);
   const marketSum = positions.reduce((sum, p) => sum + (computeMetrics(p, totalAsset).market_value ?? 0), 0);
   const pnlSum = positions.reduce((sum, p) => sum + (computeMetrics(p, totalAsset).pnl ?? 0), 0);
+  // 总资产＝可用资金＋持仓市值（实时）；账本里那个记录值只是导入时的快照，差异大时摆出来提醒
+  const recorded = recordedTotalAsset(account);
+  const totalNote = (() => {
+    if (totalAsset === null) return '未记录可用资金，暂时无法按实时口径估算';
+    if (recorded === null) return '可用资金 + 持仓市值，随「一键刷新现价」实时变化';
+    const gap = recorded - totalAsset;
+    if (Math.abs(gap) < Math.max(1, totalAsset * 0.005)) return '可用资金 + 持仓市值，随「一键刷新现价」实时变化';
+    return `实时口径；账本记录 ${formatNumber(recorded)}（差 ${formatNumber(Math.round(gap * 100) / 100)}），已在原持仓页按新价重算`;
+  })();
   return `<section class="holdings-summary">
-    <article><span>账户总资产</span><strong>${escapeHtml(accountValue(account.total_asset ?? account.totalAsset ?? estimatedTotal(state)))}</strong><small>权重分母；未记录时按现金+持仓市值估算</small></article>
+    <article><span>账户总资产</span><strong>${escapeHtml(accountValue(totalAsset))}</strong><small>${escapeHtml(totalNote)}</small></article>
     <article><span>可用资金</span><strong>${escapeHtml(accountValue(account.available_cash ?? account.cash ?? account.availableCash))}</strong><small>确认草稿后随账户更新</small></article>
     <article><span>当前持仓</span><strong>${formatNumber(positions.length)}<em>只</em></strong><small>账本中实时生效的持仓，更新时间见「当前账本」</small></article>
     <article><span>持仓市值</span><strong>${hasMetrics ? escapeHtml(MONEY_FMT.format(marketSum)) : '—'}</strong><small>Σ 股数 × 现价</small></article>
@@ -490,7 +500,7 @@ function draftReview(state: AppState): string {
 }
 
 export function renderHoldings(state: AppState): string {
-  const header = pageHeader('持仓工作区', '集中维护账户与持仓；市值／盈亏／权重按 成本·股数·现价 自动重算，权重＝市值÷账户总资产。所有来源都经过草稿、差异预览、人工确认后才写入。', `<button class="button button-secondary" data-action="refresh-holdings" ${state.holdingsLoading || state.holdingsConfirming ? 'disabled' : ''}>${icon('refresh', 14)}刷新账本</button>`);
+  const header = pageHeader('持仓工作区', '集中维护账户与持仓；市值／盈亏／权重按 成本·股数·现价 自动重算，权重＝市值÷账户总资产。所有来源都经过草稿、差异预览、人工确认后才写入。', `<button class="button button-secondary" data-action="refresh-holdings" ${state.holdingsLoading || state.holdingsConfirming ? 'disabled' : ''}>${state.holdingsLoading ? '<span class="spinner"></span>刷新中…' : `${icon('refresh', 14)}刷新账本`}</button>`);
   if (state.holdingsDraftLoading && !state.holdingsDraft) return header + skeletonPage();
   if (state.holdingsDraft) return header + draftReview(state);
   return header + currentSummary(state) + currentLedger(state) + importSources(state);

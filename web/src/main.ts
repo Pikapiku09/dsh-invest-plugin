@@ -270,10 +270,28 @@ async function loadIndex(): Promise<void> {
   finally { state.indexLoading = false; render(); }
 }
 
-async function loadHoldings(): Promise<void> {
+/**
+ * 读账本。withFeedback=true 时给用户明确反馈（右下角 toast + 按钮加载态）。
+ *
+ * v0.54.1：之前这个函数是纯静默的——本地接口几十毫秒就返回，按钮的 disabled 一闪而过，
+ * 用户点「刷新账本」观感上就是「按了没反应」。现在按钮会先显示「刷新中…」，
+ * 完成后 toast 报出持仓只数与账本更新时间。
+ */
+async function loadHoldings(withFeedback = false): Promise<void> {
+  if (state.holdingsLoading) return;
   state.holdingsLoading = true; state.holdingsError = '';
-  try { state.holdings = await api.holdings(); }
-  catch (error) { state.holdingsError = errorMessage(error); }
+  if (withFeedback) render();
+  try {
+    state.holdings = await api.holdings();
+    if (withFeedback) {
+      const count = state.holdings?.positions?.length || 0;
+      const stamp = state.holdings?.updated_at ? formatDateTime(state.holdings.updated_at, true) : '未知';
+      toast(`账本已刷新：${count} 只持仓 · 账本更新于 ${stamp}`, 'success');
+    }
+  } catch (error) {
+    state.holdingsError = errorMessage(error);
+    if (withFeedback) toast(`账本刷新失败：${state.holdingsError}`, 'error');
+  }
   finally { state.holdingsLoading = false; render(); }
 }
 
@@ -1939,7 +1957,7 @@ document.addEventListener('click', (event) => {
   else if (action === 'refresh-jobs') void loadJobs();
   else if (action === 'clear-run-filters') { state.runQuery = ''; state.runMode = 'all'; state.runStatus = 'all'; state.runHideBackfill = false; render(); }
   else if (action === 'save-model-settings') void saveModelSettings();
-  else if (action === 'refresh-holdings') void loadHoldings();
+  else if (action === 'refresh-holdings') void loadHoldings(true);
   else if (action === 'edit-holdings') void editCurrentHoldings(target.dataset.code || '');
   else if (action === 'add-manual-position') void addManualPosition();
   else if (action === 'discard-holdings-draft') discardHoldingsDraft();
