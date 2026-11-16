@@ -30,6 +30,8 @@ const viewElement = document.getElementById('view')!;
 const pollingJobs = new Set<string>();
 const localJobMetadata = new Map<string, Partial<Job>>();
 let archiveRequestSerial = 0;
+/** 账本读取的请求序号（v0.55.1）：并发/重入时只让最后一次请求写状态，防止旧响应覆盖新结果 */
+let holdingsSerial = 0;
 /** 全量重绘时需要保持滚动位置的滚动容器（标的档案左侧栏、标的索引列表、账本列设置、追问会话与报告列表） */
 const SCROLL_KEEP_SELECTOR = '.archive-browser, .code-list, .ledger-col-list, .ask-thread, .ask-report-list';
 /** 上一次渲染的视图：同视图重绘保持滚动位置，切换视图回到顶部 */
@@ -276,23 +278,34 @@ async function loadIndex(): Promise<void> {
  * v0.54.1：之前这个函数是纯静默的——本地接口几十毫秒就返回，按钮的 disabled 一闪而过，
  * 用户点「刷新账本」观感上就是「按了没反应」。现在按钮会先显示「刷新中…」，
  * 完成后 toast 报出持仓只数与账本更新时间。
+ *
+ * v0.55.1：**去掉了 `if (state.holdingsLoading) return;` 的入口闸门**。
+ * 那行闸门 + 按钮 disabled 凑成了死锁：只要某次请求没返回（服务重启中、连接半开），
+ * loading 标志就永远停在 true，按钮是灰的点不动，再进来又被闸门挡掉，
+ * 页面只能靠刷新才能恢复（2026-11-16 实测踩到）。
+ * 现在允许并发/重入——后到的请求直接覆盖前者结果，配合 api 层 30 秒超时，永远不会卡死。
  */
 async function loadHoldings(withFeedback = false): Promise<void> {
-  if (state.holdingsLoading) return;
+  const serial = ++holdingsSerial;
   state.holdingsLoading = true; state.holdingsError = '';
   if (withFeedback) render();
   try {
-    state.holdings = await api.holdings();
+    const data = await api.holdings();
+    if (serial !== holdingsSerial) return; // 已有更新的请求在跑，丢弃这次结果
+    state.holdings = data;
     if (withFeedback) {
-      const count = state.holdings?.positions?.length || 0;
-      const stamp = state.holdings?.updated_at ? formatDateTime(state.holdings.updated_at, true) : '未知';
+      const count = data?.positions?.length || 0;
+      const stamp = data?.updated_at ? formatDateTime(data.updated_at, true) : '未知';
       toast(`账本已刷新：${count} 只持仓 · 账本更新于 ${stamp}`, 'success');
     }
   } catch (error) {
+    if (serial !== holdingsSerial) return;
     state.holdingsError = errorMessage(error);
     if (withFeedback) toast(`账本刷新失败：${state.holdingsError}`, 'error');
+  } finally {
+    // 只有最后一次请求有资格清理加载态，避免先返回的请求把后来者的转圈关掉
+    if (serial === holdingsSerial) { state.holdingsLoading = false; render(); }
   }
-  finally { state.holdingsLoading = false; render(); }
 }
 
 // ===== 标的档案（观察 + 持仓统一监控）=====
@@ -1036,7 +1049,8 @@ function navigate(view: WorkbenchView): void {
   if (view === 'ask') void loadAskStocks();
   if (view === 'backtest' && !state.backtest && !state.backtestLoading) void loadBacktest(false);
   if (view === 'holdings') {
-    if (!state.holdings && !state.holdingsLoading) void loadHoldings();
+    // v0.55.1：不再因为「正在加载」就跳过——之前一旦卡在 loading=true 就永远进不来
+    if (!state.holdings) void loadHoldings();
     void loadJobs();
     void restoreRememberedHoldingsDraft();
   }

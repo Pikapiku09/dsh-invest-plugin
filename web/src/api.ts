@@ -9,11 +9,33 @@ import type {
 const BASE = '/dsh-invest/api';
 const CHART_BASE = '/api/dsh-invest/chart';
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { Accept: 'application/json', ...init?.headers },
-  });
+/**
+ * 请求超时（v0.55.1）
+ *
+ * 之前所有请求都不带超时：一旦服务端没回（重启中、连接半开、代理吞包），
+ * fetch 就会一直挂着，调用方的 loading 标志永远停在 true，界面卡在骨架屏且按钮是灰的，
+ * 用户除了刷新页面没有任何出路。现在默认 30 秒兜底，慢接口按需放宽。
+ */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+async function request<T>(url: string, init?: RequestInit, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+  const controller = new AbortController();
+  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      signal: init?.signal ?? controller.signal,
+      headers: { Accept: 'application/json', ...init?.headers },
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒未响应）：${url.replace(location.origin, '')}`);
+    }
+    throw error;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
   let payload: unknown;
   try {
     payload = await response.json();
@@ -24,6 +46,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     ? String((payload as { error: unknown }).error) : '';
   if (!response.ok || error) throw new Error(error || `请求失败（HTTP ${response.status}）`);
   return payload as T;
+}
+
+/** 慢接口用：把超时放宽到指定毫秒（0 = 不设超时） */
+function postSlow<T>(url: string, body?: unknown, timeoutMs = 180_000): Promise<T> {
+  return request<T>(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }, timeoutMs);
 }
 
 function post<T>(url: string, body?: unknown): Promise<T> {
@@ -37,14 +68,15 @@ function post<T>(url: string, body?: unknown): Promise<T> {
 export const api = {
   index: () => request<IndexResponse>(`${BASE}/index`),
   holdings: () => request<HoldingsResponse>(`${BASE}/holdings`),
-  importHoldings: (input: HoldingsImportInput) => post<HoldingsDraftResponse>(`${BASE}/holdings/import`, input),
+  /** 截图 OCR 识别可能要 1–2 分钟，超时放宽到 3 分钟 */
+  importHoldings: (input: HoldingsImportInput) => postSlow<HoldingsDraftResponse>(`${BASE}/holdings/import`, input, 180_000),
   holdingsDraft: (id: string) => request<HoldingsDraftResponse>(`${BASE}/holdings/draft?id=${encodeURIComponent(id)}`),
   confirmHoldings: (input: { draftId: string; positions: HoldingPosition[]; account?: HoldingsAccount }) =>
     post<HoldingsConfirmResponse>(`${BASE}/holdings/confirm`, input),
   /** 按代码批量取腾讯实时现价；返回 prices 以完整代码（如 603606.SH）为键 */
-  holdingsQuotes: (codes: string[]) => post<HoldingsQuotesResponse>(`${BASE}/holdings/quotes`, { codes }),
+  holdingsQuotes: (codes: string[]) => postSlow<HoldingsQuotesResponse>(`${BASE}/holdings/quotes`, { codes }, 60_000),
   /** 直接按行情刷新账本现价（不生成草稿、无需人工确认） */
-  holdingsRefreshQuotes: () => post<HoldingsRefreshQuotesResponse>(`${BASE}/holdings/quotes/refresh`, {}),
+  holdingsRefreshQuotes: () => postSlow<HoldingsRefreshQuotesResponse>(`${BASE}/holdings/quotes/refresh`, {}, 60_000),
   modelSettings: () => request<ModelSettingsResponse>(`${BASE}/model-settings`),
   saveModelSettings: (input: ModelSettingsSaveInput) =>
     post<{ ok: true; settings?: ModelSettingsResponse } & ModelSettingsSaveInput>(`${BASE}/model-settings`, input),
@@ -67,7 +99,7 @@ export const api = {
   // ===== 个股分析知识库（报告按个股切段归集 + 二次整理）=====
   stockNotes: () => request<StockNotesResponse>(`${BASE}/stock-notes`),
   stockNote: (code: string) => request<StockNoteDetail>(`${BASE}/stock-note?code=${encodeURIComponent(code)}`),
-  stockNotesRebuild: () => post<StockNotesResponse & { ok: true }>(`${BASE}/stock-notes/rebuild`, {}),
+  stockNotesRebuild: () => postSlow<StockNotesResponse & { ok: true }>(`${BASE}/stock-notes/rebuild`, {}, 180_000),
   /** 触发某只股票的二次整理（异步，完成后轮询 stockNote 取结果） */
   stockCurate: (input: { code: string; full?: boolean }) =>
     post<{ ok: boolean; queued: boolean; code: string }>(`${BASE}/stock-note/curate`, input),
@@ -83,11 +115,11 @@ export const api = {
     `${BASE}/stock-charts?code=${encodeURIComponent(code)}`,
   ),
   // ===== 判断质量回测（v0.44.0）：结构化结论 × 日线 → 5/20 日命中率 =====
-  backtest: () => request<BacktestResponse>(`${BASE}/backtest`),
+  backtest: () => request<BacktestResponse>(`${BASE}/backtest`, undefined, 120_000),
   /** 结论采集审计（v0.45.0）：哪些运行进库、哪些没进、为什么 */
   conclusionsAudit: () => request<ConclusionAuditResponse>(`${BASE}/conclusions-audit`),
   /** 历史报告回溯补录（默认 dry-run，apply=true 才写盘） */
-  conclusionsBackfill: (apply: boolean) => post<BackfillResponse>(`${BASE}/conclusions-backfill`, { apply }),
+  conclusionsBackfill: (apply: boolean) => postSlow<BackfillResponse>(`${BASE}/conclusions-backfill`, { apply }, 180_000),
   /** 结论导出（v0.48.0）：下载单文件 jsonl（首行 _manifest），转发即共享 */
   conclusionsExport: async (): Promise<void> => {
     const res = await fetch(`${BASE}/conclusions-export`);

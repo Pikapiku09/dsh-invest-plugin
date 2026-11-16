@@ -488,3 +488,17 @@
 .theme-light .ledger-updated { background: #f2f5f9; border-color: #dde5ee; color: #4c5c70; }
 .theme-light .ledger-updated.is-stale { background: rgba(180, 120, 20, .1); border-color: rgba(180, 120, 20, .42); color: #a8760f; }
 .theme-light .ledger-updated.is-unknown { color: #8794a7; }
+
+/* 账本首次读取中：骨架屏下方的说明 + 可点的「立即重试」（v0.55.1） */
+.ledger-loading-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.ledger-loading-hint .icon { flex: none; color: var(--muted); }
+.ledger-loading-hint .text-button { color: var(--accent); }

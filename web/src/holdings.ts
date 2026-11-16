@@ -338,7 +338,12 @@ function currentSummary(state: AppState): string {
 }
 
 function currentLedger(state: AppState): string {
-  if (state.holdingsLoading && !state.holdings) return '<section class="panel"><div class="skeleton holdings-ledger-skeleton"></div></section>';
+  // 首次读取中：骨架屏 + 明说在等什么，并留一个可点的重试（v0.55.1 之前这里是一块没有任何出路的空白板）
+  if (state.holdingsLoading && !state.holdings) {
+    return `<section class="panel current-ledger"><div class="skeleton holdings-ledger-skeleton"></div>
+      <p class="ledger-loading-hint">${icon('clock', 14)}正在读取账本…（30 秒无响应会自动超时并报错）
+        <button class="text-button" data-action="refresh-holdings">立即重试</button></p></section>`;
+  }
   if (!state.holdings) return errorState('持仓账本读取失败', state.holdingsError || '请检查持仓接口后重试。');
   const positions = state.holdings.positions || [];
   const totalAsset = holdingsTotalAsset(positions, state.holdings.account);
@@ -500,7 +505,9 @@ function draftReview(state: AppState): string {
 }
 
 export function renderHoldings(state: AppState): string {
-  const header = pageHeader('持仓工作区', '集中维护账户与持仓；市值／盈亏／权重按 成本·股数·现价 自动重算，权重＝市值÷账户总资产。所有来源都经过草稿、差异预览、人工确认后才写入。', `<button class="button button-secondary" data-action="refresh-holdings" ${state.holdingsLoading || state.holdingsConfirming ? 'disabled' : ''}>${state.holdingsLoading ? '<span class="spinner"></span>刷新中…' : `${icon('refresh', 14)}刷新账本`}</button>`);
+  // 加载中不再禁用：万一某次请求没回（服务重启中、连接半开），用户还能再点一次重试，
+  // 而不是对着一个灰按钮无路可走（v0.55.1 死锁修复的一部分）
+  const header = pageHeader('持仓工作区', '集中维护账户与持仓；市值／盈亏／权重按 成本·股数·现价 自动重算，权重＝市值÷账户总资产。所有来源都经过草稿、差异预览、人工确认后才写入。', `<button class="button button-secondary" data-action="refresh-holdings" ${state.holdingsConfirming ? 'disabled' : ''} title="${state.holdingsLoading ? '正在读取账本，点击可立即重试' : '重新读取账本（不改动任何数据）'}">${state.holdingsLoading ? '<span class="spinner"></span>刷新中…' : `${icon('refresh', 14)}刷新账本`}</button>`);
   if (state.holdingsDraftLoading && !state.holdingsDraft) return header + skeletonPage();
   if (state.holdingsDraft) return header + draftReview(state);
   return header + currentSummary(state) + currentLedger(state) + importSources(state);

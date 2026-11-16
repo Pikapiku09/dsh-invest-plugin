@@ -137,3 +137,24 @@ test('刷新账本：加载中按钮显示「刷新中…」，不再是一闪�
   const idle = renderHoldings(makeState(daysAgo(0)))
   assert.ok(idle.includes('刷新账本'), '空闲时显示正常文案')
 })
+
+// ===== v0.55.1：卡死在「刷新中…」的死锁修复 =====
+
+test('刷新账本：加载中仍可点击重试（不再是灰按钮无路可走）', { skip }, () => {
+  const html = renderHoldings(makeState(daysAgo(0), { holdingsLoading: true }))
+  const at = html.indexOf('data-action="refresh-holdings"')
+  assert.ok(at > -1, '按钮要存在')
+  const button = html.slice(Math.max(0, at - 220), at + 260)
+  assert.ok(!/\bdisabled\b/.test(button), '加载中不得禁用，否则请求卡住时用户无法重试：' + button)
+  assert.ok(button.includes('可立即重试') || html.includes('可立即重试'), '悬停提示要说明可以重试')
+})
+
+test('刷新账本：首次读取卡住时给出说明与「立即重试」入口，不是一块空白板', { skip }, () => {
+  const state = makeState(daysAgo(0), { holdingsLoading: true })
+  state.holdings = null // 首次加载中：还没有任何账本数据
+  const html = renderHoldings(state)
+  assert.ok(html.includes('holdings-ledger-skeleton'), '保留骨架屏')
+  assert.ok(html.includes('正在读取账本'), '要说明在等什么')
+  assert.ok(html.includes('立即重试'), '必须留一个能点的出路')
+  assert.ok(!html.includes('持仓账本读取失败'), '加载中不该当成失败')
+})
