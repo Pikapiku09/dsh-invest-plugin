@@ -114,8 +114,28 @@ function toItems(body) {
   return items.slice(0, MAX_ITEMS)
 }
 
+/**
+ * 手写「给用户看的摘要」块（v0.56.2）
+ *
+ * CHANGELOG 是写给维护者看的：里面充满了实现细节、根因分析、改了哪个函数、跑了多少用例。
+ * 更新弹窗是写给使用者看的，只需要「这次更新对我有什么用」。两者不该共用一份文字。
+ *
+ * 约定：某个版本下若存在
+ *   <!-- whats-new -->
+ *   - 一句面向用户的话
+ *   <!-- /whats-new -->
+ * 则弹窗**只用**块内的内容；没有这个块的老版本退回原来的自动摘取（向后兼容）。
+ */
+const CURATED_RE = /<!--\s*whats-new\s*-->([\s\S]*?)<!--\s*\/\s*whats-new\s*-->/
+
+function curatedBody(body) {
+  const m = String(body).match(CURATED_RE)
+  return m ? m[1] : null
+}
+
 const releases = sections.slice(0, KEEP).map((s) => {
-  const items = toItems(s.body)
+  // 有手写摘要就只用手写摘要，不再把实现细节漏给用户
+  const items = toItems(curatedBody(s.body) ?? s.body)
   // 标题取正文第一行粗体「**...**」作为一句话主题
   const firstLine = s.body.split(/\r?\n/).map((x) => x.trim()).find((x) => x.startsWith('**')) || ''
   const title = firstLine.replace(/\*\*/g, '').trim()
