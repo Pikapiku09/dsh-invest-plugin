@@ -1085,3 +1085,8 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
 .rule-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .rule-chip { padding: 3px 9px; border-radius: 999px; font-size: 11px;
   color: var(--muted); background: var(--bg); border: 1px solid var(--line-soft); }
+
+/* 巡检日报折叠区（v0.64.0，P4） */
+.report-flag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  font-size: 10px; font-weight: 600; color: var(--amber); background: rgba(217, 174, 100, .16); }
+.report-ops { color: var(--muted); font-size: 11px; max-width: 320px; line-height: 1.5; }

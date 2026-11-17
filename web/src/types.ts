@@ -444,6 +444,28 @@ export interface StrategyBacktest {
   survivorship_bias: string | null;
 }
 
+/** 巡检日报（v6 契约）：只抽字段，不下发全文。铁律自检未通过项单列。 */
+export interface StrategyReportEntry {
+  date: string;
+  title_date: string | null;
+  /** 文件名与标题日期不一致 → 日报可能被复制或改名，页面要标出来 */
+  date_mismatch: boolean;
+  report_name: string;
+  market_state: string | null;
+  total_asset: number | null;
+  pnl_ratio: number | null;
+  review: string | null;
+  positions: number | null;
+  ops: string | null;
+  checks: { ok: boolean; text: string }[];
+  checks_failed: string[];
+}
+
+export interface StrategyReports {
+  total: number;
+  recent: StrategyReportEntry[];
+}
+
 export interface StrategyHealthSnapshot {
   schema_version: number;
   source: string;
@@ -457,6 +479,8 @@ export interface StrategyHealthSnapshot {
   overview?: StrategyOverview | null;
   /** v5 起有：策略回测 + 网格寻优 */
   backtest?: StrategyBacktest | null;
+  /** v6 起有：巡检日报（最近若干天） */
+  reports?: StrategyReports | null;
   strategy: {
     main: string | null;
     market_filter?: boolean;

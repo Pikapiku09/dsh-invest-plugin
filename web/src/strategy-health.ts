@@ -245,6 +245,47 @@ function equityCard(snap: StrategyHealthSnapshot): string {
     ${srcNote}</section>`;
 }
 
+/** 巡检日报（v6）：默认折叠 —— 它是备查资料，不该抢首屏。 */
+function reportsSection(snap: StrategyHealthSnapshot): string {
+  const rep = snap.reports;
+  if (!rep || !rep.recent?.length) {
+    return `<section class="panel">${sectionHeading('巡检日报', '数据不可用')}
+      <p class="muted">该快照没有日报块（契约 v5 及以前）。在 LihuQuantify 重新导出后即可显示。</p></section>`;
+  }
+  const rows = rep.recent.map((r) => {
+    const bad = r.checks_failed?.length ? ` <span class="report-flag">自检 ${r.checks_failed.length} 项未过</span>` : '';
+    const dateCell = r.date_mismatch
+      ? `${escapeHtml(r.date)} <span class="report-flag" title="文件名与标题日期不一致（${escapeHtml(r.title_date || '')}）">日期不一致</span>`
+      : escapeHtml(r.date);
+    return `<tr>
+      <td>${dateCell}</td>
+      <td>${escapeHtml(r.market_state || '—')}</td>
+      <td class="num">${money(r.total_asset)}</td>
+      <td class="num">${r.pnl_ratio === null ? '—' : pct(r.pnl_ratio)}</td>
+      <td class="num">${r.positions ?? '—'}</td>
+      <td class="report-ops">${escapeHtml(r.ops || '—')}${bad}</td>
+    </tr>`;
+  }).join('');
+  const failed = rep.recent.flatMap((r) => (r.checks_failed || []).map((t) => ({ date: r.date, t })));
+  const failedBlock = failed.length
+    ? `<ul class="finding-list" style="margin-top:10px">${failed.map((f) => `<li class="finding finding-error">
+        <span class="finding-tag">未通过</span><span>${escapeHtml(f.date)} · ${escapeHtml(f.t)}</span></li>`).join('')}</ul>`
+    : '<p class="muted">最近这些天的铁律自检全部通过。</p>';
+
+  return `<section class="panel">
+    <details class="swing-details">
+      <summary>巡检日报 · 总 ${rep.total} 份，显示最近 ${rep.recent.length} 天</summary>
+      <div class="swing-table-wrap"><table class="swing-table"><thead><tr>
+        <th>日期</th><th>市场</th><th class="num">总资产</th>
+        <th class="num">累计收益</th><th class="num">持仓</th><th>今日操作</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>
+      <h3 class="sub-heading">铁律自检</h3>
+      ${failedBlock}
+      <p class="muted">完整日报留在 LihuQuantify 的 outputs/reports/ 下，本页只抽关键字段。</p>
+    </details>
+  </section>`;
+}
+
 export function renderStrategyHealth(state: AppState): string {
   const res: StrategyHealthResponse | null = state.strategyHealth ?? null;
   const header = pageHeader(
@@ -280,5 +321,6 @@ export function renderStrategyHealth(state: AppState): string {
     + equityCard(snap)
     + `<div class="health-columns">${riskCard(snap.risk)}${snap.research ? researchCard(snap.research) : ''}</div>`
     + behaviorCard(snap)
+    + reportsSection(snap)
     + missing;
 }
