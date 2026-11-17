@@ -382,6 +382,64 @@ export interface SectorHeatmapResponse {
   hint?: string;
 }
 
+/** 影子交易（v0.68.0，从量化策略页迁到判断质量页） */
+export interface TrialsResponse {
+  ok: boolean;
+  path: string;
+  reason?: string | null;
+  hint?: string;
+  generated_at?: string | null;
+  rules: {
+    entry: string; shares: number; max_hold_days: number; exit: string;
+    long_stances: string[]; return_basis?: string;
+    adj_covered_codes?: number; adj_missing_codes?: string[];
+  } | null;
+  summary: {
+    total: number;
+    long_trials: { n: number; open: number; closed: number; pnl_total: number; wins: number };
+    skipped: Record<string, number>;
+    direction_hit_5d?: Record<string, { n: number; hits: number; rate: number | null }>;
+    direction_hit_10d?: Record<string, { n: number; hits: number; rate: number | null }>;
+  } | null;
+  trials: {
+    id: string; code: string; stance: string; status: string;
+    entry_date: string | null; entry_price: number | null;
+    exit_date: string | null; exit_price: number | null; exit_reason: string | null;
+    pnl: number | null; pnl_ratio: number | null; basis?: string | null;
+  }[];
+}
+
+/** 实盘绩效（v0.68.0）：由真实交割单重建，落在持仓工作区 */
+export interface RealPerformanceResponse {
+  ok: boolean;
+  path: string;
+  reason?: string | null;
+  hint?: string;
+  generated_at?: string | null;
+  totals?: {
+    equity_end: number; total_return_pct: number; annualized_pct: number; years?: number;
+    monthly_win_rate_pct?: number; n_months?: number; fee_total?: number;
+    realized_pnl_fifo?: number;
+  };
+  max_drawdown?: {
+    pct: number; peak_date: string; peak_equity: number; trough_date: string;
+    trough_equity: number; calendar_days: number; recovered_date: string | null;
+    pct_ex_valuation_jumps?: number | null; valuation_jump_note?: string;
+  } | null;
+  benchmark?: {
+    code: string; spearman: number; pearson?: number; n_months?: number;
+    account_mean_pct?: number; index_mean_pct?: number;
+    account_std_pct?: number; index_std_pct?: number;
+    monthly?: { month: string; account_pct: number; index_pct: number; excess_pct: number }[];
+  } | null;
+  monthly?: { month: string; return_pct: number; win_rate_pct?: number; n_trades?: number; realized_pnl?: number }[];
+  equity_curve?: { date: string; equity: number }[];
+  equity_points_total?: number;
+  limitations?: string[];
+  valuation_jumps?: { ts_code: string; date: string; jump_yuan: number }[];
+  assumptions?: Record<string, unknown> | null;
+}
+
 export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health';
 
 // ===== 策略健康（v0.59.0）=====

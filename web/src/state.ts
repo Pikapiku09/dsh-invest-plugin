@@ -1,7 +1,7 @@
 import { LEDGER_DEFAULT_COLUMNS } from './types';
 import type {
   ConclusionRecord, HoldingsDraftResponse, HoldingsResponse, IndexResponse, Job,
-  ModelSettingsResponse, TaskTemplate, WorkbenchView, WatchlistResponse, LedgerColKey, BacktestResponse, ConclusionAuditResponse, WatchDailyStatus, StrategyHealthResponse, SectorHeatmapResponse,
+  ModelSettingsResponse, TaskTemplate, WorkbenchView, WatchlistResponse, LedgerColKey, BacktestResponse, ConclusionAuditResponse, WatchDailyStatus, StrategyHealthResponse, SectorHeatmapResponse, TrialsResponse, RealPerformanceResponse,
   StockNoteMeta, StockNoteDetail, UpdateCheckResponse, FundamentalsResponse,
 } from './types';
 import type { WatchDistMode } from './watch-metrics';
@@ -196,8 +196,14 @@ export interface AppState {
   /** 判断质量回测（v0.44.0） */
   // 策略健康（v0.59.0）：只读 LihuQuantify 模拟盘契约
   // 「量化策略」页的页内分组（v0.65.0）：总览 / 波段池 / 回测，三个原页面合并为一页
-  quantTab: 'overview' | 'swing' | 'backtest' | 'trials';
+  quantTab: 'overview' | 'swing' | 'backtest';
   /** 概览页「行业暴露」卡（v0.67.0）：轻量热力数据 */
+  strategyTrials: TrialsResponse | null;
+  strategyTrialsLoading: boolean;
+  strategyTrialsError: string;
+  realPerformance: RealPerformanceResponse | null;
+  realPerformanceLoading: boolean;
+  realPerformanceError: string;
   sectorHeatmap: SectorHeatmapResponse | null;
   sectorHeatmapLoading: boolean;
   sectorHeatmapError: string;
@@ -282,6 +288,8 @@ export const state: AppState = {
   selectedCode: null, archiveQuery: '', archiveRecords: [], archiveLoading: false,
   archiveError: '', archiveNotice: '', runQuery: '', runStatus: 'all', runMode: 'all', runHideBackfill: false,
   quantTab: 'overview',
+  strategyTrials: null, strategyTrialsLoading: false, strategyTrialsError: '',
+  realPerformance: null, realPerformanceLoading: false, realPerformanceError: '',
   sectorHeatmap: null, sectorHeatmapLoading: false, sectorHeatmapError: '',
   strategyHealth: null, strategyHealthLoading: false, strategyHealthError: '',
   backtest: null, backtestLoading: false, backtestError: '',

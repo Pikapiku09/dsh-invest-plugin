@@ -106,6 +106,8 @@ function apply(ctx, config) {
   // 走独立轻量路由而不是塞进 strategy_health 契约：大契约已 80KB，概览页只为一卡片
   // 加载它会明显拖慢首屏；这个文件本身自描述（含 trade_date），不需要 schema 版本。
   const HEATMAP_FILE = "E:/LihuQuantify/data/heatmap_snapshot.json"
+  const LIHU_TRIALS_FILE = "E:/LihuQuantify/outputs/strategy_trials.json"
+  const LIHU_REAL_PERF_FILE = "E:/LihuQuantify/outputs/monthly_perf.json"
 
   // 最近任务持久化（跨 web 关闭/DSH 重启保留最近 5 个）
   const RECENT_JOBS_FILE = BASE_DIR + "/.dsh-invest/store/recent-jobs.json"
@@ -3165,6 +3167,98 @@ function apply(ctx, config) {
         } catch (e) {
           writeJson(res, 500, { error: String(e).slice(0, 200) })
         }
+      },
+    },
+    {
+      // 影子交易（v0.68.0）：把「AI 结论 → 照做会怎样」接到判断质量页。
+      // 只回 summary + rules + 真正建仓的那几笔，不回 91 条原始记录：
+      // 其中 76 条是「非买入」，对页面无信息量，全量下发会让载荷从 4KB 涨到 62KB。
+      kind: "exact",
+      path: "/dsh-invest/api/strategy-trials",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const settings = await readJsonFile(SETTINGS_FILE, {})
+        const cfg = (settings && settings.strategyTrials) || {}
+        const target = String(cfg.path || process.env.DSH_INVEST_TRIALS || LIHU_TRIALS_FILE)
+        const body = { ok: false, path: target, reason: null, generated_at: null,
+          rules: null, summary: null, trials: [] }
+        let raw
+        try {
+          raw = await fsp.readFile(target, "utf8")
+        } catch {
+          body.reason = "missing"
+          body.hint = "在 LihuQuantify 跑：python scripts/run_strategy_trials.py"
+          writeJson(res, 200, body); return
+        }
+        let data
+        try { data = JSON.parse(raw) } catch {
+          body.reason = "invalid_json"
+          writeJson(res, 200, body); return
+        }
+        if (!data || !Array.isArray(data.records) || data.records.length === 0) {
+          body.reason = "empty"
+          writeJson(res, 200, body); return
+        }
+        body.ok = true
+        body.generated_at = data.generated_at || null
+        body.rules = data.rules || null
+        body.summary = data.summary || null
+        body.trials = data.records.filter((r) => r && (r.status === "open" || r.status === "closed"))
+        writeJson(res, 200, body)
+      },
+    },
+    {
+      // 实盘绩效（v0.68.0）：只读 Lihu 用真实交割单重建的 monthly_perf.json。
+      // 这条数据此前没有任何页面在展示 —— 系统能说清模拟盘、AI、回测，唯独自家的钱没地方看。
+      // 曲线降采样到 250 点；口径与限制（limitations / valuation_jumps）原样透传。
+      kind: "exact",
+      path: "/dsh-invest/api/real-performance",
+      handler: async (req, res) => {
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        const settings = await readJsonFile(SETTINGS_FILE, {})
+        const cfg = (settings && settings.realPerformance) || {}
+        const target = String(cfg.path || process.env.DSH_INVEST_REAL_PERF || LIHU_REAL_PERF_FILE)
+        const body = { ok: false, path: target, reason: null }
+        let raw
+        try {
+          raw = await fsp.readFile(target, "utf8")
+        } catch {
+          body.reason = "missing"
+          body.hint = "在 LihuQuantify 跑：python scripts/monthly_perf.py"
+          writeJson(res, 200, body); return
+        }
+        let data
+        try { data = JSON.parse(raw) } catch {
+          body.reason = "invalid_json"
+          writeJson(res, 200, body); return
+        }
+        if (!data || typeof data !== "object" || !data.totals) {
+          body.reason = "empty"
+          writeJson(res, 200, body); return
+        }
+        const curve = Array.isArray(data.equity_curve) ? data.equity_curve : []
+        const LIMIT = 250
+        let sampled = curve
+        if (curve.length > LIMIT) {
+          const step = (curve.length - 1) / (LIMIT - 1)
+          const idx = new Set()
+          for (let i = 0; i < LIMIT; i += 1) idx.add(Math.min(curve.length - 1, Math.round(i * step)))
+          sampled = [...idx].sort((a, b) => a - b).map((i) => curve[i])
+        }
+        body.ok = true
+        body.generated_at = data.generated_at || null
+        body.totals = data.totals
+        body.max_drawdown = data.max_drawdown || null
+        body.benchmark = data.benchmark || null
+        body.monthly = Array.isArray(data.monthly) ? data.monthly : []
+        body.equity_curve = sampled
+        body.equity_points_total = curve.length
+        body.limitations = Array.isArray(data.limitations) ? data.limitations : []
+        body.valuation_jumps = Array.isArray(data.valuation_jumps) ? data.valuation_jumps : []
+        body.assumptions = data.assumptions || null
+        writeJson(res, 200, body)
       },
     },
     {

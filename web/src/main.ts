@@ -366,6 +366,42 @@ function dispatchAlertNotifications(alerts: WatchAlert[]): void {
 
 // 判断质量回测（v0.44.0）：结论库 × 日线 → 命中率。force=false 时有缓存直接渲染，不重复跑。
 // v0.45.0 起同时拉「采集审计」：让用户看得见数据从哪来、有没有漏。
+/** 影子交易（v0.68.0）：判断质量页，轻量路由。 */
+async function loadStrategyTrials(force: boolean): Promise<void> {
+  if (state.strategyTrialsLoading) return;
+  if (!force && state.strategyTrials) { render(); return; }
+  state.strategyTrialsLoading = true;
+  state.strategyTrialsError = '';
+  render();
+  try {
+    state.strategyTrials = await api.strategyTrials();
+  } catch (error) {
+    state.strategyTrialsError = errorMessage(error);
+    if (force) state.strategyTrials = null;
+  } finally {
+    state.strategyTrialsLoading = false;
+    render();
+  }
+}
+
+/** 实盘绩效（v0.68.0）：持仓工作区，轻量路由。 */
+async function loadRealPerformance(force: boolean): Promise<void> {
+  if (state.realPerformanceLoading) return;
+  if (!force && state.realPerformance) { render(); return; }
+  state.realPerformanceLoading = true;
+  state.realPerformanceError = '';
+  render();
+  try {
+    state.realPerformance = await api.realPerformance();
+  } catch (error) {
+    state.realPerformanceError = errorMessage(error);
+    if (force) state.realPerformance = null;
+  } finally {
+    state.realPerformanceLoading = false;
+    render();
+  }
+}
+
 /** 行业热力（v0.67.0）：概览页卡片用，轻量路由。失败不阻塞概览其它区块。 */
 async function loadSectorHeatmap(force: boolean): Promise<void> {
   if (state.sectorHeatmapLoading) return;
@@ -1130,6 +1166,8 @@ function navigate(view: WorkbenchView): void {
   if (view === 'backtest' && !state.backtest && !state.backtestLoading) void loadBacktest(false);
   if (view === 'strategy-health' && !state.strategyHealth && !state.strategyHealthLoading) void loadStrategyHealth(false);
   if (view === 'overview' && !state.sectorHeatmap && !state.sectorHeatmapLoading) void loadSectorHeatmap(false);
+  if (view === 'backtest' && !state.strategyTrials && !state.strategyTrialsLoading) void loadStrategyTrials(false);
+  if (view === 'holdings' && !state.realPerformance && !state.realPerformanceLoading) void loadRealPerformance(false);
   if (view === 'holdings') {
     // v0.55.1：不再因为「正在加载」就跳过——之前一旦卡在 loading=true 就永远进不来
     if (!state.holdings) void loadHoldings();
@@ -1235,6 +1273,8 @@ async function refreshAll(): Promise<void> {
   if (state.view === 'model-settings') jobs.push(loadModelSettings());
   if (state.view === 'strategy-health') jobs.push(loadStrategyHealth(true));
   if (state.view === 'overview') jobs.push(loadSectorHeatmap(true));
+  if (state.view === 'backtest') jobs.push(loadStrategyTrials(true));
+  if (state.view === 'holdings') jobs.push(loadRealPerformance(true));
   // 只重读结论链，不重置选中与编辑表单：刷新期间用户正在填的监控规则不被打断
   if (state.selectedCode) jobs.push(reloadArchiveConclusions(state.selectedCode));
   try {
@@ -1988,7 +2028,7 @@ document.addEventListener('click', (event) => {
   const action = target.dataset.action;
   if (action === 'navigate' && target.dataset.view) navigate(target.dataset.view as WorkbenchView);
   else if (action === 'quant-tab' && target.dataset.tab) {
-    state.quantTab = target.dataset.tab as 'overview' | 'swing' | 'backtest' | 'trials';
+    state.quantTab = target.dataset.tab as 'overview' | 'swing' | 'backtest';
     render();
   }
   else if (action === 'backtest-refresh') void loadBacktest(true);

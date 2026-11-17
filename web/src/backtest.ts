@@ -11,6 +11,7 @@
 // 设计原则：小样本必须看起来就像小样本。命中率旁边永远带样本数与 95% 置信区间，
 // 避免「1 条里对 1 条 = 100%」被误读成「这个角色很准」。
 import { emptyState, errorState, pageHeader, sectionHeading, skeletonPage, stanceBadge, statCard } from './components';
+import { renderShadowTrades } from './shadow-trades';
 import { escapeHtml, formatDateTime, truncate } from './format';
 import { icon } from './icons';
 import type { AppState } from './state';
@@ -239,5 +240,6 @@ export function renderBacktest(state: AppState): string {
     + groupTable('按置信度', confMeta, confGroups, '置信度')
     + groupTable('按立场', '观察类样本最多但不计命中率，可看它们的后续走势', data.byStance, '立场')
     + groupTable('按月份', '同一个月内市场环境相近，命中率会同步漂移', data.byMonth, '月份')
-    + detailTable(data.rows);
+    + detailTable(data.rows)
+    + renderShadowTrades(state);
 }

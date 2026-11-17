@@ -3,7 +3,7 @@ import type {
   HoldingsQuotesResponse, HoldingsRefreshQuotesResponse, HoldingsResponse, IndexResponse, Job, ModelSettingsResponse, ModelSettingsSaveInput,
   HoldingPosition, HoldingsAccount, StockResolveResponse, TaskTemplate,
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
-  StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, FundamentalsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse, StrategyHealthResponse, SectorHeatmapResponse,
+  StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, FundamentalsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse, StrategyHealthResponse, SectorHeatmapResponse, TrialsResponse, RealPerformanceResponse,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -72,6 +72,10 @@ export const api = {
   strategyHealth: () => request<StrategyHealthResponse>(`${BASE}/strategy-health`),
   /** 行业热力（概览页持仓暴露用）：轻量路由，不加载 80KB 的量化策略契约。 */
   sectorHeatmap: () => request<SectorHeatmapResponse>(`${BASE}/sector-heatmap`),
+  /** 影子交易（判断质量页）：只回真正建仓的几笔 + 汇总 */
+  strategyTrials: () => request<TrialsResponse>(`${BASE}/strategy-trials`),
+  /** 实盘绩效（持仓工作区）：真实交割单重建 */
+  realPerformance: () => request<RealPerformanceResponse>(`${BASE}/real-performance`),
   holdings: () => request<HoldingsResponse>(`${BASE}/holdings`),
   /** 截图 OCR 识别可能要 1–2 分钟，超时放宽到 3 分钟 */
   importHoldings: (input: HoldingsImportInput) => postSlow<HoldingsDraftResponse>(`${BASE}/holdings/import`, input, 180_000),

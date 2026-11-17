@@ -1,4 +1,5 @@
 import { emptyState, errorState, pageHeader, sectionHeading, skeletonPage } from './components';
+import { renderRealPerformance } from './real-performance';
 import { escapeHtml, formatDateTime, formatNumber } from './format';
 import { icon } from './icons';
 import type { AppState } from './state';
@@ -510,5 +511,5 @@ export function renderHoldings(state: AppState): string {
   const header = pageHeader('持仓工作区', '集中维护账户与持仓；市值／盈亏／权重按 成本·股数·现价 自动重算，权重＝市值÷账户总资产。所有来源都经过草稿、差异预览、人工确认后才写入。', `<button class="button button-secondary" data-action="refresh-holdings" ${state.holdingsConfirming ? 'disabled' : ''} title="${state.holdingsLoading ? '正在读取账本，点击可立即重试' : '重新读取账本（不改动任何数据）'}">${state.holdingsLoading ? '<span class="spinner"></span>刷新中…' : `${icon('refresh', 14)}刷新账本`}</button>`);
   if (state.holdingsDraftLoading && !state.holdingsDraft) return header + skeletonPage();
   if (state.holdingsDraft) return header + draftReview(state);
-  return header + currentSummary(state) + currentLedger(state) + importSources(state);
+  return header + renderRealPerformance(state) + currentSummary(state) + currentLedger(state) + importSources(state);
 }
