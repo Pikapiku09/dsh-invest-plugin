@@ -298,6 +298,62 @@ export interface Job {
   question?: string;
 }
 
+/** 结论影子跟踪（v7 契约）：把 AI 判断放进行情里走一遍的结果。 */
+export interface StrategyTrialRecord {
+  id: string;
+  code: string;
+  stance: string;
+  expected_direction: number;
+  proposed_at: string | null;
+  proposed_date: string;
+  source_call_id: string | null;
+  mode: string | null;
+  target: number | null;
+  stop: number | null;
+  status: 'skipped' | 'open' | 'closed';
+  skip_reason: string | null;
+  entry_date: string | null;
+  entry_price: number | null;
+  exit_date: string | null;
+  exit_price: number | null;
+  exit_reason: string | null;
+  pnl: number | null;
+  pnl_ratio: number | null;
+  ret5: number | null;
+  ret10: number | null;
+  hit5: boolean | null;
+  hit10: boolean | null;
+  mark_date?: string | null;
+  mark_price?: number | null;
+}
+
+export interface StrategyHitStat {
+  n: number;
+  hits: number;
+  rate: number | null;
+}
+
+export interface StrategyTrials {
+  generated_at: string | null;
+  source: string;
+  rules: {
+    entry: string;
+    shares: number;
+    max_hold_days: number;
+    exit: string;
+    long_stances: string[];
+  };
+  summary: {
+    total: number;
+    by_stance: Record<string, number>;
+    direction_hit_5d: { expected_up: StrategyHitStat; expected_down: StrategyHitStat };
+    direction_hit_10d: { expected_up: StrategyHitStat; expected_down: StrategyHitStat };
+    long_trials: { n: number; open: number; closed: number; pnl_total: number; wins: number };
+    skipped: Record<string, number>;
+  };
+  records: StrategyTrialRecord[];
+}
+
 export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health';
 
 // ===== 策略健康（v0.59.0）=====
@@ -481,6 +537,8 @@ export interface StrategyHealthSnapshot {
   backtest?: StrategyBacktest | null;
   /** v6 起有：巡检日报（最近若干天） */
   reports?: StrategyReports | null;
+  /** v7 起有：AI 结论影子跟踪 */
+  strategy_trials?: StrategyTrials | null;
   strategy: {
     main: string | null;
     market_filter?: boolean;

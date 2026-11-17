@@ -101,7 +101,7 @@ test('正常快照：透传 data 并带 stale_hours', async () => {
   assert.equal(typeof r.json.stale_hours, 'number')
 })
 
-test('schema 版本：v1~v6 都接受，越界拒绝', async () => {
+test('schema 版本：v1~v7 都接受，越界拒绝', async () => {
   // 每加一块就升一版（v2 equity / v3 swing）；旧版必须仍可读，否则 Lihu 一升级工作台就全白
   const v1 = writeSnapshot('v1.json', { ...GOOD, schema_version: 1 })
   assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v1)}`)).json.ok, true)
@@ -124,12 +124,16 @@ test('schema 版本：v1~v6 都接受，越界拒绝', async () => {
   const v6 = writeSnapshot('v6.json', { ...GOOD, schema_version: 6, reports: { total: 0, recent: [] } })
   assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v6)}`)).json.ok, true)
 
-  const v7 = writeSnapshot('v7.json', { ...GOOD, schema_version: 7 })
-  const r7 = await call(`${ROUTE}?path=${encodeURIComponent(v7)}`)
-  assert.equal(r7.json.ok, false)
-  assert.equal(r7.json.reason, 'schema_mismatch')
-  assert.equal(r7.json.found_schema, 7)
-  assert.equal(r7.json.supported_schema, 6)
+  // v7 新增 strategy_trials（结论影子跟踪），仍须可读
+  const v7 = writeSnapshot('v7.json', { ...GOOD, schema_version: 7, strategy_trials: { records: [] } })
+  assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v7)}`)).json.ok, true)
+
+  const v8 = writeSnapshot('v8.json', { ...GOOD, schema_version: 8 })
+  const r8 = await call(`${ROUTE}?path=${encodeURIComponent(v8)}`)
+  assert.equal(r8.json.ok, false)
+  assert.equal(r8.json.reason, 'schema_mismatch')
+  assert.equal(r8.json.found_schema, 8)
+  assert.equal(r8.json.supported_schema, 7)
 
   const v0 = writeSnapshot('v0.json', { ...GOOD, schema_version: 0 })
   assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v0)}`)).json.reason, 'schema_mismatch')

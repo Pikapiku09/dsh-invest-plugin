@@ -1968,7 +1968,7 @@ document.addEventListener('click', (event) => {
   const action = target.dataset.action;
   if (action === 'navigate' && target.dataset.view) navigate(target.dataset.view as WorkbenchView);
   else if (action === 'quant-tab' && target.dataset.tab) {
-    state.quantTab = target.dataset.tab as 'overview' | 'swing' | 'backtest';
+    state.quantTab = target.dataset.tab as 'overview' | 'swing' | 'backtest' | 'trials';
     render();
   }
   else if (action === 'backtest-refresh') void loadBacktest(true);

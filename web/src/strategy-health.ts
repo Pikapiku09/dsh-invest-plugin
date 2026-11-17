@@ -15,6 +15,7 @@ import { escapeHtml } from './format';
 import { sparkline } from './chart-utils';
 import { renderSwingPoolBody } from './swing-pool';
 import { renderStrategyBacktestBody } from './strategy-backtest';
+import { renderStrategyTrialsBody } from './strategy-trials';
 import { icon } from './icons';
 import type { AppState } from './state';
 import type { StrategyHealthResponse, StrategyHealthRisk, StrategyHealthSnapshot, StrategyOverview } from './types';
@@ -290,13 +291,15 @@ function reportsSection(snap: StrategyHealthSnapshot): string {
 
 
 /** 页内分组（v0.65.0）：波段池与策略回测并入本页，不再各占一个导航项。 */
-const QUANT_TABS: { id: 'overview' | 'swing' | 'backtest'; label: string; hint: string }[] = [
+type QuantTab = 'overview' | 'swing' | 'backtest' | 'trials';
+const QUANT_TABS: { id: QuantTab; label: string; hint: string }[] = [
   { id: 'overview', label: '总览', hint: '今日巡检 · 权益 · 风控 · 研究纪律' },
   { id: 'swing', label: '波段池', hint: '已证伪 · 纸面跟踪' },
   { id: 'backtest', label: '回测', hint: '回测绩效 · 网格寻优' },
+  { id: 'trials', label: '结论验证', hint: 'AI 判断 vs 实际结果' },
 ];
 
-function quantTabBar(active: 'overview' | 'swing' | 'backtest'): string {
+function quantTabBar(active: QuantTab): string {
   const items = QUANT_TABS.map((t) => `<button class="quant-tab${t.id === active ? ' active' : ''}"
       data-action="quant-tab" data-tab="${t.id}" title="${escapeHtml(t.hint)}">
       ${escapeHtml(t.label)}</button>`).join('');
@@ -333,6 +336,7 @@ export function renderStrategyHealth(state: AppState): string {
 
   if (tab === 'swing') return header + quantTabBar(tab) + staleNote + renderSwingPoolBody(state);
   if (tab === 'backtest') return header + quantTabBar(tab) + staleNote + renderStrategyBacktestBody(state);
+  if (tab === 'trials') return header + quantTabBar(tab) + staleNote + renderStrategyTrialsBody(state);
 
   const missing = (snap.missing || []).length
     ? `<p class="muted">缺失数据块：${escapeHtml((snap.missing || []).join('、'))}</p>` : '';
