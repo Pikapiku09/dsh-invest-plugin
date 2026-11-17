@@ -2,6 +2,44 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.59.1（2026-11-17）
+
+**修复：本地 OCR 持仓中文全变「◆◆◆」，概览「上次分析」卡片把任务指令当标题**
+
+### 根因（编码链路，不是识别精度）
+
+`scripts/ocr_holdings.py` 用 `sys.stdout.write(json.dumps(..., ensure_ascii=False))` 输出。
+Windows 上 `sys.stdout` 的编码跟随 ANSI 代码页（中文系统 = cp936/GBK），所以管道里流出的
+其实是 **GBK 字节**；宿主侧 `out += String(chunk)` 按 **UTF-8** 解码，每个汉字塌成 1–2 个
+`U+FFFD`。ASCII 的代码、股数、成本、现价毫发无伤 —— 于是看起来像「OCR 识别不准」，
+实际是**中文在传输层被毁**。4 字名 → 8 个替换符，正好对上截图里的 8 个菱形。
+
+更隐蔽的是连带失效：`confidence` 门禁在 Python 侧靠**中文子串**（"未能反查代码"/"不一致"/
+"校验不符"）判定阻塞项，中文一毁它就恒等于「无阻塞」，乱码草稿反而**假通过 high**、
+不回退视觉模型。（代码能解析成功，是因为代码由 names.json 反查得到、属于 ASCII，未受影响。）
+
+### 修复
+
+- **脚本侧**：新增 `write_stdout_json()`，绕过文本层直接写 UTF-8 字节（`sys.stdout.buffer`），
+  跨平台、跨 locale 一致；`ensure_ascii=False` 保留可读中文。
+- **宿主侧**：`runLocalOcrHoldings` 改为「先收齐 Buffer → 一次性解码」，
+  修掉 `String(chunk)` 的第二个坑（多字节字符被管道切断同样插入 `U+FFFD`）；
+  解码统一走 `decodeChildStdout()`：UTF-8 优先，出现替换符则用 **GB18030 兜底还原**。
+- **门禁加固**：`usable` 增加 `!garbled`（名称含 `U+FFFD` 即拒），
+  不再依赖「warnings 文本是否含中文关键词」这种可被编码事故击穿的条件。
+- **概览卡片**：`上次分析` 标题原样渲染整段 `question`（观察仓日检的机器指令动辄上千字），
+  超长文本直接溢出/被截断。改为截断到 64 字 + `title` 悬停看全文，CSS 再补 2 行 clamp。
+- **名称兜底**：`makeHoldingsDraft` 新增 `fillPositionNames()`——识别结果只给代码不给名称时
+  （视觉模型兜底时常见），用本地 `names.json` 按代码反查补齐。此前会留下空白名称，
+  界面上就是一排没有名字的持仓，同样属于「内容显示不正确」。
+
+### 测试
+
+- `test/ocr-holdings.test.js` 补中文名断言（`东方电缆`）与「不得含 U+FFFD」断言；
+- 新增**不依赖 rapidocr** 的桩脚本用例：故意用 GBK 字节写中文 JSON，验证能被还原成正常汉字；
+- 新增「只给代码不给名称」用例：验证 `names.json` 回填生效；
+- `node --test test/ocr-holdings.test.js` **4/4 通过**（含真实 RapidOCR 端到端）；全量 `node --test` **234/234 通过**。
+
 ## v0.59.0（2026-11-16）
 
 **投研工作台接入 LihuQuantify 模拟盘健康度（只读契约）+ 行为实证回灌提示词**

@@ -107,6 +107,11 @@ test('截图导入：本地 OCR 优先，返回草稿且引擎标记 local-ocr',
   assert.equal(json.account.total_asset, 111532.99)
   assert.equal(json.account.available_cash, 42054.19)
   assert.ok(json.warnings.some((w) => w.includes('本地 OCR')), '草稿需提示来源为本地 OCR')
+  // 编码回归防护：中文名必须是正常汉字，出现 U+FFFD 说明脚本 stdout 与 Node 解码不一致
+  // （中文 Windows 上 sys.stdout 默认 cp936，GBK 字节按 UTF-8 解会把每个汉字塌成 1–2 个替换符，
+  //  而纯 ASCII 的代码/股数毫发无伤，最容易伪装成「OCR 识别不准」）
+  assert.equal(json.positions.find((p) => p.code === '603606.SH').name, '东方电缆')
+  assert.ok(!JSON.stringify(json).includes('\uFFFD'), '草稿不应包含 U+FFFD 替换符')
 })
 
 test('截图导入：DSH_INVEST_LOCAL_OCR=0 时不走本地 OCR', { skip: !READY && '本机缺少 rapidocr/示例图' }, async () => {
@@ -119,5 +124,78 @@ test('截图导入：DSH_INVEST_LOCAL_OCR=0 时不走本地 OCR', { skip: !READY
     assert.ok(!json.engine || json.engine !== 'local-ocr')
   } finally {
     delete process.env.DSH_INVEST_LOCAL_OCR
+  }
+})
+
+// 不依赖 rapidocr 的编码回归：桩脚本故意用 GBK 字节写中文 JSON，
+// 还原不了就该降级而不是把替换符当股票名写进草稿。
+test('截图导入：OCR 桩按 GBK 输出中文时仍能正确还原', async (t) => {
+  const py = pythonCmd()
+  if (!py) { t.skip('本机无 python'); return }
+  const stub = path.join(base, 'stub-gbk-ocr.py')
+  fs.writeFileSync(stub, [
+    'import json, sys',
+    'payload = {',
+    '    "ok": True, "engine": "local-ocr", "confidence": "high",',
+    '    "account": {"total_asset": 111532.99, "available_cash": 42054.19},',
+    '    "positions": [{"code": "603606.SH", "name": "\u4e1c\u65b9\u7535\u7f06", "shares": 1200,',
+    '                   "cost": 34.998, "current_price": 38.1, "checks": []}],',
+    '    "warnings": ["\u56fe\u7247\u5df2\u653e\u5927 1.33 \u500d\u7528\u4e8e\u8bc6\u522b"],',
+    '}',
+    '# 复现中文 Windows 上 sys.stdout 默认 cp936 的历史行为：GBK 字节流出管道',
+    'sys.stdout.buffer.write(json.dumps(payload, ensure_ascii=False).encode("gbk"))',
+    'sys.stdout.buffer.flush()',
+    '',
+  ].join('\n'), 'utf8')
+  const previousScript = process.env.DSH_INVEST_OCR_SCRIPT
+  process.env.DSH_INVEST_OCR_SCRIPT = stub
+  try {
+    const imageBase64 = Buffer.from('not-a-real-image').toString('base64')
+    const { status, json } = await postImport({ source: 'screenshot', imageBase64, mimeType: 'image/png' })
+    assert.equal(status, 200, JSON.stringify(json))
+    assert.equal(json.engine, 'local-ocr', '能还原中文时仍应走本地 OCR')
+    assert.equal(json.positions.length, 1)
+    assert.equal(json.positions[0].name, '东方电缆', 'GBK 字节必须被还原成正常汉字')
+    assert.ok(
+      json.warnings.some((w) => w.includes('图片已放大 1.33 倍用于识别')),
+      '脚本 warnings 里的中文也必须完整还原',
+    )
+    assert.ok(!JSON.stringify(json).includes('\uFFFD'), '草稿不应包含 U+FFFD 替换符')
+  } finally {
+    if (previousScript === undefined) delete process.env.DSH_INVEST_OCR_SCRIPT
+    else process.env.DSH_INVEST_OCR_SCRIPT = previousScript
+  }
+})
+
+// 名称兜底：识别结果只给代码不给名称时（视觉模型兜底时常见），
+// 草稿必须用本地 names.json 补齐，而不是把空白名一路写进账本。
+test('截图导入：识别结果缺名称时用 names.json 回填', async (t) => {
+  const py = pythonCmd()
+  if (!py) { t.skip('本机无 python'); return }
+  const stub = path.join(base, 'stub-noname-ocr.py')
+  fs.writeFileSync(stub, [
+    'import json, sys',
+    'payload = {',
+    '    "ok": True, "engine": "local-ocr", "confidence": "high",',
+    '    "account": {"total_asset": 111532.99, "available_cash": 42054.19},',
+    '    "positions": [{"code": "603606.SH", "shares": 1200, "cost": 34.998, "current_price": 38.1}],',
+    '    "warnings": [],',
+    '}',
+    'sys.stdout.buffer.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))',
+    'sys.stdout.buffer.flush()',
+    '',
+  ].join('\n'), 'utf8')
+  const previousScript = process.env.DSH_INVEST_OCR_SCRIPT
+  process.env.DSH_INVEST_OCR_SCRIPT = stub
+  try {
+    const imageBase64 = Buffer.from('not-a-real-image').toString('base64')
+    const { status, json } = await postImport({ source: 'screenshot', imageBase64, mimeType: 'image/png' })
+    assert.equal(status, 200, JSON.stringify(json))
+    assert.equal(json.positions.length, 1)
+    assert.equal(json.positions[0].code, '603606.SH')
+    assert.equal(json.positions[0].name, '东方电缆', '缺名称必须用 names.json 回填')
+  } finally {
+    if (previousScript === undefined) delete process.env.DSH_INVEST_OCR_SCRIPT
+    else process.env.DSH_INVEST_OCR_SCRIPT = previousScript
   }
 })

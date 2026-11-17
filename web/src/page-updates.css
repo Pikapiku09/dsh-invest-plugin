@@ -10,8 +10,8 @@
 .last-stock { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 10px; }
 .last-stock > strong { font-size: 20px; }
 .last-stock > .mono { color: var(--muted); }
-.last-analysis-copy h2 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
-.last-analysis-copy p { color: var(--text-2); margin-bottom: 12px; max-width: 920px; }
+.last-analysis-copy h2 { font-size: 15px; font-weight: 600; margin-bottom: 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+.last-analysis-copy p { color: var(--text-2); margin-bottom: 12px; max-width: 920px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
 .last-levels { display: flex; flex-wrap: wrap; gap: 16px; color: var(--muted); font-size: 12px; }
 .last-levels b { color: var(--text); margin-left: 4px; }
 .last-analysis-actions { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
