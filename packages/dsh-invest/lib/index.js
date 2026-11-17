@@ -3182,7 +3182,7 @@ function apply(ctx, config) {
         const cfg = (settings && settings.strategyTrials) || {}
         const target = String(cfg.path || process.env.DSH_INVEST_TRIALS || LIHU_TRIALS_FILE)
         const body = { ok: false, path: target, reason: null, generated_at: null,
-          rules: null, summary: null, trials: [] }
+          rules: null, summary: null, portfolio: null, trials: [] }
         let raw
         try {
           raw = await fsp.readFile(target, "utf8")
@@ -3204,6 +3204,7 @@ function apply(ctx, config) {
         body.generated_at = data.generated_at || null
         body.rules = data.rules || null
         body.summary = data.summary || null
+        body.portfolio = data.portfolio || null
         body.trials = data.records.filter((r) => r && (r.status === "open" || r.status === "closed"))
         writeJson(res, 200, body)
       },

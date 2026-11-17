@@ -401,6 +401,23 @@ export interface TrialsResponse {
     direction_hit_5d?: Record<string, { n: number; hits: number; rate: number | null }>;
     direction_hit_10d?: Record<string, { n: number; hits: number; rate: number | null }>;
   } | null;
+  /** 资金约束下的撮合模拟（v0.69.0）：虚拟账户按纪律执行的结果 */
+  portfolio?: {
+    initial_capital: number;
+    final_equity: number;
+    total_return: number | null;
+    max_drawdown: number;
+    n_trades: number;
+    n_open: number;
+    skipped: Record<string, number>;
+    rules: { max_positions: number; max_single_position: number; entry: string; lot: number };
+    equity_curve: { d: string; v: number }[];
+    trades: {
+      code: string; entry_date: string; exit_date: string;
+      entry_price: number; exit_price: number; shares: number;
+      exit_reason: string; pnl: number; pnl_ratio: number;
+    }[];
+  } | null;
   trials: {
     id: string; code: string; stance: string; status: string;
     entry_date: string | null; entry_price: number | null;

@@ -10,6 +10,7 @@
 // - 样本极少（当前 5 笔），不夸大、不写「胜率」这种需要样本支撑的词
 import { emptyState, errorState, loadingBlock, sectionHeading } from './components';
 import { escapeHtml } from './format';
+import { sparkline } from './chart-utils';
 import type { AppState } from './state';
 
 function money(v: number | null | undefined): string {
@@ -19,6 +20,66 @@ function money(v: number | null | undefined): string {
 function pct(v: number | null | undefined, digits = 2): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return '—';
   return (v > 0 ? '+' : '') + (v * 100).toFixed(digits) + '%';
+}
+
+
+/**
+ * 撮合模拟（v0.69.0）：把资金约束加回来。
+ *
+ * 单笔影子交易假设「每笔都能按 100 股成交」，不涉及钱够不够、仓位满没满。
+ * 真实做的时候现金有限、单票有上限、同时持仓有上限 —— 结论一多就必须排队。
+ * 这一节回答「如果当初真按纪律做，账户会长什么样」。
+ */
+function portfolioSection(t: NonNullable<AppState['strategyTrials']>): string {
+  const p = t.portfolio;
+  if (!p) return '';
+  const skipped = Object.entries(p.skipped || {});
+  const skipText = skipped.length
+    ? skipped.map(([k, v]) => {
+        const label = k === 'no_slot' ? '仓位已满' : k === 'insufficient_cash' ? '买不起一手'
+          : k === 'already_held' ? '已持有' : k === 'no_quote' ? '无行情' : k;
+        return `${label} ${v}`;
+      }).join(' · ')
+    : '无';
+
+  const cards: [string, string, string][] = [
+    ['期末权益', money(p.final_equity), `初始 ${money(p.initial_capital)}`],
+    ['组合收益', pct(p.total_return), ''],
+    ['组合最大回撤', pct(p.max_drawdown), '虚拟账户口径'],
+    ['成交 / 在持', `${p.n_trades} / ${p.n_open}`, `最多同时 ${p.rules?.max_positions ?? '—'} 只`],
+  ];
+  const grid = cards.map(([k, v, hint]) => `<div class="metric-cell"><span>${escapeHtml(k)}</span>
+      <strong>${escapeHtml(v)}</strong><small>${escapeHtml(hint)}</small></div>`).join('');
+
+  const curve = (p.equity_curve || []).map((x) => ({ d: x.d, v: x.v }));
+  const chart = curve.length >= 2 ? sparkline(curve, 640, 140, '撮合模拟权益曲线') : '';
+
+  const tradeRows = (p.trades || []).map((x) => {
+    const cls = x.pnl_ratio > 0 ? 'num pos' : x.pnl_ratio < 0 ? 'num neg' : 'num';
+    const reason = x.exit_reason === 'target' ? '止盈' : x.exit_reason === 'stop' ? '止损' : '到期';
+    return `<tr><td><code>${escapeHtml(x.code)}</code></td>
+      <td class="num">${escapeHtml(x.entry_date)}</td><td class="num">${x.entry_price}</td>
+      <td class="num">${escapeHtml(x.exit_date)}</td><td class="num">${x.exit_price}</td>
+      <td>${reason}</td><td class="${cls}">${pct(x.pnl_ratio)}</td>
+      <td class="num">${money(x.pnl)}</td></tr>`;
+  }).join('');
+  const tradeTable = (p.trades || []).length
+    ? `<div class="swing-table-wrap"><table class="swing-table"><thead><tr>
+        <th>代码</th><th class="num">入场日</th><th class="num">入场价</th>
+        <th class="num">出场日</th><th class="num">出场价</th><th>原因</th>
+        <th class="num">收益</th><th class="num">盈亏(元)</th>
+      </tr></thead><tbody>${tradeRows}</tbody></table></div>`
+    : '<p class="muted">模拟期内没有触发平仓（都还在持有窗口内）。</p>';
+
+  return `<div class="sub-block">
+    <h3 class="sub-heading">撮合模拟（含资金约束）</h3>
+    <div class="metric-grid">${grid}</div>
+    ${chart}
+    ${tradeTable}
+    <p class="muted">跳过原因：${escapeHtml(skipText)}。规则：单票 ≤ 总资产
+      ${(p.rules?.max_single_position ?? 0) * 100}%、最多同时 ${p.rules?.max_positions ?? '—'} 只、
+      ${p.rules?.lot ?? 100} 股整手、入场 ${escapeHtml(p.rules?.entry || '')}。</p>
+  </div>`;
 }
 
 export function renderShadowTrades(state: AppState): string {
@@ -87,6 +148,7 @@ export function renderShadowTrades(state: AppState): string {
   return `<section class="panel">${head}
     <div class="metric-grid">${grid}</div>
     ${table}
+    ${portfolioSection(t)}
     ${rules}
     <p class="muted">样本 ${lt.n} 笔，不足以支撑「胜率」这类统计结论；这里只作逐笔记录。
       方向命中（猜对没有）见本页上方的分组表格，不与本节重复。</p>

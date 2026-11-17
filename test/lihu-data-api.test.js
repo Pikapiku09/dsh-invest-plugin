@@ -60,6 +60,13 @@ const TRIALS = {
   generated_at: '2026-11-17 22:00:00',
   rules: { entry: '结论日后第一个交易日的收盘价', shares: 100, max_hold_days: 20, exit: 'target/stop/time', long_stances: ['看多', '买入', '增持'], adj_covered_codes: 6 },
   summary: { total: 3, long_trials: { n: 1, open: 1, closed: 0, pnl_total: 26, wins: 1 }, skipped: { not_long: 2 } },
+  portfolio: {
+    initial_capital: 100000, final_equity: 99375, total_return: -0.0062, max_drawdown: -0.0139,
+    n_trades: 0, n_open: 3, skipped: { no_slot: 2 },
+    rules: { max_positions: 3, max_single_position: 0.15, entry: 'T+1 收盘', lot: 100 },
+    equity_curve: [{ d: '2026-11-04', v: 100000 }, { d: '2026-11-17', v: 99375 }],
+    trades: [],
+  },
   records: [
     { id: 'a', code: '002727.SZ', status: 'open', pnl_ratio: 0.0193, basis: 'raw_fallback' },
     { id: 'b', code: '600519.SH', status: 'skipped', skip_reason: 'not_long' },
@@ -77,6 +84,10 @@ test('影子交易：只回建仓的几笔，过滤掉非买入记录', async ()
   assert.equal(r.json.trials[0].code, '002727.SZ')
   assert.equal(r.json.summary.long_trials.n, 1)
   assert.equal(r.json.rules.shares, 100)
+  // 撮合模拟必须透传：它是「加回资金约束」后的结果，单笔影子交易无法替代
+  assert.equal(r.json.portfolio.final_equity, 99375)
+  assert.equal(r.json.portfolio.rules.max_positions, 3)
+  assert.equal(r.json.portfolio.skipped.no_slot, 2)
 })
 
 test('影子交易：缺文件与坏 JSON 都给可操作提示', async () => {
@@ -141,4 +152,16 @@ test('两条路由都只许 GET 且仅 loopback', async () => {
     assert.equal((await call(route, { method: 'POST' })).status, 405, route + ' POST')
     assert.equal((await call(route, { remote: '10.0.0.7' })).status, 403, route + ' 非 loopback')
   }
+})
+
+
+test('影子交易：缺 portfolio 时字段为 null，不让前端崩', async () => {
+  const p = path.join(base, 'trials-noport.json')
+  const copy = { ...TRIALS }
+  delete copy.portfolio
+  fs.writeFileSync(p, JSON.stringify(copy), 'utf8')
+  pointSettings('strategyTrials', p)
+  const r = await call('/dsh-invest/api/strategy-trials')
+  assert.equal(r.json.ok, true)
+  assert.equal(r.json.portfolio, null)
 })
