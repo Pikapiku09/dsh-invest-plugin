@@ -326,6 +326,8 @@ export interface StrategyHealthSnapshot {
   source: string;
   account_type: string;
   generated_at: string;
+  /** v2 起有；v1 快照没有这个字段，渲染时必须降级而不是报错 */
+  equity?: StrategyEquity | null;
   strategy: {
     main: string | null;
     market_filter?: boolean;
@@ -347,6 +349,22 @@ export interface StrategyHealthSnapshot {
   } | null;
   findings: StrategyHealthFinding[];
   missing: string[];
+}
+
+export interface StrategyEquity {
+  n_points: number;
+  first_date: string | null;
+  last_date: string | null;
+  current_drawdown: number | null;
+  max_drawdown: number | null;
+  max_drawdown_peak_date: string | null;
+  max_drawdown_trough_date: string | null;
+  peak_equity: number | null;
+  latest_equity: number | null;
+  live_days: number;
+  reconstructed_days: number;
+  truncated_days?: number;
+  points: { d: string; v: number }[];
 }
 
 export interface StrategyHealthResponse {

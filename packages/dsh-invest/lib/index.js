@@ -97,8 +97,11 @@ function apply(ctx, config) {
   const PLUGIN_CONFIG = (config && typeof config === "object") ? config : {}
   const ROUTES_FILE = BASE_DIR + "/.dsh-invest/routes.json"
   const SETTINGS_FILE = BASE_DIR + "/.dsh-invest/settings.json"
-  // 策略健康快照（LihuQuantify → 工作台）支持的契约版本；版本不符就拒，不透传未知结构
-  const SUPPORTED_HEALTH_SCHEMA = 1
+  // 量化策略快照（LihuQuantify → 工作台）支持的契约版本区间。
+  // v2 新增 equity 块（真实模拟盘权益序列）；仍兼容 v1（只有四块，无权益曲线）。
+  // 不用「不等于当前版本就拒」：那样 Lihu 一升 v2，工作台旧版本立刻全白。
+  const SUPPORTED_HEALTH_SCHEMA = 2
+  const MIN_HEALTH_SCHEMA = 1
   // 最近任务持久化（跨 web 关闭/DSH 重启保留最近 5 个）
   const RECENT_JOBS_FILE = BASE_DIR + "/.dsh-invest/store/recent-jobs.json"
   const HOLDINGS_AUDIT = BASE_DIR + "/.dsh-invest/store/holdings_audit.jsonl"
@@ -124,6 +127,25 @@ function apply(ctx, config) {
     } catch (e) { /* 探测失败走默认 */ }
     pythonCmdCache = candidates[0]
     return pythonCmdCache
+  }
+  // 子进程 stdout 一次性解码（调用方先把所有 Buffer 收齐再传进来）：
+  //   ① 默认按 UTF-8 解；② 出现 U+FFFD 说明脚本按本地代码页输出（中文 Windows 为 GBK），
+  //   用 GB18030 再解一次，干净就用它。
+  // 历史 bug：逐块 String(chunk) 既会把 GBK 字节按 UTF-8 解成替换符，也会在多字节字符
+  // 正好被管道切断时插入 U+FFFD——两者都只毁中文，ASCII 代码/数字完好，伪装成「识别不准」。
+  const decodeChildStdout = (buffer) => {
+    if (!buffer || buffer.length === 0) return ""
+    const utf8 = buffer.toString("utf8")
+    if (!utf8.includes("\uFFFD")) return utf8
+    try {
+      const gbk = new TextDecoder("gb18030").decode(buffer)
+      if (!gbk.includes("\uFFFD")) return gbk
+    } catch (e) { /* 无完整 ICU 时忽略，保留 utf8 结果 */ }
+    return utf8
+  }
+  // 从子进程攒 Buffer→统一解码；两个 data 收集器都用它，避免重复的 Buffer 判定
+  const collectChunks = (stream, sink) => {
+    stream.on("data", (chunk) => { sink.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))) })
   }
   // 工作台（P1 只读）：页面与索引文件（tools/index_store.py 生成，运行时读取，改页面无需改插件）
   const WEB_INDEX = BASE_DIR + "/.dsh-invest/web/index.html"
@@ -825,12 +847,25 @@ function apply(ctx, config) {
     const cash = numberOrNull(a.cash ?? a.available_cash ?? a.availableCash ?? a.available)
     return { ...a, total_asset: total, cash, available_cash: cash }
   }
+  // 名称兜底：本地 OCR 偶发漏字、视觉模型则经常只回代码不回名称，草稿里就会出现一排空白名
+  // （用户视角像「内容缺失/显示不正确」）。代码本身是强约束（六位 + 交易所），用本地名称索引
+  // 反查是确定性的，不需要再花一次模型调用去补。
+  const fillPositionNames = async (positions) => {
+    const list = Array.isArray(positions) ? positions : []
+    if (!list.some((p) => p && !String(p.name || "").trim())) return list
+    const names = await readStockNames()
+    return list.map((p) => {
+      if (!p || String(p.name || "").trim()) return p
+      const name = names[p.code]
+      return (typeof name === "string" && name.trim()) ? { ...p, name: name.trim() } : p
+    })
+  }
   const makeHoldingsDraft = async (source, positions, account, warnings) => {
     const current = await readHoldingsDoc()
     const id = "hd_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7)
     const normAccount = normalizeAccount(account)
     // positions 已先经 normalizePosition，再统一重算计算列，保证草稿永远与 cost/shares/current_price 一致
-    const calcPositions = recalcPositions(Array.isArray(positions) ? positions : [], normAccount)
+    const calcPositions = recalcPositions(await fillPositionNames(Array.isArray(positions) ? positions : []), normAccount)
     const draft = { id, source, createdAt: Date.now(), positions: calcPositions, account: normAccount, warnings: warnings || [] }
     holdingsDrafts[id] = draft
     return { draftId: id, source, positions: calcPositions, account: draft.account, diff: positionsDiff(current.positions, calcPositions), warnings: draft.warnings }
@@ -1088,12 +1123,15 @@ function apply(ctx, config) {
         done({ ok: false, spawnUnavailable: true, reason: "spawn python 失败：" + String(e && e.message || e) })
         return
       }
-      let out = "", err = ""
-      child.stdout.on("data", (d) => out += String(d))
-      child.stderr.on("data", (d) => err += String(d))
+      const outChunks = [], errChunks = []
+      collectChunks(child.stdout, outChunks)
+      collectChunks(child.stderr, errChunks)
       child.on("error", (e) => done({ ok: false, spawnUnavailable: true, reason: "spawn python 不可用：" + String(e && e.message || e) }))
       child.on("close", (code) => {
         if (settled) return
+        // 与本地 OCR 同源问题：脚本若按本地代码页输出，逐块 String() 会把中文毁成替换符
+        const out = decodeChildStdout(Buffer.concat(outChunks))
+        const err = decodeChildStdout(Buffer.concat(errChunks))
         if (code !== 0) { done({ ok: false, reason: "实时行情脚本退出码 " + code + (err.trim() ? "：" + err.trim().slice(0, 180) : "") }); return }
         let parsed
         try { parsed = JSON.parse(out) } catch (e) { done({ ok: false, reason: "实时行情脚本 stdout 解析失败：" + String(e && e.message || e).slice(0, 120) }); return }
@@ -1234,14 +1272,16 @@ function apply(ctx, config) {
       const pyCmd = await resolvePython()
       const stdout = await new Promise((resolve, reject) => {
         const child = spawn(pyCmd, [script, tmp], { cwd: BASE_DIR, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
-        let out = ""
-        let err = ""
+        const outChunks = []
+        const errChunks = []
         const timer = setTimeout(() => { try { child.kill() } catch (e) { /* ignore */ } reject(new Error("本地 OCR 超时（60 秒）")) }, 60000)
-        child.stdout.on("data", (chunk) => { out += String(chunk) })
-        child.stderr.on("data", (chunk) => { err += String(chunk) })
+        collectChunks(child.stdout, outChunks)
+        collectChunks(child.stderr, errChunks)
         child.on("error", (error) => { clearTimeout(timer); reject(error) })
         child.on("close", (code) => {
           clearTimeout(timer)
+          const out = decodeChildStdout(Buffer.concat(outChunks))
+          const err = decodeChildStdout(Buffer.concat(errChunks))
           if (code === 0 && out.trim()) resolve(out)
           else reject(new Error("本地 OCR 脚本退出码 " + code + (err.trim() ? "：" + err.trim().slice(0, 200) : "")))
         })
@@ -3170,7 +3210,10 @@ function apply(ctx, config) {
           body.reason = "invalid_json"
           writeJson(res, 200, body); return
         }
-        if (!data || typeof data !== "object" || data.schema_version !== SUPPORTED_HEALTH_SCHEMA) {
+        if (!data || typeof data !== "object"
+          || typeof data.schema_version !== "number"
+          || data.schema_version < MIN_HEALTH_SCHEMA
+          || data.schema_version > SUPPORTED_HEALTH_SCHEMA) {
           body.reason = "schema_mismatch"
           body.found_schema = (data && data.schema_version) ?? null
           writeJson(res, 200, body); return
@@ -4055,7 +4098,12 @@ function apply(ctx, config) {
               try {
                 const ocr = await runLocalOcrHoldings(imageBase64, String(body.mimeType || "image/png"))
                 const rows = Array.isArray(ocr && ocr.positions) ? ocr.positions : []
-                const usable = ocr && ocr.ok === true && ocr.confidence === "high" && rows.some((p) => p && p.code && Number(p.shares) > 0)
+                // 编码事故兜底：名称里出现 U+FFFD 说明中文已在传输链路上毁掉。
+                // 注意此时 warnings 也一起毁了，而 Python 侧的 confidence 门禁是靠中文子串
+                // （"未能反查代码"/"不一致"/"校验不符"）匹配判定的——中文一毁它就恒等于「无阻塞」，
+                // 于是乱码草稿会假通过 high。这里改用「数据本身是否可读」来兜底，宁可回退视觉模型。
+                const garbled = rows.some((p) => p && typeof p.name === "string" && p.name.includes("\uFFFD"))
+                const usable = ocr && ocr.ok === true && ocr.confidence === "high" && !garbled && rows.some((p) => p && p.code && Number(p.shares) > 0)
                 if (usable) {
                   const closed = rows.filter((p) => !(Number(p && p.shares) > 0)).length
                   const positions = rows

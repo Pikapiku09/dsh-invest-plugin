@@ -186,7 +186,7 @@ function render(): void {
   const labels: Record<WorkbenchView, string> = {
     overview: '投研概览', archive: '标的档案', runs: '运行记录', tasks: '一键任务',
     ask: '个股知识库', 'model-settings': '模型设置', holdings: '持仓工作区', backtest: '判断质量',
-    'strategy-health': '策略健康（模拟盘）',
+    'strategy-health': '量化策略（模拟盘）',
   };
   document.getElementById('topbarContext')!.textContent = labels[state.view];
   // 左上角品牌区：版本号 + 「检测更新」（v0.51.0）

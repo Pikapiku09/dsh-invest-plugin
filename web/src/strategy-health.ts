@@ -1,4 +1,4 @@
-// 策略健康页（v0.59.0，2026-11-16）
+// 量化策略页（v0.59.0，2026-11-16；2026-11-17 由「策略健康」改名）
 //
 // 定位：dsh-invest 是主体入口，LihuQuantify 是**模拟盘验证层**。
 // 本页只读展示 Lihu 导出的契约快照（outputs/strategy_health.json，schema_version=1），
@@ -25,7 +25,7 @@ const STATUS_TONE: Record<string, { label: string; cls: string }> = {
 
 const REASON_TEXT: Record<string, { title: string; desc: string }> = {
   missing: {
-    title: '还没有策略健康快照',
+    title: '还没有量化策略快照',
     desc: '在 LihuQuantify 目录下执行：python scripts/export_strategy_health.py，然后回到本页刷新。',
   },
   invalid_json: {
@@ -133,17 +133,74 @@ function behaviorCard(snap: StrategyHealthSnapshot): string {
     <div class="metric-grid">${grid}</div></section>`;
 }
 
+function equityCard(snap: StrategyHealthSnapshot): string {
+  const eq = snap.equity;
+  // v1 快照没有 equity 块 —— 降级成一句说明，而不是整块消失或报错
+  if (!eq) {
+    return `<section class="panel">${sectionHeading('权益与回撤', '数据不可用')}
+      <p class="muted">该快照是契约 v1，没有权益序列。在 LihuQuantify 重新导出后即可显示真实回撤曲线。</p></section>`;
+  }
+  const pts = eq.points || [];
+  const cells: [string, string, string][] = [
+    ['当前回撤', eq.current_drawdown === null ? '—' : pct(eq.current_drawdown), '距历史峰值'],
+    ['历史最大回撤', eq.max_drawdown === null ? '—' : pct(eq.max_drawdown),
+      `${eq.max_drawdown_peak_date ?? '—'} → ${eq.max_drawdown_trough_date ?? '—'}`],
+    ['最新权益', eq.latest_equity === null ? '—' : eq.latest_equity.toFixed(0), '元'],
+    ['覆盖交易日', String(eq.n_points), `${eq.first_date ?? '—'} 起`],
+  ];
+  const grid = cells.map(([k, v, hint]) => `<div class="metric-cell"><span>${escapeHtml(k)}</span>
+      <strong>${escapeHtml(v)}</strong><small>${escapeHtml(hint)}</small></div>`).join('');
+
+  // 来源必须写出来：重建段与实时段混在一起而不标注，会被当成全期真实记账
+  const srcNote = eq.reconstructed_days > 0
+    ? `<p class="muted">其中 <b>${eq.reconstructed_days}</b> 个交易日由历史交割单重建，
+        <b>${eq.live_days}</b> 个为巡检实时记账。${eq.truncated_days ? `曲线只显示最近 ${pts.length} 天（前 ${eq.truncated_days} 天已截断）。` : ''}</p>`
+    : `<p class="muted">全部 ${eq.live_days} 个交易日均为巡检实时记账。</p>`;
+
+  return `<section class="panel">${sectionHeading('权益与回撤', '模拟盘真实记账，非回测曲线')}
+    <div class="metric-grid">${grid}</div>
+    ${sparkline(pts)}
+    ${srcNote}</section>`;
+}
+
+/** 极简 SVG 折线：工作台没有图表库，引一个只为一条线不划算。 */
+function sparkline(points: { d: string; v: number }[], w = 640, h = 150): string {
+  if (!points || points.length < 2) return '<p class="muted">权益点不足两天，暂不画曲线。</p>';
+  const vs = points.map((p) => p.v);
+  const min = Math.min(...vs);
+  const max = Math.max(...vs);
+  const span = max - min || 1;
+  const step = w / (points.length - 1);
+  const pad = 8;
+  const xy = points.map((p, i) => {
+    const x = i * step;
+    const y = h - pad - ((p.v - min) / span) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const line = xy.join(' ');
+  const area = `0,${h} ${line} ${w},${h}`;
+  return `<div class="equity-spark-wrap">
+    <svg class="equity-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
+         aria-label="模拟盘权益曲线，${escapeHtml(points[0].d)} 至 ${escapeHtml(points[points.length - 1].d)}">
+      <polygon class="spark-area" points="${area}"/>
+      <polyline class="spark-line" points="${line}"/>
+    </svg>
+    <div class="equity-axis"><span>${escapeHtml(points[0].d)}</span>
+      <span>${escapeHtml(points[points.length - 1].d)}</span></div>
+  </div>`;
+}
+
 export function renderStrategyHealth(state: AppState): string {
   const res: StrategyHealthResponse | null = state.strategyHealth ?? null;
   const header = pageHeader(
-    '策略健康',
-    '只读展示 LihuQuantify 的模拟盘验证结果：风控集中度、行为体检、研究纪律判决。与实盘账本严格分开。',
+    '量化策略',
+    '只读展示 LihuQuantify 的模拟盘验证结果：权益与回撤、风控集中度、行为体检、研究纪律判决。与实盘账本严格分开。',
     '<button class="button button-secondary" data-action="refresh">' + icon('refresh', 15) + '重新读取</button>',
   );
 
-  if (state.strategyHealthLoading && !res) return header + loadingBlock('正在读取策略健康快照');
+  if (state.strategyHealthLoading && !res) return header + loadingBlock('正在读取量化策略快照');
   if (state.strategyHealthError) return header + errorState('读取失败', state.strategyHealthError);
-  if (!res) return header + emptyState('尚未读取', '点击右上角「重新读取」加载策略健康快照。');
+  if (!res) return header + emptyState('尚未读取', '点击右上角「重新读取」加载量化策略快照。');
 
   if (!res.ok || !res.data) {
     const info = REASON_TEXT[res.reason ?? ''] ?? {
@@ -164,6 +221,7 @@ export function renderStrategyHealth(state: AppState): string {
 
   return header + staleNote + statusBanner(snap)
     + findingsCard(snap)
+    + equityCard(snap)
     + `<div class="health-columns">${riskCard(snap.risk)}${snap.research ? researchCard(snap.research) : ''}</div>`
     + behaviorCard(snap)
     + missing;

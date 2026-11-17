@@ -101,13 +101,27 @@ test('正常快照：透传 data 并带 stale_hours', async () => {
   assert.equal(typeof r.json.stale_hours, 'number')
 })
 
-test('schema 版本不符：拒绝透传未知结构', async () => {
-  const p = writeSnapshot('v2.json', { ...GOOD, schema_version: 2 })
-  const r = await call(`${ROUTE}?path=${encodeURIComponent(p)}`)
-  assert.equal(r.json.ok, false)
-  assert.equal(r.json.reason, 'schema_mismatch')
-  assert.equal(r.json.found_schema, 2)
-  assert.equal(r.json.supported_schema, 1)
+test('schema 版本：v1/v2 都接受，越界拒绝', async () => {
+  // v2 新增 equity 块；仍须兼容 v1，否则 Lihu 一升级工作台就全白
+  const v1 = writeSnapshot('v1.json', { ...GOOD, schema_version: 1 })
+  assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v1)}`)).json.ok, true)
+
+  const v2 = writeSnapshot('v2.json', { ...GOOD, schema_version: 2, equity: { points: [] } })
+  assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v2)}`)).json.ok, true)
+
+  const v3 = writeSnapshot('v3.json', { ...GOOD, schema_version: 3 })
+  const r3 = await call(`${ROUTE}?path=${encodeURIComponent(v3)}`)
+  assert.equal(r3.json.ok, false)
+  assert.equal(r3.json.reason, 'schema_mismatch')
+  assert.equal(r3.json.found_schema, 3)
+  assert.equal(r3.json.supported_schema, 2)
+
+  const v0 = writeSnapshot('v0.json', { ...GOOD, schema_version: 0 })
+  assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v0)}`)).json.reason, 'schema_mismatch')
+
+  // 版本号是字符串（"2"）也一律拒：类型不对说明不是我们的契约
+  const vStr = writeSnapshot('vstr.json', { ...GOOD, schema_version: '2' })
+  assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(vStr)}`)).json.reason, 'schema_mismatch')
 })
 
 test('护栏：不是模拟盘就拒，避免与实盘账本混账', async () => {
