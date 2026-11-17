@@ -195,6 +195,8 @@ export interface AppState {
   runHideBackfill: boolean;
   /** 判断质量回测（v0.44.0） */
   // 策略健康（v0.59.0）：只读 LihuQuantify 模拟盘契约
+  // 「量化策略」页的页内分组（v0.65.0）：总览 / 波段池 / 回测，三个原页面合并为一页
+  quantTab: 'overview' | 'swing' | 'backtest';
   strategyHealth: StrategyHealthResponse | null;
   strategyHealthLoading: boolean;
   strategyHealthError: string;
@@ -275,6 +277,7 @@ export const state: AppState = {
   indexError: '', holdingsError: '', templatesError: '', jobsError: '',
   selectedCode: null, archiveQuery: '', archiveRecords: [], archiveLoading: false,
   archiveError: '', archiveNotice: '', runQuery: '', runStatus: 'all', runMode: 'all', runHideBackfill: false,
+  quantTab: 'overview',
   strategyHealth: null, strategyHealthLoading: false, strategyHealthError: '',
   backtest: null, backtestLoading: false, backtestError: '',
   audit: null, auditLoading: false, auditError: '', backfillRunning: false, importRunning: false, updateInfo: null,

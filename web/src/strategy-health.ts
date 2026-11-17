@@ -13,6 +13,8 @@
 import { emptyState, errorState, loadingBlock, pageHeader, sectionHeading } from './components';
 import { escapeHtml } from './format';
 import { sparkline } from './chart-utils';
+import { renderSwingPoolBody } from './swing-pool';
+import { renderStrategyBacktestBody } from './strategy-backtest';
 import { icon } from './icons';
 import type { AppState } from './state';
 import type { StrategyHealthResponse, StrategyHealthRisk, StrategyHealthSnapshot, StrategyOverview } from './types';
@@ -286,11 +288,26 @@ function reportsSection(snap: StrategyHealthSnapshot): string {
   </section>`;
 }
 
+
+/** 页内分组（v0.65.0）：波段池与策略回测并入本页，不再各占一个导航项。 */
+const QUANT_TABS: { id: 'overview' | 'swing' | 'backtest'; label: string; hint: string }[] = [
+  { id: 'overview', label: '总览', hint: '今日巡检 · 权益 · 风控 · 研究纪律' },
+  { id: 'swing', label: '波段池', hint: '已证伪 · 纸面跟踪' },
+  { id: 'backtest', label: '回测', hint: '回测绩效 · 网格寻优' },
+];
+
+function quantTabBar(active: 'overview' | 'swing' | 'backtest'): string {
+  const items = QUANT_TABS.map((t) => `<button class="quant-tab${t.id === active ? ' active' : ''}"
+      data-action="quant-tab" data-tab="${t.id}" title="${escapeHtml(t.hint)}">
+      ${escapeHtml(t.label)}</button>`).join('');
+  return `<div class="quant-tabs" role="tablist">${items}</div>`;
+}
+
 export function renderStrategyHealth(state: AppState): string {
   const res: StrategyHealthResponse | null = state.strategyHealth ?? null;
   const header = pageHeader(
     '量化策略',
-    '只读展示 LihuQuantify 的模拟盘验证结果：权益与回撤、风控集中度、行为体检、研究纪律判决。与实盘账本严格分开。',
+    'LihuQuantify 的模拟盘验证层：今日巡检、权益与回撤、风控集中度、行为体检、研究纪律、波段池、策略回测。与实盘账本严格分开。',
     '<button class="button button-secondary" data-action="refresh">' + icon('refresh', 15) + '重新读取</button>',
   );
 
@@ -308,14 +325,19 @@ export function renderStrategyHealth(state: AppState): string {
   }
 
   const snap = res.data;
+  const tab = state.quantTab || 'overview';
   const stale = res.stale_hours !== null && res.stale_hours !== undefined && res.stale_hours > 48;
   const staleNote = stale
     ? `<div class="stale-note">快照已 ${Math.round(res.stale_hours as number)} 小时未更新，可能不代表当前状态。在 LihuQuantify 重跑 export_strategy_health.py。</div>`
     : '';
+
+  if (tab === 'swing') return header + quantTabBar(tab) + staleNote + renderSwingPoolBody(state);
+  if (tab === 'backtest') return header + quantTabBar(tab) + staleNote + renderStrategyBacktestBody(state);
+
   const missing = (snap.missing || []).length
     ? `<p class="muted">缺失数据块：${escapeHtml((snap.missing || []).join('、'))}</p>` : '';
 
-  return header + staleNote + statusBanner(snap)
+  return header + quantTabBar(tab) + staleNote + statusBanner(snap)
     + overviewSection(snap)
     + findingsCard(snap)
     + equityCard(snap)

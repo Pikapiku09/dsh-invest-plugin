@@ -10,7 +10,7 @@
 // 网格是训练段寻优、池子按当前上市股票构建、含幸存者偏差，不能当预期收益。
 // 所以排版：先给实盘回测（诚实数字），再给网格（明确标注不可外推），
 // 并且幸存者偏差说明常驻顶部，不折叠、不隐藏。
-import { emptyState, errorState, loadingBlock, pageHeader, sectionHeading } from './components';
+import { emptyState, errorState, loadingBlock, sectionHeading } from './components';
 import { escapeHtml } from './format';
 import { sparkline } from './chart-utils';
 import type { AppState } from './state';
@@ -104,26 +104,25 @@ function gridCard(bt: StrategyBacktest): string {
       既不代表最优参数能上线，也不代表历史会重演。</p></section>`;
 }
 
-export function renderStrategyBacktest(state: AppState): string {
-  const header = pageHeader(
-    '策略回测',
-    '策略代码在历史数据上的表现。与「判断质量」不同：那页评 AI 结论准不准，本页评策略本身。',
-    '<button class="button button-secondary" data-action="refresh">重新读取</button>',
-  );
+/**
+ * 策略回测区块（v0.65.0 起并入「量化策略」页，不再单独成页）。
+ * 由渲染方负责 loading / error / 空快照，这里只关心 backtest 块本身。
+ */
+export function renderStrategyBacktestBody(state: AppState): string {
   const res = state.strategyHealth ?? null;
-  if (state.strategyHealthLoading && !res) return header + loadingBlock('正在读取回测结果');
-  if (state.strategyHealthError) return header + errorState('读取失败', state.strategyHealthError);
-  if (!res) return header + emptyState('尚未读取', '点击右上角「重新读取」加载回测结果。');
+  if (state.strategyHealthLoading && !res) return loadingBlock('正在读取回测结果');
+  if (state.strategyHealthError) return errorState('读取失败', state.strategyHealthError);
+  if (!res) return emptyState('尚未读取', '点击「重新读取」加载回测结果。');
   if (!res.ok || !res.data) {
     const desc = res.reason === 'missing'
       ? '还没有量化策略快照。先在 LihuQuantify 跑 python scripts/export_strategy_health.py。'
       : `快照不可用（${res.reason ?? '未知'}）：${res.hint ?? ''}`;
-    return header + errorState('数据不可用', desc);
+    return errorState('数据不可用', desc);
   }
   const bt = res.data.backtest;
   if (!bt) {
-    return header + emptyState('该快照没有回测数据',
-      '契约版本 v4 及以前不含 backtest 块。在 LihuQuantify 重新导出（脚本会升到 v5）后即可显示。');
+    return emptyState('该快照没有回测数据',
+      '契约版本 v4 及以前不含 backtest 块。在 LihuQuantify 重新导出（脚本会升到 v5+）后即可显示。');
   }
-  return header + biasBanner(bt.survivorship_bias) + mainCard(bt) + gridCard(bt);
+  return biasBanner(bt.survivorship_bias) + mainCard(bt) + gridCard(bt);
 }

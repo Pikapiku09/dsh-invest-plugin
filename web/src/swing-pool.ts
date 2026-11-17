@@ -15,7 +15,7 @@
 //   ④ 当前池子（现在只是纸面观察，不是买入建议）
 //
 // 任何一屏都不该让人产生「这个策略可以上」的错觉。
-import { emptyState, errorState, loadingBlock, pageHeader, sectionHeading } from './components';
+import { emptyState, errorState, loadingBlock, sectionHeading } from './components';
 import { escapeHtml } from './format';
 import type { AppState } from './state';
 import type { StrategySwing, SwingHolding } from './types';
@@ -139,29 +139,27 @@ function poolCard(swing: StrategySwing): string {
     ${statements}</section>`;
 }
 
-export function renderSwingPool(state: AppState): string {
-  const header = pageHeader(
-    '波段池',
-    '中长周期双池（反转 R / 动量 M）· 持有 3 周~6 个月 · 持仓 ≤4 只。本页如实呈现：该策略已被证伪。',
-    '<button class="button button-secondary" data-action="refresh">重新读取</button>',
-  );
+/**
+ * 波段池区块（v0.65.0 起并入「量化策略」页，不再单独成页）。
+ * 由渲染方负责 loading / error / 空快照，这里只关心 swing 块本身。
+ */
+export function renderSwingPoolBody(state: AppState): string {
   const res = state.strategyHealth ?? null;
-  if (state.strategyHealthLoading && !res) return header + loadingBlock('正在读取波段池数据');
-  if (state.strategyHealthError) return header + errorState('读取失败', state.strategyHealthError);
-  if (!res) return header + emptyState('尚未读取', '点击右上角「重新读取」加载波段池数据。');
+  if (state.strategyHealthLoading && !res) return loadingBlock('正在读取波段池数据');
+  if (state.strategyHealthError) return errorState('读取失败', state.strategyHealthError);
+  if (!res) return emptyState('尚未读取', '点击「重新读取」加载波段池数据。');
   if (!res.ok || !res.data) {
     const desc = res.reason === 'missing'
       ? '还没有量化策略快照。先在 LihuQuantify 跑 python scripts/export_strategy_health.py。'
       : `快照不可用（${res.reason ?? '未知'}）：${res.hint ?? ''}`;
-    return header + errorState('数据不可用', desc);
+    return errorState('数据不可用', desc);
   }
   const swing = res.data.swing;
   if (!swing) {
-    return header + emptyState('该快照没有波段池数据',
-      '契约版本 v1/v2 不含 swing 块。在 LihuQuantify 重新导出（脚本会升到 v3）后即可显示。');
+    return emptyState('该快照没有波段池数据',
+      '契约版本 v2 及以前不含 swing 块。在 LihuQuantify 重新导出（脚本会升到 v3+）后即可显示。');
   }
-  return header
-    + falsifiedBanner(swing)
+  return falsifiedBanner(swing)
     + robustnessCard(swing)
     + backtestCard(swing)
     + poolCard(swing);

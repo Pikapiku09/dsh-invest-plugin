@@ -298,7 +298,7 @@ export interface Job {
   question?: string;
 }
 
-export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health' | 'swing-pool' | 'strategy-backtest';
+export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health';
 
 // ===== 策略健康（v0.59.0）=====
 // 只读消费 LihuQuantify 导出的模拟盘契约（outputs/strategy_health.json，schema_version=1）。

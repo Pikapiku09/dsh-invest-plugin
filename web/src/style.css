@@ -1090,3 +1090,13 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
 .report-flag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
   font-size: 10px; font-weight: 600; color: var(--amber); background: rgba(217, 174, 100, .16); }
 .report-ops { color: var(--muted); font-size: 11px; max-width: 320px; line-height: 1.5; }
+
+/* 页内分组 tab（v0.65.0）：波段池 / 策略回测并入量化策略页 */
+.quant-tabs { display: flex; gap: 6px; margin: 0 0 16px; padding: 4px;
+  background: var(--bg); border: 1px solid var(--line-soft); border-radius: 10px; width: fit-content; }
+.quant-tab { padding: 7px 16px; border: 0; border-radius: 7px; cursor: pointer;
+  font-size: 13px; font-weight: 600; color: var(--muted); background: transparent;
+  transition: background .15s, color .15s; }
+.quant-tab:hover { color: var(--text); background: var(--accent-soft); }
+.quant-tab.active { color: var(--text); background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .18); }
