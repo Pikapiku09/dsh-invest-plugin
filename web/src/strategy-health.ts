@@ -12,6 +12,7 @@
 // 3. **陈旧度必须露出来**：快照是离线导出的，可能几天没更新；不标出来就会被当成实时数据。
 import { emptyState, errorState, loadingBlock, pageHeader, sectionHeading } from './components';
 import { escapeHtml } from './format';
+import { sparkline } from './chart-utils';
 import { icon } from './icons';
 import type { AppState } from './state';
 import type { StrategyHealthResponse, StrategyHealthRisk, StrategyHealthSnapshot, StrategyOverview } from './types';
@@ -242,33 +243,6 @@ function equityCard(snap: StrategyHealthSnapshot): string {
     <div class="metric-grid">${grid}</div>
     ${sparkline(pts)}
     ${srcNote}</section>`;
-}
-
-/** 极简 SVG 折线：工作台没有图表库，引一个只为一条线不划算。 */
-function sparkline(points: { d: string; v: number }[], w = 640, h = 150): string {
-  if (!points || points.length < 2) return '<p class="muted">权益点不足两天，暂不画曲线。</p>';
-  const vs = points.map((p) => p.v);
-  const min = Math.min(...vs);
-  const max = Math.max(...vs);
-  const span = max - min || 1;
-  const step = w / (points.length - 1);
-  const pad = 8;
-  const xy = points.map((p, i) => {
-    const x = i * step;
-    const y = h - pad - ((p.v - min) / span) * (h - pad * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
-  const line = xy.join(' ');
-  const area = `0,${h} ${line} ${w},${h}`;
-  return `<div class="equity-spark-wrap">
-    <svg class="equity-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
-         aria-label="模拟盘权益曲线，${escapeHtml(points[0].d)} 至 ${escapeHtml(points[points.length - 1].d)}">
-      <polygon class="spark-area" points="${area}"/>
-      <polyline class="spark-line" points="${line}"/>
-    </svg>
-    <div class="equity-axis"><span>${escapeHtml(points[0].d)}</span>
-      <span>${escapeHtml(points[points.length - 1].d)}</span></div>
-  </div>`;
 }
 
 export function renderStrategyHealth(state: AppState): string {

@@ -98,9 +98,9 @@ function apply(ctx, config) {
   const ROUTES_FILE = BASE_DIR + "/.dsh-invest/routes.json"
   const SETTINGS_FILE = BASE_DIR + "/.dsh-invest/settings.json"
   // 量化策略快照（LihuQuantify → 工作台）支持的契约版本区间。
-  // v2 equity（权益序列）、v3 swing（波段池）、v4 overview（今日巡检）；仍兼容 v1~v3。
+  // v2 equity、v3 swing、v4 overview、v5 backtest；仍兼容 v1~v4。
   // 不用「不等于当前版本就拒」：那样 Lihu 一升 v2，工作台旧版本立刻全白。
-  const SUPPORTED_HEALTH_SCHEMA = 4
+  const SUPPORTED_HEALTH_SCHEMA = 5
   const MIN_HEALTH_SCHEMA = 1
   // 最近任务持久化（跨 web 关闭/DSH 重启保留最近 5 个）
   const RECENT_JOBS_FILE = BASE_DIR + "/.dsh-invest/store/recent-jobs.json"

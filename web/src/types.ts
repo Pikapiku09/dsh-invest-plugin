@@ -298,7 +298,7 @@ export interface Job {
   question?: string;
 }
 
-export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health' | 'swing-pool';
+export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health' | 'swing-pool' | 'strategy-backtest';
 
 // ===== 策略健康（v0.59.0）=====
 // 只读消费 LihuQuantify 导出的模拟盘契约（outputs/strategy_health.json，schema_version=1）。
@@ -407,6 +407,43 @@ export interface StrategyOverview {
   report_name: string | null;
 }
 
+/** 策略回测（v5 契约）：回测绩效与网格寻优是两套不可比的数，页面必须分开。 */
+export interface StrategyBacktestMain {
+  generated_at: string | null;
+  config_hash: string | null;
+  init_capital: number | null;
+  market_filter_mode: string | null;
+  pool: {
+    type?: string; strategy?: string; n_requested?: number; n_with_data?: number;
+    years?: number; end_date?: string; survivorship_bias?: string;
+  } | null;
+  metrics: Record<string, number>;
+  rules_included: Record<string, boolean | string> | null;
+  curve: { d: string; v: number }[];
+  curve_points_total: number;
+}
+
+export interface StrategyGridRow {
+  file: string;
+  pool_label: string | null;
+  pool_built_date: string | null;
+  data_segment: string[] | null;
+  n_robust: number | null;
+  n_total: number | null;
+  best: Record<string, number> | null;
+  orig_params: number[] | null;
+  orig_total_return: number | null;
+  orig_robust: boolean | null;
+  survivorship_bias: string | null;
+}
+
+export interface StrategyBacktest {
+  main: StrategyBacktestMain | null;
+  grid: StrategyGridRow[];
+  /** 幸存者偏差说明抬成一级字段：页面必须显著展示，不能埋进 pool */
+  survivorship_bias: string | null;
+}
+
 export interface StrategyHealthSnapshot {
   schema_version: number;
   source: string;
@@ -418,6 +455,8 @@ export interface StrategyHealthSnapshot {
   swing?: StrategySwing | null;
   /** v4 起有：今日巡检总览 */
   overview?: StrategyOverview | null;
+  /** v5 起有：策略回测 + 网格寻优 */
+  backtest?: StrategyBacktest | null;
   strategy: {
     main: string | null;
     market_filter?: boolean;

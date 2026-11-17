@@ -101,7 +101,7 @@ test('正常快照：透传 data 并带 stale_hours', async () => {
   assert.equal(typeof r.json.stale_hours, 'number')
 })
 
-test('schema 版本：v1~v4 都接受，越界拒绝', async () => {
+test('schema 版本：v1~v5 都接受，越界拒绝', async () => {
   // 每加一块就升一版（v2 equity / v3 swing）；旧版必须仍可读，否则 Lihu 一升级工作台就全白
   const v1 = writeSnapshot('v1.json', { ...GOOD, schema_version: 1 })
   assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v1)}`)).json.ok, true)
@@ -116,12 +116,16 @@ test('schema 版本：v1~v4 都接受，越界拒绝', async () => {
   const v4 = writeSnapshot('v4.json', { ...GOOD, schema_version: 4, overview: { trade_date: '2026-11-10' } })
   assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v4)}`)).json.ok, true)
 
-  const v5 = writeSnapshot('v5.json', { ...GOOD, schema_version: 5 })
-  const r5 = await call(`${ROUTE}?path=${encodeURIComponent(v5)}`)
-  assert.equal(r5.json.ok, false)
-  assert.equal(r5.json.reason, 'schema_mismatch')
-  assert.equal(r5.json.found_schema, 5)
-  assert.equal(r5.json.supported_schema, 4)
+  // v5 新增 backtest（回测 + 网格），仍须可读
+  const v5 = writeSnapshot('v5.json', { ...GOOD, schema_version: 5, backtest: { main: null, grid: [] } })
+  assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v5)}`)).json.ok, true)
+
+  const v6 = writeSnapshot('v6.json', { ...GOOD, schema_version: 6 })
+  const r6 = await call(`${ROUTE}?path=${encodeURIComponent(v6)}`)
+  assert.equal(r6.json.ok, false)
+  assert.equal(r6.json.reason, 'schema_mismatch')
+  assert.equal(r6.json.found_schema, 6)
+  assert.equal(r6.json.supported_schema, 5)
 
   const v0 = writeSnapshot('v0.json', { ...GOOD, schema_version: 0 })
   assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v0)}`)).json.reason, 'schema_mismatch')
