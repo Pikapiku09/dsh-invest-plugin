@@ -172,6 +172,15 @@ test('截图导入：OCR 桩按 GBK 输出中文时仍能正确还原', async (t
 test('截图导入：识别结果缺名称时用 names.json 回填', async (t) => {
   const py = pythonCmd()
   if (!py) { t.skip('本机无 python'); return }
+  // CI 教训（v0.64.1）：本用例原先只跳过「无 python」，却**默认 names.json 一定存在**。
+  // 但 names.json 在工作区（仓库之外），GitHub runner 的上一级目录没有它 →
+  // 模块加载阶段的拷贝被跳过 → 回填拿不到数据 → 断言失败，把后端 job 拉挂。
+  // 现在自带最小 fixture：不依赖仓库外文件，逻辑在每个环境都被真正验证，而不是靠跳过混过去。
+  const namesPath = path.join(base, '.dsh-invest', 'store', 'names.json')
+  const backup = fs.existsSync(namesPath) ? fs.readFileSync(namesPath, 'utf8') : null
+  let current = {}
+  try { current = JSON.parse(backup || '{}') } catch (e) { current = {} }
+  fs.writeFileSync(namesPath, JSON.stringify({ ...current, '603606.SH': '东方电缆' }), 'utf8')
   const stub = path.join(base, 'stub-noname-ocr.py')
   fs.writeFileSync(stub, [
     'import json, sys',
@@ -197,5 +206,8 @@ test('截图导入：识别结果缺名称时用 names.json 回填', async (t) =
   } finally {
     if (previousScript === undefined) delete process.env.DSH_INVEST_OCR_SCRIPT
     else process.env.DSH_INVEST_OCR_SCRIPT = previousScript
+    // 复原 names.json，避免影响后续用例
+    if (backup === null) fs.rmSync(namesPath, { force: true })
+    else fs.writeFileSync(namesPath, backup, 'utf8')
   }
 })

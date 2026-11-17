@@ -1,7 +1,16 @@
 {
-  "latest": "0.64.0",
-  "generatedAt": "2026-11-17T03:38:37.627Z",
+  "latest": "0.64.1",
+  "generatedAt": "2026-11-17T04:20:57.122Z",
   "releases": [
+    {
+      "version": "0.64.1",
+      "date": "2026-11-17",
+      "title": "修复 CI：OCR 测试依赖仓库外 fixture，导致后端 job 连续 5 次失败",
+      "items": [
+        "本机：E:\\Dsh_WorkSapce\\Dify_Agents\\.dsh-invest\\store\\names.json 存在（6,850 字节）→ 用例通过",
+        "CI：/home/runner/work/... 的上一级没有 .dsh-invest → 模块加载阶段的拷贝被跳过 → 回填拿不到名称 → 断言失败 → 后端 job 挂"
+      ]
+    },
     {
       "version": "0.64.0",
       "date": "2026-11-17",
@@ -61,21 +70,6 @@
         "**服务端改为接受 v1~v2 区间**，不再是「版本不等就拒」：否则 Lihu 一升 v2，工作台旧版本立刻全白。v1 快照在页面上降级为一句说明，不报错",
         "显示名「策略健康」→「量化策略」（侧栏 + 顶栏 + 页头）。技术标识 strategy-health 与契约文件名沿用，避免无谓的跨仓改名；代码内已注明两者是同一物",
         "新增「权益与回撤」区块：内联 SVG 折线（工作台无图表库，为一条线引库不划算） + 当前/历史最大回撤 + 覆盖交易日 + 数据来源说明"
-      ]
-    },
-    {
-      "version": "0.59.1",
-      "date": "2026-11-17",
-      "title": "修复：本地 OCR 持仓中文全变「◆◆◆」，概览「上次分析」卡片把任务指令当标题",
-      "items": [
-        "**脚本侧**：新增 write_stdout_json()，绕过文本层直接写 UTF-8 字节（sys.stdout.buffer），跨平台、跨 locale 一致；ensure_ascii=False 保留可读中文。",
-        "**宿主侧**：runLocalOcrHoldings 改为「先收齐 Buffer → 一次性解码」，修掉 String(chunk) 的第二个坑（多字节字符被管道切断同样插入 U+FFFD）；解码统一走 decodeChildStdout()：UTF-8 优先，出现替换符则用 **GB18030 兜底还原**。",
-        "**门禁加固**：usable 增加 !garbled（名称含 U+FFFD 即拒），不再依赖「warnings 文本是否含中文关键词」这种可被编码事故击穿的条件。",
-        "**概览卡片**：上次分析 标题原样渲染整段 question（观察仓日检的机器指令动辄上千字），超长文本直接溢出/被截断。改为截断到 64 字 + title 悬停看全文，CSS 再补 2 行 clamp。",
-        "**名称兜底**：makeHoldingsDraft 新增 fillPositionNames()——识别结果只给代码不给名称时（视觉模型兜底时常见），用本地 names.json 按代码反查补齐。此前会留下空白名称，界面上就是一排没有名字的持仓，同样属于「内容显示不正确」。",
-        "test/ocr-holdings.test.js 补中文名断言（东方电缆）与「不得含 U+FFFD」断言；",
-        "新增**不依赖 rapidocr** 的桩脚本用例：故意用 GBK 字节写中文 JSON，验证能被还原成正常汉字；",
-        "新增「只给代码不给名称」用例：验证 names.json 回填生效；"
       ]
     }
   ]

@@ -2,6 +2,43 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.64.1（2026-11-17）
+
+**修复 CI：OCR 测试依赖仓库外 fixture，导致后端 job 连续 5 次失败**
+
+### 现象
+
+从 v0.60.0（`bdb71cd`）起，`后端测试` job 连续 5 次失败，`前端构建` job 一直通过。
+
+### 根因（已在本机复现验证）
+
+`test/ocr-holdings.test.js` 的用例「识别结果缺名称时用 names.json 回填」只跳过「本机无 python」，
+却**默认 names.json 一定存在**。而 names.json 在工作区（`path.resolve(test目录, '..', '..')`），
+仓库里没有：
+
+- 本机：`E:\Dsh_WorkSapce\Dify_Agents\.dsh-invest\store\names.json` 存在（6,850 字节）→ 用例通过
+- CI：`/home/runner/work/...` 的上一级没有 `.dsh-invest` → 模块加载阶段的拷贝被跳过 →
+  回填拿不到名称 → 断言失败 → 后端 job 挂
+
+复现证据（把仓库外 names.json 移走后再跑）：
+
+| 版本 | 结果 |
+|---|---|
+| 原版 | ✖ `AssertionError: 缺名称必须用 names.json 回填`，actual `''`，expected `'东方电缆'` |
+| 修复后 | ✔ 通过 |
+
+### 修法
+
+不再依赖仓库外文件：该用例运行前把最小 fixture `{"603606.SH": "东方电缆"}` 写进临时 BASE_DIR，
+结束后复原。这样「缺名称回填」逻辑在**每个环境都被真正验证**，而不是靠跳过混过去。
+
+### 顺带审计
+
+扫描了全部测试对仓库外路径的依赖，只有 `ocr-holdings.test.js` 命中；其示例图与 OCR 脚本
+已有 `hasOcrDeps()` 守卫，其余 `pure.test.js` / `workbench.test.js` 里的 `E:/` 只是
+字符串测试数据，不读磁盘。
+
+测试 234 通过（本地）。
 ## v0.64.0（2026-11-17）
 
 **巡检日报折叠进量化策略页（契约 v6）—— LihuQuantify 页面合并到此收尾**
