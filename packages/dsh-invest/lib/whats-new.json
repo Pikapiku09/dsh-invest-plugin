@@ -1,7 +1,18 @@
 {
-  "latest": "0.69.0",
-  "generatedAt": "2026-11-17T15:07:01.002Z",
+  "latest": "0.70.0",
+  "generatedAt": "2026-11-17T15:19:02.018Z",
   "releases": [
+    {
+      "version": "0.70.0",
+      "date": "2026-11-17",
+      "title": "撮合模拟计入交易成本：从「理论收益」变成「到手收益」",
+      "items": [
+        "撮合卡标题改为「含资金约束与交易成本」",
+        "成交明细新增「佣金 / 印花税」两列，收益列改为**净收益**",
+        "成本明细行：三项拆开 + 合计",
+        "单笔影子交易明确标注为**毛收益**（用于逐笔对照），到手收益看撮合模拟"
+      ]
+    },
     {
       "version": "0.69.0",
       "date": "2026-11-17",
@@ -55,15 +66,6 @@
         "renderSwingPool / renderStrategyBacktest 改为 renderSwingPoolBody / renderStrategyBacktestBody：只产出区块，不再各自渲染 pageHeader 与 loading/error",
         "新增 state.quantTab + data-action=\"quant-tab\" 页内切换",
         "三个分组共用同一次快照请求（原本就是同一份 contract，不额外取数）"
-      ]
-    },
-    {
-      "version": "0.64.1",
-      "date": "2026-11-17",
-      "title": "修复 CI：OCR 测试依赖仓库外 fixture，导致后端 job 连续 5 次失败",
-      "items": [
-        "本机：E:\\Dsh_WorkSapce\\Dify_Agents\\.dsh-invest\\store\\names.json 存在（6,850 字节）→ 用例通过",
-        "CI：/home/runner/work/... 的上一级没有 .dsh-invest → 模块加载阶段的拷贝被跳过 → 回填拿不到名称 → 断言失败 → 后端 job 挂"
       ]
     }
   ]

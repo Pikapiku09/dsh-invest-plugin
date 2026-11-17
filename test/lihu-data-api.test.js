@@ -64,6 +64,11 @@ const TRIALS = {
     initial_capital: 100000, final_equity: 99375, total_return: -0.0062, max_drawdown: -0.0139,
     n_trades: 0, n_open: 3, skipped: { no_slot: 2 },
     rules: { max_positions: 3, max_single_position: 0.15, entry: 'T+1 收盘', lot: 100 },
+    costs: {
+      commission_rate: 0.00025, min_commission: 5, stamp_tax_rate: 0.0005, slippage: 0.001,
+      source: 'backtest.broker.SimulatedBroker',
+      total_commission: 15, total_stamp_tax: 0, total_slippage: 44.23, total_fees: 59.23,
+    },
     equity_curve: [{ d: '2026-11-04', v: 100000 }, { d: '2026-11-17', v: 99375 }],
     trades: [],
   },
@@ -88,6 +93,9 @@ test('影子交易：只回建仓的几笔，过滤掉非买入记录', async ()
   assert.equal(r.json.portfolio.final_equity, 99375)
   assert.equal(r.json.portfolio.rules.max_positions, 3)
   assert.equal(r.json.portfolio.skipped.no_slot, 2)
+  // 成本必须透传：没有成本就是「理论收益」，不是到手收益
+  assert.equal(r.json.portfolio.costs.total_fees, 59.23)
+  assert.equal(r.json.portfolio.costs.min_commission, 5)
 })
 
 test('影子交易：缺文件与坏 JSON 都给可操作提示', async () => {

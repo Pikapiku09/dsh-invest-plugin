@@ -411,11 +411,18 @@ export interface TrialsResponse {
     n_open: number;
     skipped: Record<string, number>;
     rules: { max_positions: number; max_single_position: number; entry: string; lot: number };
+    costs?: {
+      commission_rate: number; min_commission: number;
+      stamp_tax_rate: number; slippage: number; source?: string;
+      total_commission: number; total_stamp_tax: number;
+      total_slippage: number; total_fees: number;
+    } | null;
     equity_curve: { d: string; v: number }[];
     trades: {
       code: string; entry_date: string; exit_date: string;
       entry_price: number; exit_price: number; shares: number;
-      exit_reason: string; pnl: number; pnl_ratio: number;
+      exit_reason: string; pnl: number; pnl_gross?: number;
+      commission?: number; stamp_tax?: number; pnl_ratio: number;
     }[];
   } | null;
   trials: {

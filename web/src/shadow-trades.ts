@@ -61,21 +61,34 @@ function portfolioSection(t: NonNullable<AppState['strategyTrials']>): string {
       <td class="num">${escapeHtml(x.entry_date)}</td><td class="num">${x.entry_price}</td>
       <td class="num">${escapeHtml(x.exit_date)}</td><td class="num">${x.exit_price}</td>
       <td>${reason}</td><td class="${cls}">${pct(x.pnl_ratio)}</td>
-      <td class="num">${money(x.pnl)}</td></tr>`;
+      <td class="num">${money(x.pnl)}</td>
+      <td class="num">${x.commission === undefined ? '—' : money(x.commission)}</td>
+      <td class="num">${x.stamp_tax === undefined ? '—' : money(x.stamp_tax)}</td></tr>`;
   }).join('');
   const tradeTable = (p.trades || []).length
     ? `<div class="swing-table-wrap"><table class="swing-table"><thead><tr>
         <th>代码</th><th class="num">入场日</th><th class="num">入场价</th>
         <th class="num">出场日</th><th class="num">出场价</th><th>原因</th>
-        <th class="num">收益</th><th class="num">盈亏(元)</th>
+        <th class="num">净收益</th><th class="num">净盈亏(元)</th>
+        <th class="num">佣金</th><th class="num">印花税</th>
       </tr></thead><tbody>${tradeRows}</tbody></table></div>`
     : '<p class="muted">模拟期内没有触发平仓（都还在持有窗口内）。</p>';
 
+  const cost = p.costs;
+  const costLine = cost
+    ? `<p class="muted">交易成本已计入：佣金 ${money(cost.total_commission)} 元
+        （${(cost.commission_rate * 10000).toFixed(2)} 万，单笔最低 ${money(cost.min_commission)} 元）·
+        印花税 ${money(cost.total_stamp_tax)} 元（卖出 ${(cost.stamp_tax_rate * 1000).toFixed(1)}‰）·
+        滑点 ${money(cost.total_slippage)} 元（${(cost.slippage * 100).toFixed(2)}%）·
+        合计 <b>${money(cost.total_fees)} 元</b></p>`
+    : '<p class="muted">本快照未含交易成本（旧版产出），收益为毛额。</p>';
+
   return `<div class="sub-block">
-    <h3 class="sub-heading">撮合模拟（含资金约束）</h3>
+    <h3 class="sub-heading">撮合模拟（含资金约束与交易成本）</h3>
     <div class="metric-grid">${grid}</div>
     ${chart}
     ${tradeTable}
+    ${costLine}
     <p class="muted">跳过原因：${escapeHtml(skipText)}。规则：单票 ≤ 总资产
       ${(p.rules?.max_single_position ?? 0) * 100}%、最多同时 ${p.rules?.max_positions ?? '—'} 只、
       ${p.rules?.lot ?? 100} 股整手、入场 ${escapeHtml(p.rules?.entry || '')}。</p>
@@ -150,7 +163,8 @@ export function renderShadowTrades(state: AppState): string {
     ${table}
     ${portfolioSection(t)}
     ${rules}
-    <p class="muted">样本 ${lt.n} 笔，不足以支撑「胜率」这类统计结论；这里只作逐笔记录。
+    <p class="muted">本节为<b>毛收益</b>（未计交易成本，用于逐笔对照）；到手收益看下方撮合模拟。
+      样本 ${lt.n} 笔，不足以支撑「胜率」这类统计结论，这里只作逐笔记录。
       方向命中（猜对没有）见本页上方的分组表格，不与本节重复。</p>
   </section>`;
 }
