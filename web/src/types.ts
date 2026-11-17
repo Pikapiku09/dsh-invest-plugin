@@ -369,6 +369,44 @@ export interface StrategySwing {
   } | null;
 }
 
+/** 模拟盘总览（v4 契约）：今日巡检的权威结果是 last_scan 的 summary，客户端不重算。 */
+export interface StrategyOverview {
+  trade_date: string | null;
+  finished_at: string | null;
+  market_state: string | null;
+  entry_scale: number | null;
+  market_gate: { state: string | null; mode: string | null; gate_open: boolean | null } | null;
+  counts: {
+    signals: number | null;
+    executed: number | null;
+    rejected: number | null;
+    sells_today: number | null;
+    pending_stops: number | null;
+    halted: number | null;
+    stale_dropped: number | null;
+  };
+  account: {
+    cash: number | null;
+    total_asset: number | null;
+    market_value: number | null;
+    init_capital: number | null;
+    total_return: number | null;
+    today_pnl: { amount: number; ratio: number; basis: string } | null;
+  };
+  positions: {
+    code: string | null; name: string | null; volume: number | null;
+    cost: number | null; price: number | null; market_value: number | null;
+    pnl_ratio: number | null; stop_price: number | null;
+  }[];
+  review: Record<string, number | string> | null;
+  capital: Record<string, number> | null;
+  alerts: string[];
+  brief: string | null;
+  brief_is_ai: boolean;
+  ai_summary: string | null;
+  report_name: string | null;
+}
+
 export interface StrategyHealthSnapshot {
   schema_version: number;
   source: string;
@@ -378,6 +416,8 @@ export interface StrategyHealthSnapshot {
   equity?: StrategyEquity | null;
   /** v3 起有 */
   swing?: StrategySwing | null;
+  /** v4 起有：今日巡检总览 */
+  overview?: StrategyOverview | null;
   strategy: {
     main: string | null;
     market_filter?: boolean;

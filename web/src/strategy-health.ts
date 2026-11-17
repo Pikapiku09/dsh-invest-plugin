@@ -14,7 +14,7 @@ import { emptyState, errorState, loadingBlock, pageHeader, sectionHeading } from
 import { escapeHtml } from './format';
 import { icon } from './icons';
 import type { AppState } from './state';
-import type { StrategyHealthResponse, StrategyHealthRisk, StrategyHealthSnapshot } from './types';
+import type { StrategyHealthResponse, StrategyHealthRisk, StrategyHealthSnapshot, StrategyOverview } from './types';
 
 const STATUS_TONE: Record<string, { label: string; cls: string }> = {
   ok: { label: '正常', cls: 'ok' },
@@ -133,6 +133,87 @@ function behaviorCard(snap: StrategyHealthSnapshot): string {
     <div class="metric-grid">${grid}</div></section>`;
 }
 
+function money(v: number | null | undefined): string {
+  return (v === null || v === undefined || !Number.isFinite(v))
+    ? '—' : v.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+}
+
+/** 首屏总览（v4）：今日巡检结果 + 账户 + 持仓。数据来自 last_scan，不在这里重算。 */
+function overviewSection(snap: StrategyHealthSnapshot): string {
+  const o = snap.overview;
+  if (!o) {
+    return `<section class="panel">${sectionHeading('今日巡检', '数据不可用')}
+      <p class="muted">该快照是契约 v4 之前的版本，没有总览块。在 LihuQuantify 重新导出后即可显示。</p></section>`;
+  }
+  const c = o.counts || ({} as StrategyOverview['counts']);
+  const a = o.account || ({} as StrategyOverview['account']);
+  const gate = o.market_gate;
+  const gateText = gate
+    ? (gate.gate_open ? '开（允许开仓）' : '关（停止开新仓）')
+    : '—';
+  const tp = a.today_pnl;
+
+  const patrol: [string, string][] = [
+    ['巡检日期', o.trade_date ?? '—'],
+    ['市场状态', o.market_state ?? '—'],
+    ['市场闸门', gateText],
+    ['信号 / 成交', `${c.signals ?? '—'} / ${c.executed ?? '—'}`],
+    ['拦截 / 卖出', `${c.rejected ?? '—'} / ${c.sells_today ?? '—'}`],
+    ['过期丢弃', c.stale_dropped === null || c.stale_dropped === undefined ? '—' : String(c.stale_dropped)],
+  ];
+  const patrolRow = patrol.map(([k, v]) => `<span class="patrol-cell">
+      <small>${escapeHtml(k)}</small><b>${escapeHtml(v)}</b></span>`).join('');
+
+  const acct: [string, string, string][] = [
+    ['总资产', money(a.total_asset), `初始 ${money(a.init_capital)}`],
+    ['累计收益', pct(a.total_return), ''],
+    ['今日盈亏', tp ? (tp.amount >= 0 ? '+' : '') + tp.amount.toFixed(0) : '—',
+      tp ? pct(tp.ratio) + (tp.basis === 'equity_history' ? '（按权益历史）' : '') : ''],
+    ['持仓 / 现金', `${(o.positions || []).length} 只`, `${money(a.cash)} 现金`],
+  ];
+  const acctGrid = acct.map(([k, v, hint]) => `<div class="metric-cell"><span>${escapeHtml(k)}</span>
+      <strong>${escapeHtml(v)}</strong><small>${escapeHtml(hint)}</small></div>`).join('');
+
+  const pos = o.positions || [];
+  const posTable = pos.length ? `<div class="swing-table-wrap"><table class="swing-table"><thead><tr>
+      <th>代码</th><th>名称</th><th class="num">数量</th><th class="num">成本</th>
+      <th class="num">现价</th><th class="num">市值</th><th class="num">浮盈亏</th><th class="num">止损价</th>
+    </tr></thead><tbody>${pos.map((p) => `<tr>
+      <td><code>${escapeHtml(p.code || '')}</code></td>
+      <td>${escapeHtml(p.name || '—')}</td>
+      <td class="num">${p.volume ?? '—'}</td>
+      <td class="num">${p.cost ?? '—'}</td>
+      <td class="num">${p.price ?? '—'}</td>
+      <td class="num">${money(p.market_value)}</td>
+      <td class="num">${p.pnl_ratio === null ? '—' : pct(p.pnl_ratio)}</td>
+      <td class="num">${p.stop_price === null ? '—' : p.stop_price.toFixed(2)}</td>
+    </tr>`).join('')}</tbody></table></div>`
+    : '<p class="muted">当前空仓。</p>';
+
+  const review = o.review;
+  const reviewLine = review
+    ? `<p class="muted">评审进度：已平仓 <b>${review.closed_rounds ?? '—'}</b> / ${review.target ?? '—'} 轮
+       （还差 ${review.remaining ?? '—'}）· 胜率 ${pct(review.win_rate as number)} · 盈亏比 ${
+      (review.pl_ratio as number)?.toFixed?.(2) ?? '—'} · 已实现 ${money(review.realized_pnl as number)}</p>`
+    : '';
+
+  const brief = o.brief
+    ? `<div class="brief-box">${escapeHtml(o.brief)}</div>`
+    : '<p class="muted">本日没有简报。</p>';
+  const alerts = (o.alerts || []).length
+    ? `<ul class="finding-list">${o.alerts.map((t) => `<li class="finding finding-warn">
+        <span class="finding-tag">提示</span><span>${escapeHtml(t)}</span></li>`).join('')}</ul>`
+    : '';
+
+  return `<section class="panel">${sectionHeading('今日巡检', `${o.finished_at ?? ''}${o.brief_is_ai ? ' · AI 简报' : ''}`)}
+    <div class="patrol-row">${patrolRow}</div>
+    <div class="metric-grid">${acctGrid}</div>
+    ${reviewLine}
+    <h3 class="sub-heading">持仓</h3>${posTable}
+    <h3 class="sub-heading">简报</h3>${brief}
+    ${alerts}</section>`;
+}
+
 function equityCard(snap: StrategyHealthSnapshot): string {
   const eq = snap.equity;
   // v1 快照没有 equity 块 —— 降级成一句说明，而不是整块消失或报错
@@ -153,7 +234,7 @@ function equityCard(snap: StrategyHealthSnapshot): string {
 
   // 来源必须写出来：重建段与实时段混在一起而不标注，会被当成全期真实记账
   const srcNote = eq.reconstructed_days > 0
-    ? `<p class="muted">其中 <b>${eq.reconstructed_days}</b> 个交易日由历史交割单重建，
+    ? `<p class="muted">其中 <b>${eq.reconstructed_days}</b> 个交易日由模拟盘自有日报重建，
         <b>${eq.live_days}</b> 个为巡检实时记账。${eq.truncated_days ? `曲线只显示最近 ${pts.length} 天（前 ${eq.truncated_days} 天已截断）。` : ''}</p>`
     : `<p class="muted">全部 ${eq.live_days} 个交易日均为巡检实时记账。</p>`;
 
@@ -220,6 +301,7 @@ export function renderStrategyHealth(state: AppState): string {
     ? `<p class="muted">缺失数据块：${escapeHtml((snap.missing || []).join('、'))}</p>` : '';
 
   return header + staleNote + statusBanner(snap)
+    + overviewSection(snap)
     + findingsCard(snap)
     + equityCard(snap)
     + `<div class="health-columns">${riskCard(snap.risk)}${snap.research ? researchCard(snap.research) : ''}</div>`
