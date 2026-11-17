@@ -354,6 +354,34 @@ export interface StrategyTrials {
   records: StrategyTrialRecord[];
 }
 
+/** 行业热力（v0.67.0）：来自 LihuQuantify 的 heatmap_snapshot.json。 */
+export interface SectorHeatmapIndustry {
+  name: string;
+  n: number;
+  up: number;
+  down: number;
+  amount: number;
+  pct_avg: number | null;
+}
+
+export interface SectorHeatmapCode {
+  industry: string;
+  name: string | null;
+  pct_chg: number | null;
+  amount: number | null;
+}
+
+export interface SectorHeatmapResponse {
+  ok: boolean;
+  path: string;
+  as_of: string | null;
+  universe: number;
+  industries: SectorHeatmapIndustry[];
+  by_code: Record<string, SectorHeatmapCode>;
+  reason?: string | null;
+  hint?: string;
+}
+
 export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health';
 
 // ===== 策略健康（v0.59.0）=====

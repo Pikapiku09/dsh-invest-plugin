@@ -366,6 +366,24 @@ function dispatchAlertNotifications(alerts: WatchAlert[]): void {
 
 // 判断质量回测（v0.44.0）：结论库 × 日线 → 命中率。force=false 时有缓存直接渲染，不重复跑。
 // v0.45.0 起同时拉「采集审计」：让用户看得见数据从哪来、有没有漏。
+/** 行业热力（v0.67.0）：概览页卡片用，轻量路由。失败不阻塞概览其它区块。 */
+async function loadSectorHeatmap(force: boolean): Promise<void> {
+  if (state.sectorHeatmapLoading) return;
+  if (!force && state.sectorHeatmap) { render(); return; }
+  state.sectorHeatmapLoading = true;
+  state.sectorHeatmapError = '';
+  render();
+  try {
+    state.sectorHeatmap = await api.sectorHeatmap();
+  } catch (error) {
+    state.sectorHeatmapError = errorMessage(error);
+    if (force) state.sectorHeatmap = null;
+  } finally {
+    state.sectorHeatmapLoading = false;
+    render();
+  }
+}
+
 /** 策略健康（v0.59.0）：只读 LihuQuantify 模拟盘契约。失败态由视图渲染，不在这里抛。 */
 async function loadStrategyHealth(force: boolean): Promise<void> {
   if (state.strategyHealthLoading) return;
@@ -1111,6 +1129,7 @@ function navigate(view: WorkbenchView): void {
   if (view === 'ask') void loadAskStocks();
   if (view === 'backtest' && !state.backtest && !state.backtestLoading) void loadBacktest(false);
   if (view === 'strategy-health' && !state.strategyHealth && !state.strategyHealthLoading) void loadStrategyHealth(false);
+  if (view === 'overview' && !state.sectorHeatmap && !state.sectorHeatmapLoading) void loadSectorHeatmap(false);
   if (view === 'holdings') {
     // v0.55.1：不再因为「正在加载」就跳过——之前一旦卡在 loading=true 就永远进不来
     if (!state.holdings) void loadHoldings();
@@ -1215,6 +1234,7 @@ async function refreshAll(): Promise<void> {
   if (state.view === 'tasks') { jobs.push(loadTemplates(), loadJobs()); }
   if (state.view === 'model-settings') jobs.push(loadModelSettings());
   if (state.view === 'strategy-health') jobs.push(loadStrategyHealth(true));
+  if (state.view === 'overview') jobs.push(loadSectorHeatmap(true));
   // 只重读结论链，不重置选中与编辑表单：刷新期间用户正在填的监控规则不被打断
   if (state.selectedCode) jobs.push(reloadArchiveConclusions(state.selectedCode));
   try {

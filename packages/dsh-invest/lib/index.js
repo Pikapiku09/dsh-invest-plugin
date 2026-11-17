@@ -102,6 +102,11 @@ function apply(ctx, config) {
   // 不用「不等于当前版本就拒」：那样 Lihu 一升 v2，工作台旧版本立刻全白。
   const SUPPORTED_HEALTH_SCHEMA = 7
   const MIN_HEALTH_SCHEMA = 1
+  // 热力图快照（LihuQuantify 每日巡检写入 data/heatmap_snapshot.json）。
+  // 走独立轻量路由而不是塞进 strategy_health 契约：大契约已 80KB，概览页只为一卡片
+  // 加载它会明显拖慢首屏；这个文件本身自描述（含 trade_date），不需要 schema 版本。
+  const HEATMAP_FILE = "E:/LihuQuantify/data/heatmap_snapshot.json"
+
   // 最近任务持久化（跨 web 关闭/DSH 重启保留最近 5 个）
   const RECENT_JOBS_FILE = BASE_DIR + "/.dsh-invest/store/recent-jobs.json"
   const HOLDINGS_AUDIT = BASE_DIR + "/.dsh-invest/store/holdings_audit.jsonl"
@@ -3160,6 +3165,72 @@ function apply(ctx, config) {
         } catch (e) {
           writeJson(res, 500, { error: String(e).slice(0, 200) })
         }
+      },
+    },
+    {
+      // 行业热力（v0.67.0）：只读 LihuQuantify 的 data/heatmap_snapshot.json，
+      // 聚合成行业维度并保留逐只明细，供概览页做「持仓行业暴露」。
+      //
+      // 为什么单独一个路由：strategy_health 契约已 80KB，概览页只为一个卡片加载它太亏。
+      // 这个文件自描述（每行带 trade_date），不需要 schema 版本；只读、不写、可配路径。
+      kind: "exact",
+      path: "/dsh-invest/api/sector-heatmap",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        const settings = await readJsonFile(SETTINGS_FILE, {})
+        const cfg = (settings && settings.sectorHeatmap) || {}
+        const target = String(cfg.path || process.env.DSH_INVEST_HEATMAP || HEATMAP_FILE)
+        const body = { ok: false, path: target, as_of: null, universe: 0, industries: [], by_code: {}, reason: null }
+        let raw
+        try {
+          raw = await fsp.readFile(target, "utf8")
+        } catch {
+          body.reason = "missing"
+          body.hint = "在 LihuQuantify 跑：python scripts/refresh_heatmap_snapshot.py"
+          writeJson(res, 200, body); return
+        }
+        let rows
+        try { rows = JSON.parse(raw) } catch {
+          body.reason = "invalid_json"
+          writeJson(res, 200, body); return
+        }
+        if (!Array.isArray(rows) || rows.length === 0) {
+          body.reason = "empty"
+          writeJson(res, 200, body); return
+        }
+        const byCode = {}
+        const groups = new Map()
+        for (const r of rows) {
+          if (!r || !r.ts_code) continue
+          const pct = typeof r.pct_chg === "number" ? r.pct_chg : null
+          const ind = r.industry || "未知"
+          byCode[r.ts_code] = { industry: ind, name: r.name || null, pct_chg: pct, amount: r.amount ?? null }
+          let g = groups.get(ind)
+          if (!g) { g = { name: ind, n: 0, sum: 0, counted: 0, amount: 0, up: 0, down: 0 }; groups.set(ind, g) }
+          g.n += 1
+          g.amount += Number(r.amount) || 0
+          if (pct !== null) {
+            g.sum += pct
+            g.counted += 1
+            if (pct > 0) g.up += 1
+            else if (pct < 0) g.down += 1
+          }
+        }
+        const industries = [...groups.values()]
+          .map((g) => ({
+            name: g.name, n: g.n, up: g.up, down: g.down,
+            amount: g.amount,
+            pct_avg: g.counted ? Math.round((g.sum / g.counted) * 100) / 100 : null,
+          }))
+          .sort((a, b) => b.amount - a.amount)
+        const dates = rows.map((r) => r.trade_date).filter(Boolean).sort()
+        body.ok = true
+        body.as_of = dates.length ? dates[dates.length - 1] : null
+        body.universe = rows.length
+        body.industries = industries
+        body.by_code = byCode
+        writeJson(res, 200, body)
       },
     },
     {

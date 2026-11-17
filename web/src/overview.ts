@@ -1,4 +1,4 @@
-import { emptyState, errorState, pageHeader, runStatusBadge, sectionHeading, skeletonPage, stanceBadge } from './components';
+import { emptyState, errorState, loadingBlock, pageHeader, runStatusBadge, sectionHeading, skeletonPage, stanceBadge } from './components';
 import { escapeHtml, formatDateTime, formatDuration, truncate } from './format';
 import { icon } from './icons';
 import { allRunRows } from './run-history';
@@ -133,6 +133,85 @@ function watchPanel(state: AppState): string {
     + summary + watchDistSwitch(mode, 'watch-mode-overview') + badLevelBar + unreadBar + table + '</section>';
 }
 
+
+/**
+ * 行业暴露（v0.67.0）：把实盘持仓放进市场行业温度里。
+ *
+ * 这是热力图唯一有决策价值的用法 —— 单看「今天哪里热」是资讯，
+ * 而「我的钱在下跌的行业里」才是可行动的信息。
+ *
+ * 三种情况都如实显示：
+ * - 持仓标的没有行业归类（ETF 等）→ 单列「未归类」，不隐藏
+ * - 热力快照不可用 → 一句可操作的提示，不让卡片消失
+ * - 行业整体涨跌与个股涨跌并列，避免只看个股误判板块
+ */
+function sectorExposurePanel(state: AppState): string {
+  const hm = state.sectorHeatmap;
+  const holdings = state.holdings?.positions || [];
+  const head = sectionHeading('行业暴露', '实盘持仓 × 市场行业温度');
+  if (state.sectorHeatmapLoading && !hm) {
+    return '<section class="panel">' + head + loadingBlock('正在读取行业热力') + '</section>';
+  }
+  if (!hm || !hm.ok) {
+    const reason = hm?.reason === 'missing'
+      ? '还没有热力快照。在 LihuQuantify 跑：python scripts/refresh_heatmap_snapshot.py'
+      : (hm?.hint || state.sectorHeatmapError || '热力数据暂不可用');
+    return '<section class="panel">' + head + '<p class="muted">' + escapeHtml(reason) + '</p></section>';
+  }
+  if (!holdings.length) {
+    return '<section class="panel">' + head + '<p class="muted">当前没有持仓，无法计算行业暴露。</p></section>';
+  }
+
+  // 持仓字段可能是 number|string|null（来自 OCR/手工录入），统一用 num() 收口，
+  // 否则 TS 会在算术运算处直接报错 —— 也避免 "12.5" 这种字符串被拼成 NaN。
+  const num = (v: unknown): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const priceOf = (p: { current_price?: unknown; cost?: unknown }): number =>
+    num(p.current_price) || num(p.cost);
+  const totalMv = holdings.reduce((sum, p) => sum + priceOf(p) * num(p.shares), 0);
+  const rows = holdings.map((p) => {
+    const info = hm.by_code[p.code];
+    const mv = priceOf(p) * num(p.shares);
+    const weight = totalMv > 0 ? mv / totalMv : 0;
+    return { p, info, weight };
+  }).sort((a, b) => b.weight - a.weight);
+
+  const matched = rows.filter((r) => r.info);
+  const unmatched = rows.filter((r) => !r.info);
+  const indByName = new Map((hm.industries || []).map((i) => [i.name, i]));
+
+  const tableRows = matched.map((r) => {
+    const ind = indByName.get(r.info!.industry);
+    const pct = r.info!.pct_chg;
+    const cls = (pct ?? 0) > 0 ? 'num pos' : (pct ?? 0) < 0 ? 'num neg' : 'num';
+    const indCls = (ind?.pct_avg ?? 0) > 0 ? 'num pos' : (ind?.pct_avg ?? 0) < 0 ? 'num neg' : 'num';
+    return '<tr><td><code>' + escapeHtml(r.p.code) + '</code></td><td>' + escapeHtml(r.p.name || '') + '</td>'
+      + '<td>' + escapeHtml(r.info!.industry) + '</td>'
+      + '<td class="' + cls + '">' + (pct === null ? '—' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%') + '</td>'
+      + '<td class="' + indCls + '">' + (ind?.pct_avg === null || ind?.pct_avg === undefined ? '—' : (ind.pct_avg > 0 ? '+' : '') + ind.pct_avg.toFixed(2) + '%') + '</td>'
+      + '<td class="num">' + (r.weight * 100).toFixed(1) + '%</td></tr>';
+  }).join('');
+
+  const table = '<div class="swing-table-wrap"><table class="swing-table"><thead><tr>'
+    + '<th>代码</th><th>名称</th><th>所属行业</th><th class="num">个股今日</th>'
+    + '<th class="num">行业今日均值</th><th class="num">权重</th></tr></thead><tbody>'
+    + tableRows + '</tbody></table></div>';
+
+  const unmatchedNote = unmatched.length
+    ? '<p class="muted">未归类的 ' + unmatched.length + ' 只（ETF 等无行业分类）：'
+      + unmatched.map((r) => escapeHtml(r.p.code + ' ' + (r.p.name || ''))).join('、') + '</p>'
+    : '';
+
+  const ups = (hm.industries || []).filter((i) => (i.pct_avg ?? 0) > 0).length;
+  const downs = (hm.industries || []).filter((i) => (i.pct_avg ?? 0) < 0).length;
+  const temp = '<p class="muted">市场温度：' + ups + ' 个行业上涨 / ' + downs + ' 个下跌'
+    + '（覆盖 ' + hm.universe + ' 只 · ' + (hm.as_of || '—') + '：不是全市场，只看系统已知标的）</p>';
+
+  return '<section class="panel">' + head + temp + table + unmatchedNote + '</section>';
+}
+
 export function renderOverview(state: AppState): string {
   if (state.indexLoading && !state.index) return skeletonPage();
   if (!state.index) return pageHeader('投研概览', '聚合研究结论、运行记录与归档报告。') + errorState('暂时无法读取主库索引', state.indexError || '索引接口尚未就绪，请稍后重试。');
@@ -169,5 +248,5 @@ export function renderOverview(state: AppState): string {
   }).join('');
   const recentRuns = '<section class="panel overview-runs">' + sectionHeading('最近运行', '最近 5 次流水线：标的、结论与报告入口', '<button class="text-button" data-action="goto-runs">全部记录' + icon('arrow', 14) + '</button>') + '<div class="recent-run-strip">' + (runItems || emptyState('暂无运行记录', '从一键任务开始第一次分析。', 'runs')) + '</div></section>';
 
-  return header + warning + lastAnalysis + recentRuns + watchPanel(state);
+  return header + warning + lastAnalysis + sectorExposurePanel(state) + recentRuns + watchPanel(state);
 }

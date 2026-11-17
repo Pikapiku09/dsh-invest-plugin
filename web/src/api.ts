@@ -3,7 +3,7 @@ import type {
   HoldingsQuotesResponse, HoldingsRefreshQuotesResponse, HoldingsResponse, IndexResponse, Job, ModelSettingsResponse, ModelSettingsSaveInput,
   HoldingPosition, HoldingsAccount, StockResolveResponse, TaskTemplate,
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
-  StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, FundamentalsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse, StrategyHealthResponse,
+  StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, FundamentalsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse, StrategyHealthResponse, SectorHeatmapResponse,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -70,6 +70,8 @@ export const api = {
   /** 策略健康：只读 LihuQuantify 导出的模拟盘契约（v0.59.0）。
    *  失败时服务端返 200 + ok:false + reason，这里不做异常处理，交给视图渲染失败态。 */
   strategyHealth: () => request<StrategyHealthResponse>(`${BASE}/strategy-health`),
+  /** 行业热力（概览页持仓暴露用）：轻量路由，不加载 80KB 的量化策略契约。 */
+  sectorHeatmap: () => request<SectorHeatmapResponse>(`${BASE}/sector-heatmap`),
   holdings: () => request<HoldingsResponse>(`${BASE}/holdings`),
   /** 截图 OCR 识别可能要 1–2 分钟，超时放宽到 3 分钟 */
   importHoldings: (input: HoldingsImportInput) => postSlow<HoldingsDraftResponse>(`${BASE}/holdings/import`, input, 180_000),
