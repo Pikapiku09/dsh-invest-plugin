@@ -101,20 +101,23 @@ test('正常快照：透传 data 并带 stale_hours', async () => {
   assert.equal(typeof r.json.stale_hours, 'number')
 })
 
-test('schema 版本：v1/v2 都接受，越界拒绝', async () => {
-  // v2 新增 equity 块；仍须兼容 v1，否则 Lihu 一升级工作台就全白
+test('schema 版本：v1/v2/v3 都接受，越界拒绝', async () => {
+  // 每加一块就升一版（v2 equity / v3 swing）；旧版必须仍可读，否则 Lihu 一升级工作台就全白
   const v1 = writeSnapshot('v1.json', { ...GOOD, schema_version: 1 })
   assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v1)}`)).json.ok, true)
 
   const v2 = writeSnapshot('v2.json', { ...GOOD, schema_version: 2, equity: { points: [] } })
   assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v2)}`)).json.ok, true)
 
-  const v3 = writeSnapshot('v3.json', { ...GOOD, schema_version: 3 })
-  const r3 = await call(`${ROUTE}?path=${encodeURIComponent(v3)}`)
-  assert.equal(r3.json.ok, false)
-  assert.equal(r3.json.reason, 'schema_mismatch')
-  assert.equal(r3.json.found_schema, 3)
-  assert.equal(r3.json.supported_schema, 2)
+  const v3 = writeSnapshot('v3.json', { ...GOOD, schema_version: 3, swing: { strategy_status: 'falsified' } })
+  assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v3)}`)).json.ok, true)
+
+  const v4 = writeSnapshot('v4.json', { ...GOOD, schema_version: 4 })
+  const r4 = await call(`${ROUTE}?path=${encodeURIComponent(v4)}`)
+  assert.equal(r4.json.ok, false)
+  assert.equal(r4.json.reason, 'schema_mismatch')
+  assert.equal(r4.json.found_schema, 4)
+  assert.equal(r4.json.supported_schema, 3)
 
   const v0 = writeSnapshot('v0.json', { ...GOOD, schema_version: 0 })
   assert.equal((await call(`${ROUTE}?path=${encodeURIComponent(v0)}`)).json.reason, 'schema_mismatch')

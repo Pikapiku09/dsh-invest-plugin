@@ -1024,3 +1024,41 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
 .spark-area { fill: var(--accent-soft); stroke: none; }
 .equity-axis { display: flex; justify-content: space-between; margin-top: 4px;
   font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ===== 波段池页（v0.61.0，P3）=====
+   这是一页「别做」的页面：证伪横幅必须在视觉上压过其他内容。 */
+.swing-banner { margin: 0 0 16px; padding: 16px 18px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
+.swing-falsified { border-color: rgba(238, 123, 132, .5); background: rgba(238, 123, 132, .07); }
+.swing-banner-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.swing-banner-head strong { font-size: 15px; }
+.swing-flag { flex: none; padding: 3px 10px; border-radius: 999px; font-size: 11px;
+  font-weight: 700; letter-spacing: .06em; color: #fff; background: var(--red); }
+.swing-banner p { margin: 6px 0 0; font-size: 13px; line-height: 1.7; color: var(--text); }
+.swing-decide { padding: 8px 10px; border-radius: 8px; background: var(--bg);
+  border-left: 3px solid var(--red); font-size: 12px; color: var(--muted) !important; }
+.swing-unknown { border-color: rgba(217, 174, 100, .5); }
+
+.swing-win { margin-bottom: 14px; }
+.swing-win-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.swing-chip { padding: 1px 8px; border-radius: 999px; font-size: 10px; font-weight: 600;
+  color: var(--accent); background: var(--accent-soft); }
+.swing-chip-alt { color: var(--muted); background: var(--bg); }
+.swing-table-wrap { overflow-x: auto; }
+.swing-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; }
+.swing-table th, .swing-table td { padding: 7px 9px; border-bottom: 1px solid var(--line-soft);
+  text-align: left; vertical-align: top; }
+.swing-table th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.swing-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.swing-table code { font-size: 11px; color: var(--accent); }
+.swing-state { max-width: 420px; line-height: 1.55; color: var(--muted); }
+
+.swing-disclaimers { margin: 12px 0 0; padding-left: 18px; font-size: 11px;
+  color: var(--muted); line-height: 1.7; }
+.swing-details { margin-top: 12px; font-size: 12px; color: var(--muted); }
+.swing-details summary { cursor: pointer; color: var(--accent); }
+.swing-details ul { margin: 8px 0 0; padding-left: 18px; line-height: 1.7; }
+.swing-raw { max-height: 320px; overflow: auto; font-size: 11px; line-height: 1.6;
+  background: var(--bg); border: 1px solid var(--line-soft); border-radius: 10px;
+  padding: 12px; white-space: pre-wrap; }

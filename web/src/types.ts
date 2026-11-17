@@ -298,7 +298,7 @@ export interface Job {
   question?: string;
 }
 
-export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health';
+export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health' | 'swing-pool';
 
 // ===== 策略健康（v0.59.0）=====
 // 只读消费 LihuQuantify 导出的模拟盘契约（outputs/strategy_health.json，schema_version=1）。
@@ -321,6 +321,54 @@ export interface StrategyHealthFinding {
   text: string;
 }
 
+/** 波段池（v3 契约）：策略已证伪，页面主调是「别做」，不是「策略不错」。 */
+export interface SwingHolding {
+  code?: string | null;
+  name?: string | null;
+  pool?: string | null;
+  price?: string | null;
+  target?: string | null;
+  stop?: string | null;
+  state?: string | null;
+  next_check?: string | null;
+}
+
+export interface SwingControl {
+  mean: number | null;
+  baseline_percentile: number | null;
+  q5: number | null;
+  q95: number | null;
+}
+
+export interface StrategySwing {
+  strategy_status: 'falsified' | 'unknown';
+  pool: {
+    exists: boolean;
+    statements: string[];
+    holdings: SwingHolding[];
+    parse_ok: boolean;
+    as_of: string | null;
+    raw_excerpt: string;
+  } | null;
+  backtest: {
+    generated_at?: string;
+    params?: Record<string, unknown>;
+    metrics: Record<string, number>;
+    yearly?: Record<string, Record<string, number>>;
+    funnel?: Record<string, number>;
+    exit_reasons?: Record<string, number>;
+    disclaimers?: string[];
+  } | null;
+  robustness: {
+    windows: {
+      window: string[];
+      baseline_total_return: number | null;
+      controls: Record<string, SwingControl>;
+      matched_headline: boolean;
+    }[];
+  } | null;
+}
+
 export interface StrategyHealthSnapshot {
   schema_version: number;
   source: string;
@@ -328,6 +376,8 @@ export interface StrategyHealthSnapshot {
   generated_at: string;
   /** v2 起有；v1 快照没有这个字段，渲染时必须降级而不是报错 */
   equity?: StrategyEquity | null;
+  /** v3 起有 */
+  swing?: StrategySwing | null;
   strategy: {
     main: string | null;
     market_filter?: boolean;
