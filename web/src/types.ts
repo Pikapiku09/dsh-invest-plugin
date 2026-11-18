@@ -462,6 +462,16 @@ export interface RealPerformanceResponse {
   limitations?: string[];
   valuation_jumps?: { ts_code: string; date: string; jump_yuan: number }[];
   assumptions?: Record<string, unknown> | null;
+  /** 持仓账本（权威口径）：monthly_perf 是按交割单重建的模型，两者可能对不上 */
+  current?: {
+    source: string;
+    updated_at: string | null;
+    total_asset: number | null;
+    market_value: number | null;
+    available_cash: number | null;
+    holding_pnl: number | null;
+    position_pct: number | null;
+  } | null;
 }
 
 export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health';

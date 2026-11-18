@@ -1,7 +1,17 @@
 {
-  "latest": "0.70.0",
-  "generatedAt": "2026-11-17T15:19:02.018Z",
+  "latest": "0.71.0",
+  "generatedAt": "2026-11-18T01:00:07.465Z",
   "releases": [
+    {
+      "version": "0.71.0",
+      "date": "2026-11-18",
+      "title": "实盘绩效改以持仓账本为权威口径；闸门标注限定作用范围",
+      "items": [
+        "路由新增 current 块（读持仓账本：总资产/市值/现金/浮亏/仓位/更新时间）",
+        "页面顶部四张卡改为：**当前总资产（持仓账本，权威）** / 重建模型累计（标注「非当前值」）/ 最大回撤 / 持仓浮亏与仓位",
+        "新增**差额警告条**：把 123,656.63 与 110,442.71 并列写出、标明差额与三个口径原因，并明确「以持仓账本为准，曲线与月度分布仅代表重建路径」"
+      ]
+    },
     {
       "version": "0.70.0",
       "date": "2026-11-17",
@@ -54,18 +64,6 @@
       "items": [
         "**方向命中**：按 stance 推期望方向，用「结论日后第一个交易日收盘」为基准（避免前视偏差），看第 5/10 个交易日，覆盖全部有行情的结论；观察/持有记中性不判对错",
         "**影子交易**：仅买入类，T+1 收盘入场 100 股，跟踪 target/stop/时间出场"
-      ]
-    },
-    {
-      "version": "0.65.0",
-      "date": "2026-11-17",
-      "title": "波段池与策略回测并入「量化策略」页（页内分组），导航 10 → 8 项",
-      "items": [
-        "WorkbenchView 去掉 swing-pool / strategy-backtest 两个视图",
-        "侧栏删除对应两个入口（导航 10 → 8）",
-        "renderSwingPool / renderStrategyBacktest 改为 renderSwingPoolBody / renderStrategyBacktestBody：只产出区块，不再各自渲染 pageHeader 与 loading/error",
-        "新增 state.quantTab + data-action=\"quant-tab\" 页内切换",
-        "三个分组共用同一次快照请求（原本就是同一份 contract，不额外取数）"
       ]
     }
   ]

@@ -159,7 +159,10 @@ function overviewSection(snap: StrategyHealthSnapshot): string {
   const patrol: [string, string][] = [
     ['巡检日期', o.trade_date ?? '—'],
     ['市场状态', o.market_state ?? '—'],
-    ['市场闸门', gateText],
+    // 必须写明作用范围：这行容易被误读成「波段池也被闸门卡着」。
+    // 波段池从来没有市场闸门（三年回测的 params 里连市场相关键都没有），
+    // 它的闸只有两道：高价股硬闸 P_max 与赔率 ≥3:1。
+    ['短线策略闸门', gateText],
     ['信号 / 成交', `${c.signals ?? '—'} / ${c.executed ?? '—'}`],
     ['拦截 / 卖出', `${c.rejected ?? '—'} / ${c.sells_today ?? '—'}`],
     ['过期丢弃', c.stale_dropped === null || c.stale_dropped === undefined ? '—' : String(c.stale_dropped)],

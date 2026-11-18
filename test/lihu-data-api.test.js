@@ -51,9 +51,22 @@ async function call(routePath, opts = {}) {
   return { status: status || 200, json: text ? JSON.parse(text) : null }
 }
 
-function pointSettings(key, filePath) {
+function pointSettings(key, filePath, extra) {
   fs.writeFileSync(path.join(base, '.dsh-invest', 'settings.json'),
-    JSON.stringify({ [key]: { path: filePath } }), 'utf8')
+    JSON.stringify({ [key]: { path: filePath, ...(extra || {}) } }), 'utf8')
+}
+
+/** 持仓账本 fixture（权威口径）。不写它的话路由会去读真实文件，临时目录里不存在。 */
+function writeHoldings() {
+  const hp = path.join(base, 'holdings.json')
+  fs.writeFileSync(hp, JSON.stringify({
+    updated_at: '2026-11-17T09:39:34.033Z',
+    account: {
+      total_asset: 110442.71, market_value: 75232.4, available_cash: 35210.31,
+      holding_pnl: -3499.56, position_pct: 68.1,
+    },
+  }), 'utf8')
+  return hp
 }
 
 const TRIALS = {
@@ -121,6 +134,11 @@ const PERF = {
   limitations: ['初始资金为假设值', '不含银证转账'],
   valuation_jumps: [{ ts_code: '600584.SH', date: '2026-08-03', jump_yuan: -8688 }],
   assumptions: { initial_capital: 110000 },
+  current: {
+    source: 'E:/x/持仓.json', updated_at: '2026-11-17T09:39:34.033Z',
+    total_asset: 110442.71, market_value: 75232.4, available_cash: 35210.31,
+    holding_pnl: -3499.56, position_pct: 68.1,
+  },
 }
 
 test('实盘绩效：曲线降采样到 250 点且保留首末', async () => {
@@ -138,8 +156,11 @@ test('实盘绩效：曲线降采样到 250 点且保留首末', async () => {
 test('实盘绩效：口径限制与估值跳变必须透传（最容易被误读的两项）', async () => {
   const p = path.join(base, 'perf2.json')
   fs.writeFileSync(p, JSON.stringify(PERF), 'utf8')
-  pointSettings('realPerformance', p)
+  pointSettings('realPerformance', p, { holdingsPath: writeHoldings() })
   const r = await call('/dsh-invest/api/real-performance')
+  // 持仓账本是权威口径：必须和重建模型一起下发，差额才能被页面摆出来
+  assert.equal(r.json.current.total_asset, 110442.71)
+  assert.equal(r.json.current.updated_at, '2026-11-17T09:39:34.033Z')
   assert.equal(r.json.limitations.length, 2)
   assert.equal(r.json.valuation_jumps.length, 1)
   assert.equal(r.json.max_drawdown.pct_ex_valuation_jumps, -34.7984)
@@ -172,4 +193,17 @@ test('影子交易：缺 portfolio 时字段为 null，不让前端崩', async (
   const r = await call('/dsh-invest/api/strategy-trials')
   assert.equal(r.json.ok, true)
   assert.equal(r.json.portfolio, null)
+})
+
+
+test('实盘绩效：缺持仓账本时 current 为 null，用重建模型兜底', async () => {
+  const p = path.join(base, 'perf-nocur.json')
+  const copy = { ...PERF }
+  delete copy.current
+  fs.writeFileSync(p, JSON.stringify(copy), 'utf8')
+  // 指向不存在的账本，验证 current 优雅降级为 null
+  pointSettings('realPerformance', p, { holdingsPath: path.join(base, 'nope-holdings.json') })
+  const r = await call('/dsh-invest/api/real-performance')
+  assert.equal(r.json.ok, true)
+  assert.equal(r.json.current, null)
 })

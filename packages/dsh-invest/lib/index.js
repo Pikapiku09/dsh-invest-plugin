@@ -3259,6 +3259,28 @@ function apply(ctx, config) {
         body.limitations = Array.isArray(data.limitations) ? data.limitations : []
         body.valuation_jumps = Array.isArray(data.valuation_jumps) ? data.valuation_jumps : []
         body.assumptions = data.assumptions || null
+
+        // 持仓账本（2026-11-18）：monthly_perf 是「按交割单重建的模型」，
+        // 其期末权益与券商账本对不上（实测 123,656.63 vs 110,442.71，差 1.3 万）。
+        // 账本是权威口径，这里一并下发，让页面能并列显示、并把差额摆出来，
+        // 而不是让用户在两页看到两个数还以为其中一个是对的。
+        try {
+          const holdingsPath = String(cfg.holdingsPath || process.env.DSH_INVEST_HOLDINGS || (BASE_DIR + "/.dsh-invest/持仓.json"))
+          const raw2 = await fsp.readFile(holdingsPath, "utf8")
+          const hd = JSON.parse(raw2)
+          const acc = (hd && hd.account) || {}
+          body.current = {
+            source: holdingsPath,
+            updated_at: hd && hd.updated_at ? hd.updated_at : null,
+            total_asset: typeof acc.total_asset === "number" ? acc.total_asset : null,
+            market_value: typeof acc.market_value === "number" ? acc.market_value : null,
+            available_cash: typeof acc.available_cash === "number" ? acc.available_cash : null,
+            holding_pnl: typeof acc.holding_pnl === "number" ? acc.holding_pnl : null,
+            position_pct: typeof acc.position_pct === "number" ? acc.position_pct : null,
+          }
+        } catch {
+          body.current = null
+        }
         writeJson(res, 200, body)
       },
     },

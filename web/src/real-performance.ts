@@ -41,7 +41,25 @@ export function renderRealPerformance(state: AppState): string {
   const volRatio = bm?.account_std_pct && bm?.index_std_pct
     ? (bm.account_std_pct / bm.index_std_pct) : null;
 
-  const cards: [string, string, string, string][] = [
+  const cur = p.current;
+  // 权威口径优先：券商账本才是「我的钱现在有多少」。
+  // monthly_perf 是按交割单重建的模型（初始资金 11 万也是假设值），
+  // 两者实测差 1.3 万，不能让它们并列却不解释。
+  const reconcile = (cur && cur.total_asset !== null && tt.equity_end)
+    ? cur.total_asset - tt.equity_end : null;
+  const cards: [string, string, string, string][] = cur && cur.total_asset !== null
+    ? [
+        ['当前总资产', money(cur.total_asset), `持仓账本 · ${String(cur.updated_at || '').slice(0, 10)}`,
+          reconcile !== null && reconcile < 0 ? 'neg' : ''],
+        ['重建模型累计', pct(tt.total_return_pct),
+          `截至 ${(p.equity_curve && p.equity_curve.length) ? p.equity_curve[p.equity_curve.length - 1].date : '—'} · 非当前值`, ''],
+        ['最大回撤', md ? pct(md.pct) : '—',
+          md ? `${md.peak_date} → ${md.trough_date}${unrecovered ? ' · 未修复' : ''}` : '',
+          unrecovered ? 'neg' : ''],
+        ['持仓浮亏', cur.holding_pnl === null || cur.holding_pnl === undefined ? '—' : money(cur.holding_pnl),
+          `仓位 ${cur.position_pct ?? '—'}% · 现金 ${money(cur.available_cash)}`, (cur.holding_pnl ?? 0) < 0 ? 'neg' : ''],
+      ]
+    : [
     ['累计收益', pct(tt.total_return_pct), `年化 ${pct(tt.annualized_pct)} · ${tt.years ?? '—'} 年`, ''],
     ['最大回撤', md ? pct(md.pct) : '—',
       md ? `${md.peak_date} → ${md.trough_date} · ${md.calendar_days} 天${unrecovered ? ' · 未修复' : ''}` : '',
@@ -55,6 +73,13 @@ export function renderRealPerformance(state: AppState): string {
       <span>${escapeHtml(k)}</span>
       <strong class="${tone}">${escapeHtml(v)}</strong>
       <small>${escapeHtml(hint)}</small></div>`).join('');
+
+  const reconcileNote = (reconcile !== null && Math.abs(reconcile) > 1)
+    ? `<div class="inline-warning">两个数字对不上：重建模型期末 ${money(tt.equity_end)}（${(p.equity_curve || []).length ? p.equity_curve![p.equity_curve!.length - 1].date : '—'}）
+       与持仓账本 ${money(cur!.total_asset)}（${String(cur!.updated_at || '').slice(0, 10)}）相差 <b>${money(reconcile)}</b>。
+       该模型初始资金 11 万为假设值、不含天天宝与银证转账、且有 7 笔成交晚于行情末日未计价，
+       <b>绝对权益水平不可作为账户事实</b>；以持仓账本为准。曲线与月度分布仅代表重建路径。</div>`
+    : '';
 
   const exJump = md?.pct_ex_valuation_jumps;
   const ddNote = (md && exJump !== null && exJump !== undefined && md.pct !== exJump)
@@ -99,6 +124,7 @@ export function renderRealPerformance(state: AppState): string {
 
   return `<section class="panel">${head}
     <div class="metric-grid">${grid}</div>
+    ${reconcileNote}
     ${ddNote}
     ${chart}${truncated}
     ${benchLine}
