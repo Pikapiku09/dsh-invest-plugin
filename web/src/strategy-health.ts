@@ -131,8 +131,15 @@ function behaviorCard(snap: StrategyHealthSnapshot): string {
   if (peak) rows.push(['峰值捕获率（中位）', pct(peak.median)]);
   if (sizing) rows.push(['亏损单/盈利单规模比', sizing.loss_to_win_ratio === undefined ? '—' : Number(sizing.loss_to_win_ratio).toFixed(2) + 'x']);
   if (!rows.length) return '';
+  // 「907 笔」原本是写死的字符串：交割单变了数字也不会变（2026-11-18 修正）。
+  // 实际值就在 behavior.fills 里，按它渲染。
+  const fills = b.fills as Record<string, unknown> | undefined;
+  const nFills = fills && typeof fills.n_fills === "number" ? fills.n_fills : null;
+  const span = fills && fills.first_date && fills.last_date
+    ? `${String(fills.first_date)} ~ ${String(fills.last_date)}` : '';
+  const sub = nFills === null ? '来自真实交割单' : `来自真实交割单（${nFills} 笔${span ? ' · ' + span : ''}）`;
   const grid = rows.map(([k, v]) => `<div class="metric-cell"><span>${escapeHtml(k)}</span><strong>${escapeHtml(v)}</strong></div>`).join('');
-  return `<section class="panel">${sectionHeading('行为体检', '来自真实交割单（907 笔）')}
+  return `<section class="panel">${sectionHeading('行为体检', sub)}
     <div class="metric-grid">${grid}</div></section>`;
 }
 

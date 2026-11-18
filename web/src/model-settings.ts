@@ -243,7 +243,7 @@ export function renderModelSettings(state: AppState): string {
     + `<section class="settings-guide"><span>${icon('database', 19)}</span><div><strong>路由与预设分离管理</strong><p>宿主模型决定「继承宿主」与一键任务的默认执行模型；角色路由直接选择已注册模型与推理强度；推理强度默认 <code>default</code>（不下发，由模型自身决定）。模板预设提供继承宿主、经济快速、均衡、高质量、快速五档。</p></div></section>
      <section class="settings-section">${sectionHeading('分析师角色', '5 个角色均可独立设置，默认继承宿主；推理强度默认 default')}
        <div class="model-role-grid">${roles.map((role) => roleCard(role, state)).join('')}</div></section>
-     <section class="settings-section">${sectionHeading('任务模板', '6 个标准模板使用独立预设档')}
+     <section class="settings-section">${sectionHeading('任务模板', `${(state.templates || []).length ? (state.templates || []).length + ' 个' : ''}标准模板使用独立预设档`)}
        <div class="model-template-grid">${templates.map((template) => templateCard(template, presets, state)).join('')}</div></section>
      <div class="settings-save-bar"><span>${dirty ? `有 ${dirty} 项修改尚未保存` : '所有修改均已保存'}。</span><button class="button button-primary" data-action="save-model-settings" ${state.modelSettingsSaving || !dirty ? 'disabled' : ''}>${state.modelSettingsSaving ? '<span class="spinner"></span>正在保存' : `${icon('check', 15)}保存设置`}</button></div>`;
 }
