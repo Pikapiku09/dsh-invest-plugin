@@ -1110,3 +1110,9 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
 .skip-chip b { color: var(--text); }
 .swing-table .pos { color: var(--red); }
 .swing-table .neg { color: var(--green); }
+
+/* 使用说明面板（v0.72.0） */
+.handbook-card { max-width: 620px; }
+.handbook-text { margin: 4px 0 18px; line-height: 1.9; font-size: 13.5px; color: var(--text); text-align: justify; }
+.handbook-pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.handbook-count { font-size: 12px; color: var(--muted); }

@@ -23,6 +23,7 @@ import { fileToBase64, positionsForConfirm, prepareScreenshotForUpload, renderHo
 import type { PreparedScreenshot } from './holdings';
 import { LEDGER_DEFAULT_COLUMNS } from './types';
 import { APP_VERSION } from './version';
+import { handbookIndexForView, renderHandbookPanel } from './handbook';
 import { lastPromptedVersion, lastSeenVersion, markVersionPrompted, markVersionSeen, renderUpdateDialog, renderWhatsNew, shouldPromptUpdate, unseenReleases } from './whats-new';
 import { compareStockName } from './stock-index';
 import type { ConclusionRecord, HoldingPosition, HoldingsImportInput, Job, ModelSettingsSaveInput, TaskTemplate, UpdateCheckResponse, WatchAlert, WorkbenchView, WatchlistUpdateInput, LedgerColKey } from './types';
@@ -574,6 +575,29 @@ function renderUpdateBadge(): void {
 }
 
 /** 弹层挂载点：两个弹层各有独立容器，互斥显示，便于分别清理 */
+
+/** 使用说明面板：全局按钮打开，定位到当前页，可循环翻页。 */
+function renderHandbook(): void {
+  const root = modalRoot('handbookRoot');
+  root.innerHTML = state.handbookIndex === null ? '' : renderHandbookPanel(state.handbookIndex);
+}
+
+function openHandbook(): void {
+  state.handbookIndex = handbookIndexForView(state.view);
+  renderHandbook();
+}
+
+function shiftHandbook(delta: number): void {
+  if (state.handbookIndex === null) return;
+  state.handbookIndex += delta;
+  renderHandbook();
+}
+
+function closeHandbook(): void {
+  state.handbookIndex = null;
+  renderHandbook();
+}
+
 function modalRoot(id: string): HTMLElement {
   let root = document.getElementById(id);
   if (!root) {
@@ -2037,6 +2061,10 @@ document.addEventListener('click', (event) => {
   else if (action === 'conclusions-import') openImportFilePicker();
   else if (action === 'whatsnew-close') closeWhatsNew();
   else if (action === 'show-whats-new') void showWhatsNewAgain();
+    else if (action === 'handbook-open') openHandbook();
+    else if (action === 'handbook-close') closeHandbook();
+    else if (action === 'handbook-prev') shiftHandbook(-1);
+    else if (action === 'handbook-next') shiftHandbook(1);
   else if (action === 'check-update') void runUpdateCheck();
   else if (action === 'update-close') closeUpdateDialog();
   else if (action === 'update-later') closeUpdateDialog();
