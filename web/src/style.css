@@ -1113,6 +1113,8 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
 
 /* 使用说明面板（v0.72.0） */
 .handbook-card { max-width: 620px; }
-.handbook-text { margin: 4px 0 18px; line-height: 1.9; font-size: 13.5px; color: var(--text); text-align: justify; }
+.handbook-para { margin: 0 0 14px; line-height: 1.95; font-size: 13.5px; color: var(--text); text-align: justify; }
+.handbook-para:first-child { font-weight: 600; }
+.handbook-para:last-of-type { margin-bottom: 10px; }
 .handbook-pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
 .handbook-count { font-size: 12px; color: var(--muted); }
