@@ -233,8 +233,9 @@ function archiveDetail(state: AppState): string {
   const latestReport = latestReportForCode(state.index, code);
   return `<div class="archive-detail"><section class="panel symbol-summary"><div><div class="symbol-code">${escapeHtml(displayName)} <small>${escapeHtml(code)}</small></div><p>${position ? `${escapeHtml(displayName)} · ${position.shares !== undefined ? `持仓 ${formatNumber(position.shares)} 股` : '在持仓账本中'} · 成本 ${escapeHtml(position.cost ?? '—')}` : '当前不在实时持仓账本中'}</p></div><div class="symbol-metrics"><span><b>${records.length}</b> 条结论</span><span><b>${runs.length}</b> 次相关运行</span>${records[0] ? '<span class="symbol-stance">' + stanceBadge(records[0].stance) + '</span><div class="symbol-levels"><span>目标 <b>' + escapeHtml(records[0].target ?? '—') + '</b></span><span>止损 <b>' + escapeHtml(records[0].stop ?? '—') + '</b></span></div>' : ''}</div>
     <div class="symbol-actions"><button class="button button-secondary" data-action="ask-latest-report" data-code="${escapeHtml(code)}" ${latestReport ? '' : 'disabled title="该标的还没有归档报告"'}>${icon('chat', 15)}个股知识库</button></div></section>
-    ${renderFundamentalsCard(state)}
     ${monitorPanel(state, code)}
+    <div class="fund-page-actions"><button class="button button-secondary" data-action="fundamentals-refresh" data-code="${escapeHtml(code)}" title="强制重拉全市场快照后重算该标的的基本面评级（首次可能较慢）">${icon('chart', 15)}刷新基本面</button></div>
+    ${renderFundamentalsCard(state)}
     ${state.archiveNotice ? `<div class="inline-warning">${icon('alert', 15)}${escapeHtml(state.archiveNotice)}</div>` : ''}
     <section class="panel timeline-panel">${sectionHeading('结论链时间线', '最新判断在前 · 跟踪目标、风险线及观点变化')}${state.archiveLoading ? loadingBlock('正在读取结构化结论链') : state.archiveError && !records.length ? errorState('结论链读取失败', state.archiveError) : conclusionTimeline(records)}</section>
     <section class="panel">${sectionHeading('相关运行', '该标的出现于以下研究任务')}${runs.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>时间</th><th>模式</th><th>问题</th><th>耗时</th><th>状态</th><th></th></tr></thead><tbody>${runRows}</tbody></table></div>` : emptyState('没有相关运行', '该标的尚未关联到历史研究任务。', 'runs')}</section>
@@ -247,11 +248,8 @@ export function renderArchive(state: AppState): string {
   const entries = codeEntries(state.index, state.archiveQuery);
   const visible = entries.slice(0, 80);
   const alerts = activeAlerts(state);
-  // 档案页顶部：选中标的后可直接强制重算基本面评级（卡片内的刷新按钮是同一动作）
-  const fundamentalsAction = state.selectedCode
-    ? `<button class="button button-secondary" data-action="fundamentals-refresh" data-code="${escapeHtml(state.selectedCode)}" title="强制重拉全市场快照后重算该标的的基本面评级（首次可能较慢）">${icon('chart', 15)}刷新基本面</button>`
-    : '';
-  return pageHeader('标的档案', '沿时间追溯每一次判断，实时持仓与历史研究不再脱节。', `<div class="fund-page-actions">${fundamentalsAction}${notifyToggle()}</div>`) + `<div class="archive-layout"><aside class="panel archive-browser">
+  // 档案页顶部只保留通知开关；「刷新基本面」按钮随基本面区块下移（监控规则在前、基本面评级在后）
+  return pageHeader('标的档案', '沿时间追溯每一次判断，实时持仓与历史研究不再脱节。', notifyToggle()) + `<div class="archive-layout"><aside class="panel archive-browser">
     <div class="search-field">${icon('search', 16)}<input data-field="archive-query" value="${escapeHtml(state.archiveQuery)}" placeholder="搜索代码或名称" aria-label="过滤标的" /></div>
     ${holdingPanel(state)}
     ${watchPanel(state)}

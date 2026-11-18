@@ -34,9 +34,12 @@ function threadHtml(state: AppState, code: string, name: string): string {
     return `<div class="ask-hint">${icon('chat', 20)}<div><strong>就 ${escapeHtml(name || code)} 的知识库提问</strong><p>回答只依据这份知识库${updated ? `（更新于 ${escapeHtml(updated)}）` : ''}；知识库没写的会明确说「未涉及」，涉及更晚的行情会提示你跑任务更新。支持连续追问，历史轮次会一起带上。</p><p class="ask-hint-kb">整理后的知识库${(state.askCharts || []).length ? ` 与 ${(state.askCharts || []).length} 张相关图表` : ''}已收起，点右上角「知识库」可放大查看。</p></div></div>
       ${suggestionsHtml(state)}`;
   }
-  return thread.map((turn) => `<div class="ask-turn ask-${turn.role}">
+  return thread.map((turn, index) => `<div class="ask-turn ask-${turn.role}">
       <span class="ask-role">${turn.role === 'user' ? '你' : '助手'}</span>
-      <div class="ask-bubble${turn.role === 'assistant' ? ' ask-markdown' : ''}">${turn.role === 'assistant' ? renderMarkdown(turn.text) : escapeHtml(turn.text).replace(/\n/g, '<br/>')}</div>
+      <div class="ask-bubble${turn.role === 'assistant' ? ' ask-markdown' : ''}">${turn.role === 'assistant' ? renderMarkdown(turn.text) : escapeHtml(turn.text).replace(/\n/g, '<br/>')}${
+        turn.role === 'user'
+          ? `<span class="ask-turn-actions"><button class="ask-mini" type="button" data-action="ask-copy" data-turn="${index}" title="复制这条提问">${icon('file', 12)}复制</button><button class="ask-mini" type="button" data-action="ask-edit" data-turn="${index}" title="把这条提问放回输入框改写后重发">${icon('edit', 12)}修改</button></span>`
+          : ''}</div>
     </div>`).join('') + suggestionsHtml(state);
 }
 
@@ -195,7 +198,7 @@ function mainPane(state: AppState): string {
     <div class="ask-thread" id="ask-thread">${threadHtml(state, code, name)}</div>
     ${state.askError ? `<div class="inline-warning">${icon('alert', 15)}${escapeHtml(state.askError)}</div>` : ''}
     <div class="ask-compose">
-      <textarea data-field="ask-input" rows="2" placeholder="就这只股票的知识库提问，例如：这个结论在什么情况下会失效？（Ctrl/⌘ + Enter 发送）">${escapeHtml(state.askDraft || '')}</textarea>
+      <textarea data-field="ask-input" rows="2" placeholder="就这只股票的知识库提问，例如：这个结论在什么情况下会失效？（Enter 发送，Shift + Enter 换行）">${escapeHtml(state.askDraft || '')}</textarea>
       <button class="button button-primary" data-action="ask-send" ${state.askLoading ? 'disabled' : ''}>${state.askLoading ? '<span class="spinner"></span>思考中' : `${icon('play', 15)}发送`}</button>
     </div>
   </section>`;

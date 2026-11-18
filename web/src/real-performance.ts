@@ -47,6 +47,9 @@ export function renderRealPerformance(state: AppState): string {
   // 两者实测差 1.3 万，不能让它们并列却不解释。
   const reconcile = (cur && cur.total_asset !== null && tt.equity_end)
     ? cur.total_asset - tt.equity_end : null;
+  // 折叠摘要常驻两个决策数字：当前总资产（持仓账本口径）与最大回撤（未修复会在展开区标注）
+  const keyFigures = `<span class="muted">当前总资产 <b>${escapeHtml(money(cur?.total_asset))}</b> · 最大回撤 <b>${escapeHtml(md ? pct(md.pct) : '—')}</b></span>`;
+  const headWithKey = sectionHeading('实盘绩效', '由真实交割单重建 · 不是回测、不是模拟盘', keyFigures);
   const cards: [string, string, string, string][] = cur && cur.total_asset !== null
     ? [
         ['当前总资产', money(cur.total_asset), `持仓账本 · ${String(cur.updated_at || '').slice(0, 10)}`,
@@ -122,7 +125,8 @@ export function renderRealPerformance(state: AppState): string {
         <ul>${p.limitations!.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul></details>`
     : '';
 
-  return `<section class="panel">${head}
+  // 默认折叠（不写 open）：摘要行常驻标题与两个决策数字，展开后内容与旧版一致
+  return `<section class="panel"><details class="swing-details"><summary>${headWithKey}</summary>
     <div class="metric-grid">${grid}</div>
     ${reconcileNote}
     ${ddNote}
@@ -132,5 +136,5 @@ export function renderRealPerformance(state: AppState): string {
     ${monthTable}
     ${jumps}
     ${limits}
-  </section>`;
+  </details></section>`;
 }

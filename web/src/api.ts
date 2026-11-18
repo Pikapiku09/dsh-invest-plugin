@@ -114,7 +114,9 @@ export const api = {
     post<{ ok: boolean; queued: boolean; code: string }>(`${BASE}/stock-note/curate`, input),
   /** 针对个股知识库追问 */
   stockAsk: (input: { code: string; question: string; history?: Array<{ role: 'user' | 'assistant'; text: string }> }) =>
-    post<StockAskResponse>(`${BASE}/stock-ask`, input),
+    // 走 postSlow（180s）：这是一次模型调用，正常 30-120 秒。原先用 post 的 30 秒上限，
+    // 会在模型正常作答途中被判「请求超时（30 秒未响应）」——是超时设太短，不是模型连不上。
+    postSlow<StockAskResponse>(`${BASE}/stock-ask`, input),
   /** 图表内容：SVG 返回 svg 文本，PNG 返回 base64（v0.53.0 起支持 PNG） */
   chart: (path: string) => request<{ path: string; svg?: string; png?: string }>(
     `${CHART_BASE}?path=${encodeURIComponent(path)}`,

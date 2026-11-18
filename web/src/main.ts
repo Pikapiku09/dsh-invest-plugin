@@ -577,6 +577,55 @@ function renderUpdateBadge(): void {
 /** 弹层挂载点：两个弹层各有独立容器，互斥显示，便于分别清理 */
 
 /** 使用说明面板：全局按钮打开，定位到当前页，可循环翻页。 */
+
+/** 取第 index 条「用户」提问的原文（v0.73.0） */
+function askTurnText(index: number): string {
+  const thread = state.askThreads[stockThreadKey(state.askStock || '')] || [];
+  const turn = thread[index];
+  return turn && turn.role === 'user' ? String(turn.text || '') : '';
+}
+
+async function copyAskTurn(index: number): Promise<void> {
+  const text = askTurnText(index);
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('已复制这条提问', 'success');
+  } catch {
+    toast('复制失败，请手动选中文本复制', 'error');
+  }
+}
+
+/** 把历史提问放回输入框，便于改写后重发 */
+function editAskTurn(index: number): void {
+  const text = askTurnText(index);
+  if (!text) return;
+  state.askDraft = text;
+  render();
+  const input = document.querySelector<HTMLTextAreaElement>('[data-field="ask-input"]');
+  if (input) {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+}
+
+/**
+ * 图表放大（v0.73.0）：报告与知识库里的图缩略图太小，看不清均线与刻度。
+ * 点图开浮层，点任意处或 Esc 关闭。
+ */
+function openChartLightbox(src: string, alt: string): void {
+  const root = modalRoot('chartLightboxRoot');
+  root.innerHTML = `<div class="chart-lightbox" role="dialog" aria-modal="true" aria-label="${escapeHtml(alt || '图表')}">
+    <img class="chart-lightbox-img" src="${escapeHtml(src)}" alt="${escapeHtml(alt || '')}" />
+    <button class="chart-lightbox-x" type="button" data-action="chart-lightbox-close" aria-label="关闭">×</button>
+  </div>`;
+}
+
+function closeChartLightbox(): void {
+  const root = document.getElementById('chartLightboxRoot');
+  if (root) root.innerHTML = '';
+}
+
 function renderHandbook(): void {
   const root = modalRoot('handbookRoot');
   root.innerHTML = state.handbookIndex === null ? '' : renderHandbookPanel(state.handbookIndex);
@@ -1433,9 +1482,25 @@ function codeForReportPath(reportPath: string): string {
 
 /** 知识库页：没有选中标的时自动选第一只（按名称排序），避免右侧空白。
  *  必须在确认「当前确实在知识库页」后调用，否则会触发 navigate('ask') 覆盖默认首页。 */
+
+/** 上次追问的标的（v0.73.0）：切走再回来不该跳回字母序第一只。 */
+const LAST_ASK_KEY = 'dsh-invest:last-ask-code';
+
+function readLastAskCode(): string {
+  try { return String(localStorage.getItem(LAST_ASK_KEY) || '').toUpperCase(); } catch { return ''; }
+}
+
+function writeLastAskCode(code: string): void {
+  try { localStorage.setItem(LAST_ASK_KEY, String(code || '').toUpperCase()); } catch { /* 隐私模式下写入失败不阻塞 */ }
+}
+
 function ensureAskSelection(): void {
   if (state.view !== 'ask' || state.askStock || !state.askStocks.length) return;
-  const first = [...state.askStocks].sort((a, b) => compareStockName(a.name || a.code, b.name || b.code))[0];
+  const remembered = readLastAskCode();
+  const resumed = remembered
+    ? state.askStocks.find((x) => String(x.code).toUpperCase() === remembered)
+    : undefined;
+  const first = resumed || [...state.askStocks].sort((a, b) => compareStockName(a.name || a.code, b.name || b.code))[0];
   if (first) void selectAskStock(first.code);
 }
 
@@ -1549,6 +1614,7 @@ async function selectAskStock(code: string, openKb = false): Promise<void> {
   askNotePolling = 0;
   if (askNotePollTimer) { window.clearTimeout(askNotePollTimer); askNotePollTimer = 0; }
   state.askStock = target;
+  writeLastAskCode(target);
   state.askNote = null;
   state.askCharts = [];
   state.askNoteError = '';
@@ -2061,6 +2127,9 @@ document.addEventListener('click', (event) => {
   else if (action === 'conclusions-import') openImportFilePicker();
   else if (action === 'whatsnew-close') closeWhatsNew();
   else if (action === 'show-whats-new') void showWhatsNewAgain();
+    else if (action === 'ask-copy') void copyAskTurn(Number(target.dataset.turn));
+    else if (action === 'ask-edit') editAskTurn(Number(target.dataset.turn));
+    else if (action === 'chart-lightbox-close') closeChartLightbox();
     else if (action === 'handbook-open') openHandbook();
     else if (action === 'handbook-close') closeHandbook();
     else if (action === 'handbook-prev') shiftHandbook(-1);
@@ -2230,14 +2299,53 @@ document.addEventListener('input', (event) => {
   }
 });
 
+
+/**
+ * 重绘后恢复焦点与光标位置（v0.73.0）
+ *
+ * 根因：中文输入法每次 compositionend 都会走一次整页 render()，输入框 DOM 节点被整体替换，
+ * 于是「打完一段字光标就没了，要继续输入得再点一下」。这不是某个页面的问题，是所有输入框的共性。
+ *
+ * 做法：重绘前记下当前焦点元素的定位标识与选区，重绘后按同一标识找回来并复位选区。
+ */
+function describeFocus(el: Element | null): string | null {
+  if (!(el instanceof HTMLElement) || !el.dataset) return null;
+  if (el.dataset.field) return `[data-field="${el.dataset.field}"]`;
+  if (el.dataset.templateId && el.dataset.draft) {
+    return `[data-template-id="${el.dataset.templateId}"][data-draft="${el.dataset.draft}"]`;
+  }
+  if (el.dataset.positionIndex !== undefined && el.dataset.positionField) {
+    return `[data-position-index="${el.dataset.positionIndex}"][data-position-field="${el.dataset.positionField}"]`;
+  }
+  if (el.dataset.accountField) return `[data-account-field="${el.dataset.accountField}"]`;
+  return null;
+}
+
+function renderPreservingFocus(): void {
+  const active = document.activeElement;
+  const selector = describeFocus(active);
+  const el = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement ? active : null;
+  const start = el && el.selectionStart !== null ? el.selectionStart : null;
+  const end = el && el.selectionEnd !== null ? el.selectionEnd : null;
+  render();
+  if (!selector) return;
+  const next = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector);
+  if (!next) return;
+  next.focus();
+  if (start !== null && end !== null) {
+    try { next.setSelectionRange(start, end); } catch { /* 部分 input 类型不支持选区 */ }
+  }
+}
+
 document.addEventListener('compositionstart', (event) => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) event.target.dataset.imeComposing = 'true';
 });
 document.addEventListener('compositionend', (event) => {
   if (!(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) return;
   delete event.target.dataset.imeComposing;
-  // 组合输入期间仅更新 state，结束后一次性重绘，避免中文候选被替换节点打断
-  render();
+  // 组合输入期间仅更新 state，结束后一次性重绘，避免中文候选被替换节点打断。
+  // 必须保焦点：否则打完一段中文，输入框被替换，光标消失（用户实测的「要继续输入还得再点」）。
+  renderPreservingFocus();
 });
 
 document.addEventListener('change', (event) => {
@@ -2335,9 +2443,21 @@ document.addEventListener('change', (event) => {
   else if (target.dataset.field === 'run-status') { state.runStatus = target.value as typeof state.runStatus; render(); }
 });
 
+// 图表放大：委托绑定——图是 hydrateCharts 异步填的 src，逐图绑定会漏掉后加载的
+document.addEventListener('click', (event) => {
+  const img = event.target instanceof Element ? event.target.closest<HTMLImageElement>('img.report-chart') : null;
+  if (img && img.src) { event.preventDefault(); openChartLightbox(img.src, img.alt || ''); return; }
+  // 点浮层空白处关闭
+  if (event.target instanceof Element && event.target.closest('.chart-lightbox') && !event.target.closest('img')) {
+    closeChartLightbox();
+  }
+});
+
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeChartLightbox();
   // 报告追问：Ctrl/⌘ + Enter 发送
-  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+  // 知识库追问：Enter 直接发送，Shift+Enter 换行（Ctrl/⌘+Enter 一并保留）
+  if (event.key === 'Enter' && !event.shiftKey) {
     const askInput = event.target instanceof HTMLElement ? event.target.closest<HTMLTextAreaElement>('[data-field="ask-input"]') : null;
     if (askInput) {
       event.preventDefault();
