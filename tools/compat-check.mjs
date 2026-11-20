@@ -177,11 +177,25 @@ async function main() {
     return `${requiredRoutes.length}/${requiredRoutes.length}`
   })
 
+
+  // 回归断言：宿主服务取值必须全部走 hostService，只留访问器内部那一处裸调用。
+  // 少了这条，以后新代码又会到处写 ctx.get("fs")，这次改造就白做了。
+  check('宿主服务取值已全部收敛', () => {
+    const raw = fs.readFileSync(ENTRY, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')   // 去块注释
+      .replace(/^\s*\/\/.*$/gm, '')          // 去行注释
+    const hits = [...raw.matchAll(/ctx\.get\(/g)]
+    if (hits.length !== 1) {
+      throw new Error(`仍有 ${hits.length} 处裸 ctx.get（应为 1，仅访问器内部）：请改用 hostService(ctx, name)`)
+    }
+    return '1 处（仅访问器内部）'
+  })
+
   // 静态扫描：注册阶段不触发 ctx.get（服务是请求时才取的），
   // 所以真实依赖面要从源码里读。这份清单就是升级 DSH 时要对照的「接口契约」。
   check('清单：插件依赖的宿主接口', () => {
     const source = fs.readFileSync(ENTRY, 'utf8')
-    const services = [...new Set([...source.matchAll(/ctx\.get\(\s*["']([a-z-]+)["']/g)].map((m) => m[1]))].sort()
+    const services = [...new Set([...source.matchAll(/hostService\(ctx,\s*["']([a-zA-Z-]+)["']/g)].map((m) => m[1]))].sort()
     const props = [...new Set([...source.matchAll(/\bctx\.([a-zA-Z]+)/g)].map((m) => m[1]))].sort()
     return `ctx.get: [${services.join(', ')}] · ctx.*: [${props.join(', ')}]`
   })

@@ -68,6 +68,25 @@ function queryParam(url, key) {
  * @param ctx - host plugin context carrying webServer/tools/systemPrompt.
  * @param config - optional plugin config: { preset, routes } for per-role model routing.
  */
+/**
+ * 宿主服务单点访问（2026-11-20）
+ *
+ * 为什么要有这一层：插件有几十处要取宿主服务（fs / agents / llm / attachments）。
+ * 若哪天 DSH 改了服务名，没有这层就要在几十个地方挨个找，漏一个就是**静默失效**；
+ * 有这层，改名只改下面这一行的字符串。
+ *
+ * 两条设计约束，改这里之前先读：
+ * 1. **必须保留「用的时候现取」**。宿主可能先挂插件、后注册服务，若在 apply 时取一次存起来，
+ *    会永远拿到空值——那才是真会改坏。所以这里只做转发，不做缓存。
+ * 2. **放在模块级并显式接收 ctx**，而不是在 apply 里做闭包。这样不管调用点在 apply 内部
+ *    还是外部函数里，都不会因为作用域拿不到 ctx。
+ */
+function hostService(ctx, name, ...rest) {
+  // 必须原样透传多余参数：插件里还有 hostService(ctx, n, true) / hostService(ctx, n, false) 这种
+  // 「候选探测」写法，第二个参数是查询标志。吞掉它会让这段静默改变含义。
+  return ctx.get(name, ...rest)
+}
+
 function apply(ctx, config) {
   // ---- 宿主接口自检（2026-11-20）----
   // DSH 升级后若宿主接口改名/删除，插件会在注册阶段抛异常。注册阶段抛异常最坏的结果是
@@ -92,7 +111,7 @@ function apply(ctx, config) {
     // 服务是请求时才取的，这里只提示缺失的服务名，不阻断——插件在服务缺失时已有多处降级分支
     for (const name of ["fs", "agents", "attachments", "llm"]) {
       try {
-        if (ctx.get(name) === undefined && name === "fs") {
+        if (hostService(ctx, name) === undefined && name === "fs") {
           const warn = "[dsh-invest] 宿主未提供 fs 服务：账本/缓存/报告读写会降级失败，请检查 DSH 版本。"
           try { ctx && typeof ctx.logger?.warn === "function" ? ctx.logger.warn(warn) : console.warn(warn) } catch { console.warn(warn) }
         }
@@ -211,7 +230,7 @@ function apply(ctx, config) {
 
   // 读取账本 → 紧凑 Markdown 摘要（不存在/损坏时返回空串，绝不阻断流水线）
   const readHoldingsBlock = async () => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === undefined) return ""
     try {
       const target = await fs.resolve(HOLDINGS_FILE)
@@ -248,7 +267,7 @@ function apply(ctx, config) {
   }
   // 当前持仓清单（code + name）：选股环节用它做「只找新标的」的硬排除
   const readHeldPositions = async () => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) return []
     try {
       const d = JSON.parse(await fs.readText(await fs.resolve(HOLDINGS_FILE)))
@@ -268,7 +287,7 @@ function apply(ctx, config) {
 
   // P3：读取结构化结论事件日志（invest_run 每次运行追加）
   const readConclusionRecords = async () => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) return []
     try {
       const raw = await fs.readText(await fs.resolve(CONCLUSIONS_LOG))
@@ -295,7 +314,7 @@ function apply(ctx, config) {
   const readHistoryBlock = async (question, context, mode) => {
     let codes = extractInvestCodes(String(question || "") + " " + String(context || ""))
     if (!codes.length && /持仓|组合|复盘|波段|总判断|all/i.test(String(question || "") + " " + String(mode || ""))) {
-      const fs = ctx.get("fs")
+      const fs = hostService(ctx, "fs")
       if (fs !== void 0) {
         try {
           const h = JSON.parse(await fs.readText(await fs.resolve(HOLDINGS_FILE)))
@@ -306,7 +325,7 @@ function apply(ctx, config) {
     if (!codes.length) return ""
     const structured = await readConclusionRecords()
     let backfill = []
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs !== void 0) {
       try { backfill = (JSON.parse(await fs.readText(await fs.resolve(STORE_INDEX))).records || []) } catch (e) { /* ignore */ }
     }
@@ -508,7 +527,7 @@ function apply(ctx, config) {
   // 新口径：**收集所有成功阶段**的结构化结论，同一标的后出现的阶段覆盖前面的（下游更权威），
   // 去重后最多 20 个标的；同时记录 runId / stage / report，保证每条回测数据都可溯源。
   const persistConclusions = async (mode, question, callId, outputs, reports, policy) => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) return 0
     const byCode = new Map()
     let anyBlock = false
@@ -712,7 +731,7 @@ function apply(ctx, config) {
     m.last_signal_at = new Date().toISOString()
     const rec = { ts: m.last_signal_at, code: it.code, name: it.name, state: it.state, kind: sig.kind, level: sig.level, qty: sig.qty === undefined ? null : sig.qty, message: sig.message, key: sig.key, read: false }
     try {
-      const fs = ctx.get("fs")
+      const fs = hostService(ctx, "fs")
       if (fs !== void 0) {
         // 并发任务可能同时追加提醒 → 串行化，避免「读-改-写」互相覆盖丢记录
         await withLock("alerts", async () => {
@@ -789,7 +808,7 @@ function apply(ctx, config) {
 
   // 读取工作区路由覆盖文件（不存在/损坏 → undefined，绝不阻断流水线）
   const readRoutesFile = async () => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) return void 0
     try {
       const target = await fs.resolve(ROUTES_FILE)
@@ -799,7 +818,7 @@ function apply(ctx, config) {
 
   // 当日交易日锚点缓存（子代理写入，Host 读取注入）
   const readTradeCache = async () => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) return null
     try {
       const target = await fs.resolve(TRADE_CACHE)
@@ -980,7 +999,7 @@ function apply(ctx, config) {
   //   state=已清仓 → 从账本移除该票；state=持有 → 按档案里的成本/股数 upsert 账本
   // 写入前备份 + 追加审计，与「确认持仓」同一套口径；观察/已移除不动账本，只回一条提示
   const syncHoldingsFromWatch = async (it) => withLock("holdings", async () => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) return { changed: false, action: "none", warnings: ["fs 不可用，未同步持仓账本"] }
     const current = await readHoldingsDoc()
     const list = Array.isArray(current.positions) ? current.positions : []
@@ -1045,7 +1064,7 @@ function apply(ctx, config) {
     // 写入前统一重算计算列，权重分母用 nextAccount
     const positions = recalcPositions(normalized, nextAccount)
     const diff = positionsDiff(current.positions, positions)
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) throw new Error("fs unavailable")
     const d = new Date()
     const stamp = localYmd() + "_" + z2(d.getHours()) + z2(d.getMinutes()) + z2(d.getSeconds())
@@ -1098,7 +1117,7 @@ function apply(ctx, config) {
     const nextAccount = normalizeAccount(current.account && typeof current.account === "object" ? current.account : {})
     const recalculated = recalcPositions(updated, nextAccount)
     const diff = positionsDiff(positions, recalculated)
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) throw new Error("fs unavailable")
     const d = new Date()
     const stamp = localYmd() + "_" + z2(d.getHours()) + z2(d.getMinutes()) + z2(d.getSeconds())
@@ -1219,15 +1238,15 @@ function apply(ctx, config) {
     const options = opts || {}
     const label = options.label || "投研子任务"
     const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000
-    const agents = ctx.get("agents")
+    const agents = hostService(ctx, "agents")
     const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
     const parent = roots[roots.length - 1]
     if (!parent) throw new Error("没有可用的顶层 Agent，无法执行「" + label + "」")
     const candidates = []
     try { if (ctx.subagents) candidates.push(ctx.subagents) } catch (e) { /* ignore */ }
     for (const n of ["subagents", "subagent"]) {
-      try { const v = ctx.get(n, true); if (v) candidates.push(v) } catch (e) { /* ignore */ }
-      try { const v = ctx.get(n, false); if (v) candidates.push(v) } catch (e) { /* ignore */ }
+      try { const v = hostService(ctx, n, true); if (v) candidates.push(v) } catch (e) { /* ignore */ }
+      try { const v = hostService(ctx, n, false); if (v) candidates.push(v) } catch (e) { /* ignore */ }
     }
     const native = candidates.find((x) => typeof x.start === "function")
     const activation = candidates.find((x) => typeof x.startActivation === "function")
@@ -1274,7 +1293,7 @@ function apply(ctx, config) {
     const q = String(question || "").trim()
     if (!q) throw new Error("请输入要追问的问题")
     if (!isSafeReportPath(reportPath)) throw new Error("报告路径不合法（必须是工作区内的 .md 文件）")
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) throw new Error("fs 服务不可用")
     let full = ""
     try { full = await fs.readText(await fs.resolve(reportPath)) } catch (e) { throw new Error("读取报告失败：" + String(e).slice(0, 120)) }
@@ -1329,7 +1348,7 @@ function apply(ctx, config) {
     }
   }
   const recognizeScreenshot = async (imageBase64, mimeType) => {
-    const attachments = ctx.get("attachments")
+    const attachments = hostService(ctx, "attachments")
     if (!attachments || typeof attachments.admitPromptContent !== "function") throw new Error("附件服务不可用，无法上传截图")
     const instruction = "你是持仓截图识别器。只输出一个 JSON 对象，不要任何解释或代码围栏：{\"positions\":[{\"code\":\"600519.SH\",\"name\":\"贵州茅台\",\"shares\":100,\"cost\":1500,\"status\":\"持有\",\"note\":\"\"}],\"account\":{\"total_asset\":200000,\"cash\":50000}}。请真实读取截图中的证券代码、名称、持仓数量、成本价、账户总资产与可用资金；代码转换为 6 位+.SH/.SZ/.BJ，无法辨认的字段填 null，不要编造。"
     const prompt = await attachments.admitPromptContent([
@@ -1347,20 +1366,20 @@ function apply(ctx, config) {
 
   // 模型设置：角色路由写 routes.json；模板预设写 settings.json（模板 > 角色 > 全局预设 > 继承宿主）
   const readJsonFile = async (path, fallback) => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) return fallback
     try { return JSON.parse(await fs.readText(await fs.resolve(path))) } catch (e) { return fallback }
   }
   const writeJsonFile = async (path, value) => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) throw new Error("fs unavailable")
     await fs.writeText(await fs.resolve(path), JSON.stringify(value, null, 2) + "\n", void 0, void 0, getFsPolicy())
   }
   // 写文件必须带沙箱 policy（宿主 workspace-write 模式会拒绝无 policy 的写入）
   const getFsPolicy = () => {
     try {
-      const sp = ctx.get("sandboxPolicy")
-      const agents = ctx.get("agents")
+      const sp = hostService(ctx, "sandboxPolicy")
+      const agents = hostService(ctx, "agents")
       const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
       const agent = roots[roots.length - 1]
       return (sp !== void 0 && agent !== void 0) ? sp.resolve({ session: agent.session }) : void 0
@@ -1756,7 +1775,7 @@ function apply(ctx, config) {
   // 会话宿主模型 = 当前会话根 Agent 的 provider/model（网页任务在 executeJob 里原本继承的就是它）
   const resolveSessionHostModel = () => {
     try {
-      const agents = ctx.get("agents")
+      const agents = hostService(ctx, "agents")
       const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
       const host = roots[roots.length - 1]
       const opt = (host && host.options) ? host.options : {}
@@ -1835,7 +1854,7 @@ function apply(ctx, config) {
       modelOptions: await (async () => {
         const options = [{ value: "inherit", label: "跟随会话宿主（默认）" }]
         try {
-          const llm = ctx.get("llm")
+          const llm = hostService(ctx, "llm")
           if (!llm || typeof llm.listProviders !== "function" || typeof llm.listModels !== "function") return options
           for (const provider of llm.listProviders()) {
             try {
@@ -1854,7 +1873,7 @@ function apply(ctx, config) {
   // 股票名查找：索引 + 腾讯行情缓存，失败时回退腾讯智能搜索
   const lookupStockName = async (code) => {
     try {
-      const idx = JSON.parse(await (ctx.get("fs")).readText(await (ctx.get("fs")).resolve(STORE_INDEX)))
+      const idx = JSON.parse(await (hostService(ctx, "fs")).readText(await (hostService(ctx, "fs")).resolve(STORE_INDEX)))
       const c = idx.codes && idx.codes[code]
       if (c && c.name) return c.name
     } catch (e) { /* ignore */ }
@@ -1869,7 +1888,7 @@ function apply(ctx, config) {
     const n = String(name).trim()
     const map = new Map()
     try {
-      const idx = JSON.parse(await (ctx.get("fs")).readText(await (ctx.get("fs")).resolve(STORE_INDEX)))
+      const idx = JSON.parse(await (hostService(ctx, "fs")).readText(await (hostService(ctx, "fs")).resolve(STORE_INDEX)))
       for (const [code, e] of Object.entries(idx.codes || {})) if (e.name) map.set(code, e.name)
     } catch (e) { /* ignore */ }
     try {
@@ -1939,7 +1958,7 @@ function apply(ctx, config) {
         child.on("error", (e) => { clearTimeout(timer); reject(e) })
         child.on("close", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error("index_store exit " + code)) })
       })
-      const fs = ctx.get("fs")
+      const fs = hostService(ctx, "fs")
       if (fs !== void 0) {
         try { return JSON.parse(await fs.readText(await fs.resolve(STORE_INDEX))).stats || {} } catch (e) { return {} }
       }
@@ -1952,7 +1971,7 @@ function apply(ctx, config) {
 
   // ===== 运行日志：追加 + 回读校验 + 两级兜底（失败必留痕，绝不静默）=====
   const appendRunLogLine = async (line, policyArg) => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     let firstError = ""
     // 通道 1：宿主 fs（带 sandbox policy），写后回读校验，避免"以为写了其实没写"
     if (fs !== void 0) {
@@ -1981,7 +2000,7 @@ function apply(ctx, config) {
   // 只删「完全同任务」的重复：recovered 行按 ts+question+mode 判定，普通行按原文判定；
   // 重复时优先保留 reportPath 指向 .dsh-invest/reports/ 的主报告行。改写前先备份。
   const compactRunLog = async () => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) throw new Error("fs unavailable")
     let text = ""
     try { text = await fs.readText(await fs.resolve(RUNS_LOG)) } catch (e) { return { removed: 0, total: 0 } }
@@ -2030,7 +2049,7 @@ function apply(ctx, config) {
     return "组合"
   }
   const repairRunLog = async () => {
-    const fs = ctx.get("fs")
+    const fs = hostService(ctx, "fs")
     if (fs === void 0) throw new Error("fs 服务不可用")
     const readTextSafe = async (p) => { try { return await fs.readText(await fs.resolve(p)) } catch (e) { return "" } }
     const logText = await readTextSafe(RUNS_LOG)
@@ -2220,7 +2239,7 @@ function apply(ctx, config) {
     } catch (e) { return null }
   }
   const computeBacktest = async () => {
-    const fs0 = ctx.get("fs")
+    const fs0 = hostService(ctx, "fs")
     const readSafe = async (p) => {
       if (fs0 !== void 0) { try { return await fs0.readText(await fs0.resolve(p)) } catch (e) { /* fallthrough */ } }
       try { const { readFileSync } = await import("node:fs"); return readFileSync(p, "utf8") } catch (e) { return "" }
@@ -2444,7 +2463,7 @@ function apply(ctx, config) {
   // 采集口径：每次流水线结束时，把各阶段【结论结构化】行写入 store/conclusions.jsonl（append-only）。
   // 因此「遗漏」只可能发生在采集那一刻，事后不会被改写；而历史报告若保留了结构化行，可以回溯补录。
   const computeConclusionAudit = async () => {
-    const fs0 = ctx.get("fs")
+    const fs0 = hostService(ctx, "fs")
     const readSafe = async (p) => {
       if (fs0 !== void 0) { try { return await fs0.readText(await fs0.resolve(p)) } catch (e) { /* fallthrough */ } }
       try { const { readFileSync } = await import("node:fs"); return readFileSync(p, "utf8") } catch (e) { return "" }
@@ -2597,7 +2616,7 @@ function apply(ctx, config) {
   // 把归档报告里残留的【结论结构化】行补进 conclusions.jsonl。
   // 只补「报告里确实存在的结构化行」，不推断、不编造；按（报告+标的）去重，可反复执行。
   const backfillConclusions = async (apply) => {
-    const fs0 = ctx.get("fs")
+    const fs0 = hostService(ctx, "fs")
     const readSafe = async (p) => {
       if (fs0 !== void 0) { try { return await fs0.readText(await fs0.resolve(p)) } catch (e) { /* fallthrough */ } }
       try { const { readFileSync } = await import("node:fs"); return readFileSync(p, "utf8") } catch (e) { return "" }
@@ -2657,7 +2676,7 @@ function apply(ctx, config) {
       return { ok: true, applied: false, candidates: additions.length, reports: perReport.slice(-20), added: 0 }
     }
     try {
-      const fs2 = ctx.get("fs")
+      const fs2 = hostService(ctx, "fs")
       if (fs2 === void 0) return { ok: false, error: "fs 不可用", added: 0, candidates: additions.length }
       await withLock("conclusions", async () => {
         const target = await fs2.resolve(CONCLUSIONS_LOG)
@@ -2677,7 +2696,7 @@ function apply(ctx, config) {
     job.startedAt = Date.now()
     let taskHandle = null
     try {
-      const agents = ctx.get("agents")
+      const agents = hostService(ctx, "agents")
       // 方案A：为本次任务创建专用执行 Agent，与当前对话彻底隔离（不挂在聊天下）
       let parent = null
       if (agents && typeof agents.create === "function") {
@@ -3179,7 +3198,7 @@ function apply(ctx, config) {
         const url = new URL(req.url ?? "/", "http://localhost")
         const p = queryParam(url, "path") ?? ""
         if (!/\.(svg|png)$/i.test(p) || !p.startsWith(CHARTS_DIR)) { writeJson(res, 400, { error: "denied" }); return }
-        const fs = ctx.get("fs")
+        const fs = hostService(ctx, "fs")
         if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
         try {
           // PNG 走 node:fs 直读（路径已通过 startsWith 白名单 + 扩展名校验）；
@@ -3534,7 +3553,7 @@ function apply(ctx, config) {
       handler: async (req, res) => {
         if (!isLoopbackRequest(req)) { res.statusCode = 403; res.end("forbidden: loopback-only"); return }
         if (req.method !== "GET") { res.statusCode = 405; res.end("method not allowed"); return }
-        const fs = ctx.get("fs")
+        const fs = hostService(ctx, "fs")
         if (fs === void 0) { res.statusCode = 503; res.end("fs unavailable"); return }
         let html = ""
         try { html = await fs.readText(await fs.resolve(WEB_DIST_INDEX)) }
@@ -3551,7 +3570,7 @@ function apply(ctx, config) {
       handler: async (req, res) => {
         if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
         if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
-        const fs = ctx.get("fs")
+        const fs = hostService(ctx, "fs")
         if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
         try {
           const raw = await fs.readText(await fs.resolve(STORE_INDEX))
@@ -3565,7 +3584,7 @@ function apply(ctx, config) {
       handler: async (req, res) => {
         if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
         if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
-        const fs = ctx.get("fs")
+        const fs = hostService(ctx, "fs")
         if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
         try {
           const raw = await fs.readText(await fs.resolve(HOLDINGS_FILE))
@@ -3583,7 +3602,7 @@ function apply(ctx, config) {
         const p = queryParam(url, "path") ?? ""
         const allowed = /.md$/i.test(p) && (isSafeServePath(p, REPORTS_DIR) || isSafeServePath(p, OUTPUT_ROOT) || isSafeServePath(p, STOCK_NOTES_DIR))
         if (!allowed) { writeJson(res, 400, { error: "denied" }); return }
-        const fs = ctx.get("fs")
+        const fs = hostService(ctx, "fs")
         if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
         try {
           const text = await fs.readText(await fs.resolve(p))
@@ -3675,7 +3694,7 @@ function apply(ctx, config) {
       handler: async (req, res) => {
         if (!isLoopbackRequest(req)) { res.statusCode = 403; res.end("forbidden"); return }
         if (req.method !== "GET") { res.statusCode = 405; res.end("method not allowed"); return }
-        const fs = ctx.get("fs")
+        const fs = hostService(ctx, "fs")
         try {
           const text = await fs.readText(await fs.resolve(WEB_DIST_JS))
           res.statusCode = 200
@@ -3691,7 +3710,7 @@ function apply(ctx, config) {
       handler: async (req, res) => {
         if (!isLoopbackRequest(req)) { res.statusCode = 403; res.end("forbidden"); return }
         if (req.method !== "GET") { res.statusCode = 405; res.end("method not allowed"); return }
-        const fs = ctx.get("fs")
+        const fs = hostService(ctx, "fs")
         try {
           const text = await fs.readText(await fs.resolve(WEB_DIST_CSS))
           res.statusCode = 200
@@ -3843,7 +3862,7 @@ function apply(ctx, config) {
               }
             } catch (e) { /* 非法行后面统一算 */ }
           }
-          const fs0 = ctx.get("fs")
+          const fs0 = hostService(ctx, "fs")
           if (fs0 === void 0) { writeJson(res, 500, { error: "文件系统不可用" }); return }
           const result = await withLock("conclusions", async () => {
             const target = await fs0.resolve(CONCLUSIONS_LOG)
@@ -4021,7 +4040,7 @@ function apply(ctx, config) {
         let records = await readConclusionRecords()
         if (code) records = records.filter((r) => r.code === code)
         if (!records.length && code) {
-          const fs = ctx.get("fs")
+          const fs = hostService(ctx, "fs")
           if (fs !== void 0) {
             try { records = (JSON.parse(await fs.readText(await fs.resolve(STORE_INDEX))).records || []).filter((r) => r.code === code) } catch (e) { /* ignore */ }
           }
@@ -4040,7 +4059,7 @@ function apply(ctx, config) {
           const doc = await readWatchlist()
           doc.items.forEach(deriveWatch)
           // 未读提醒（最近 50 条倒序）
-          const fs = ctx.get("fs")
+          const fs = hostService(ctx, "fs")
           let alerts = []
           if (fs !== void 0) {
             try {
@@ -4197,7 +4216,7 @@ function apply(ctx, config) {
         try {
           const body = await readRequestJson(req)
           const key = typeof body.key === "string" && body.key ? body.key : null
-          const fs = ctx.get("fs")
+          const fs = hostService(ctx, "fs")
           if (fs === void 0) { writeJson(res, 200, { ok: true, marked: 0 }); return }
           const target = await fs.resolve(WATCHLIST_ALERTS)
           let raw = ""
@@ -4531,8 +4550,8 @@ function apply(ctx, config) {
       let routeMap = {}
       let routeNotes = []
       // 沙箱策略提前解析（报告归档与运行日志共用）
-      const fs = ctx.get("fs")
-      const sp = ctx.get("sandboxPolicy")
+      const fs = hostService(ctx, "fs")
+      const sp = hostService(ctx, "sandboxPolicy")
       const policy = (sp !== void 0 && exec.agent !== void 0) ? sp.resolve({ session: exec.agent.session }) : void 0
       // 运行日志在 finally 中要引用这两个变量，必须声明在函数作用域：
       // 历史上的 ReferenceError: summaryText is not defined 被 finally 里的空 catch 吞掉，
@@ -4542,14 +4561,14 @@ function apply(ctx, config) {
       try {
       // 2026-10-28 修复（第二版）：插件已在 inject 中声明 subagents，属性访问 ctx.subagents 取得的才是
       // 带 start() 的运行时（与宿主 dsh-tool-subagent 的 runtimeCtx.subagents 同源）；ctx.get() 取到的形态不带 start()。
-      // 候选顺序：属性访问 → ctx.get(n, true) → ctx.get(n, false)，取第一个带 start() 的实例；
+      // 候选顺序：属性访问 → hostService(ctx, n, true) → hostService(ctx, n, false)，取第一个带 start() 的实例；
       // 都不可用时把探测到的键名写进错误便于定位。
       const candidatesOf = (n) => {
         const out = []
         try { out.push(ctx[n]) } catch (e) { /* 未声明 inject 时会抛错，忽略 */ }
         if (typeof ctx.get === "function") {
-          try { out.push(ctx.get(n, true)) } catch (e) { /* 忽略 */ }
-          try { out.push(ctx.get(n, false)) } catch (e) { /* 忽略 */ }
+          try { out.push(hostService(ctx, n, true)) } catch (e) { /* 忽略 */ }
+          try { out.push(hostService(ctx, n, false)) } catch (e) { /* 忽略 */ }
         }
         return out.filter((x) => x)
       }
@@ -4613,7 +4632,7 @@ function apply(ctx, config) {
       if (parallelDeep) routeNotes.push("问题已含标的 " + qCodes.slice(0, 4).join("、") + "：深度与选股/消息并行执行（省约一个上游阶段的时间）")
       const groups = buildGroups(roleCodes, ROLE_MAP, sequence, { parallelDeep })
       // ---- 模型路由解析：preset ← 插件 config ← .dsh-invest/routes.json ← 环境变量 ← 单次调用参数 ----
-      const llm = ctx.get("llm")
+      const llm = hostService(ctx, "llm")
       const presetName = (typeof args.preset === "string" && args.preset)
         || (typeof PLUGIN_CONFIG.preset === "string" && PLUGIN_CONFIG.preset)
         || (typeof process !== "undefined" && process.env && process.env.DSH_INVEST_PRESET)
