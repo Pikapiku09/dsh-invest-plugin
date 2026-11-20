@@ -1373,17 +1373,64 @@ function apply(ctx, config) {
   const writeJsonFile = async (path, value) => {
     const fs = hostService(ctx, "fs")
     if (fs === void 0) throw new Error("fs unavailable")
-    await fs.writeText(await fs.resolve(path), JSON.stringify(value, null, 2) + "\n", void 0, void 0, getFsPolicy())
+    const target = await fs.resolve(path)
+    const text = JSON.stringify(value, null, 2) + "\n"
+    const cands = fsPolicyCandidates()
+    if (!cands.length) { await fs.writeText(target, text); return }
+    // 逐个候选策略重试：拿到「错的那个会话」时不再直接失败
+    let firstErr = null
+    for (const p of cands.slice(0, 4)) {
+      try {
+        await fs.writeText(target, text, void 0, void 0, p)
+        return
+      } catch (e) {
+        if (!firstErr) firstErr = e
+      }
+    }
+    throw firstErr
   }
   // 写文件必须带沙箱 policy（宿主 workspace-write 模式会拒绝无 policy 的写入）
-  const getFsPolicy = () => {
+  //
+  // 2026-11-20 修正：原实现只取 roots[length-1]，即「最后一个会话根」，
+  // 而它未必是发起本次写入的会话。机器上同时存在多个工作区时
+  // （E:\Dsh_WorkSapce\Dify_Agents 与同级的 E:\Dsh_WorkSapce\0815-1120，
+  // 以及重启后新建的 no-cwd 会话），按后者的策略解析会把账本目录判为越界，
+  // 表现为 FsError: file access denied under workspace-write mode —— 磁盘明明可写。
+  //
+  // 现在的候选顺序：① 工作区（或 cwd）覆盖 BASE_DIR 的会话根优先；
+  // ② 其余按「越新越靠前」兜底。写入端逐个候选重试，不再赌某一个。
+  const fsPolicyCandidates = () => {
+    const out = []
     try {
       const sp = hostService(ctx, "sandboxPolicy")
+      if (sp === void 0) return out
       const agents = hostService(ctx, "agents")
-      const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
-      const agent = roots[roots.length - 1]
-      return (sp !== void 0 && agent !== void 0) ? sp.resolve({ session: agent.session }) : void 0
-    } catch (e) { return void 0 }
+      const roots = (agents && typeof agents.roots === "function") ? agents.roots() : []
+      const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
+      const base = norm(BASE_DIR)
+      const covers = (r) => {
+        if (!r) return false
+        for (const key of ["workspace", "cwd", "root", "dir", "path"]) {
+          const ws = norm(r[key])
+          if (ws && (base === ws || base.startsWith(ws + "/"))) return true
+        }
+        return false
+      }
+      const reversed = roots.slice().reverse()
+      const ordered = reversed.filter(covers).concat(reversed.filter((r) => !covers(r)))
+      for (const r of ordered) {
+        if (!r || !r.session) continue
+        try {
+          const p = sp.resolve({ session: r.session })
+          if (p !== void 0) out.push(p)
+        } catch (e) { /* 单个根解析失败不影响其他候选 */ }
+      }
+    } catch (e) { /* 服务缺失 → 返回空，退回宿主默认策略 */ }
+    return out
+  }
+  const getFsPolicy = () => {
+    const c = fsPolicyCandidates()
+    return c.length ? c[0] : void 0
   }
   const resolveTemplatePreset = async (templateId, fallback) => {    const settings = await readJsonFile(SETTINGS_FILE, {})
     const value = settings.templates && settings.templates[templateId]
