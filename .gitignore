@@ -22,3 +22,6 @@ invest-outputs/
 # 工作台前端：依赖与构建产物（产物实际输出到工作区 .dsh-invest/web/dist，被上面规则忽略）
 web/node_modules/
 web/dist/
+
+# 提交消息临时文件（避免 git add -A 误提交）
+.git-commit-msg.txt
