@@ -2141,6 +2141,11 @@ function apply(ctx, config) {
   // 无缓存时按需从 Tushare 拉 400 自然日并回写缓存；指数用 000001.SH。
   const BACKTEST_IDX_CODE = "000001.SH"
   const btRound = (v) => (typeof v === "number" && Number.isFinite(v)) ? Math.round(v * 100) / 100 : null
+  // 方向口径的唯一来源（2026-11-20）：命中率(hit5) 与 赔率(盈亏比/期望值) 必须共用
+  // 同一套 stance 定义，否则会出现「命中率一个分母、赔率另一个分母」的同屏矛盾。
+  // 观察（以及任何不在两张表里的立场）一律不计方向——它的后续走势单独看。
+  const BULLISH_STANCES = ["看多", "持有", "加仓"]
+  const BEARISH_STANCES = ["拒绝", "回避", "减仓", "离场"]
   const btReadToken = async () => {
     try {
       const { readFileSync } = await import("node:fs")
@@ -2335,8 +2340,8 @@ function apply(ctx, config) {
           }
         }
       }
-      const bullish = ["看多", "持有", "加仓"].includes(c.stance)
-      const bearish = ["拒绝", "回避", "减仓", "离场"].includes(c.stance)
+      const bullish = BULLISH_STANCES.includes(c.stance)
+      const bearish = BEARISH_STANCES.includes(c.stance)
       const directional = bullish || bearish
       rows.push({
         ts: c.ts, code: c.code, stance: String(c.stance || ""), stage: String(c.stage || ""), mode: String(c.mode || ""),
@@ -2370,10 +2375,13 @@ function apply(ctx, config) {
       const e20 = list.filter((x) => x.ex20 !== null)
       const avg = (arr, k) => arr.length ? btRound(arr.reduce((a, x) => a + x[k], 0) / arr.length) : null
       // 方向收益：看多/持有/加仓取 +ret，拒绝/回避/减仓/离场取 -ret（做空视角），观察不计
+      // 2026-11-20 修正：原实现只对 bearish 取反、其余一律当看多，观察类被静默算进
+      // 胜率/盈亏比/期望值——与 hit5 的口径（bullish||bearish 才算方向）不一致，
+      // 于是同一屏出现「命中率 n=33、盈亏比 n=68」两个分母，赔率也被观察类拉偏。
       const directional = []
       for (const x of r5) {
-        const bearish = ["拒绝", "回避", "减仓", "离场"].includes(x.stance)
-        directional.push(bearish ? -x.ret5 : x.ret5)
+        if (BEARISH_STANCES.includes(x.stance)) directional.push(-x.ret5)
+        else if (BULLISH_STANCES.includes(x.stance)) directional.push(x.ret5)
       }
       const wins = directional.filter((v) => v > 0)
       const losses = directional.filter((v) => v <= 0)
