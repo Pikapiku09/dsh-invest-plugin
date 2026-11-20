@@ -69,6 +69,36 @@ function queryParam(url, key) {
  * @param config - optional plugin config: { preset, routes } for per-role model routing.
  */
 function apply(ctx, config) {
+  // ---- 宿主接口自检（2026-11-20）----
+  // DSH 升级后若宿主接口改名/删除，插件会在注册阶段抛异常。注册阶段抛异常最坏的结果是
+  // **整个 profile 一起挂掉**，连带别的插件。这里先把必需接口查一遍：缺了就打印一份
+  // 能照着排查的清单并干净退出（工具与页面都不可用，但 DSH 本身还能起）。
+  {
+    const missing = []
+    if (!ctx || typeof ctx !== "object") missing.push("ctx 本身")
+    else {
+      if (!ctx.webServer || typeof ctx.webServer.register !== "function") missing.push("ctx.webServer.register")
+      if (!ctx.tools || typeof ctx.tools.register !== "function") missing.push("ctx.tools.register")
+      if (!ctx.systemPrompt || typeof ctx.systemPrompt.section !== "function") missing.push("ctx.systemPrompt.section")
+      if (typeof ctx.effect !== "function") missing.push("ctx.effect")
+      if (typeof ctx.get !== "function") missing.push("ctx.get")
+    }
+    if (missing.length) {
+      const msg = "[dsh-invest] 宿主接口不兼容，已跳过挂载：" + missing.join("、")
+        + "。多半是 DSH 升级改了插件接口；请对照仓库里的 COMPATIBILITY.md，或回退 DSH/插件版本。"
+      try { ctx && typeof ctx.logger?.error === "function" ? ctx.logger.error(msg) : console.error(msg) } catch { console.error(msg) }
+      return
+    }
+    // 服务是请求时才取的，这里只提示缺失的服务名，不阻断——插件在服务缺失时已有多处降级分支
+    for (const name of ["fs", "agents", "attachments", "llm"]) {
+      try {
+        if (ctx.get(name) === undefined && name === "fs") {
+          const warn = "[dsh-invest] 宿主未提供 fs 服务：账本/缓存/报告读写会降级失败，请检查 DSH 版本。"
+          try { ctx && typeof ctx.logger?.warn === "function" ? ctx.logger.warn(warn) : console.warn(warn) } catch { console.warn(warn) }
+        }
+      } catch { /* 探针失败不影响挂载 */ }
+    }
+  }
   const progressStore = {}
   // 最近一次运行日志写入错误（诊断用；正常为空串，随 /api/jobs 返回）
   let lastRunLogError = ""

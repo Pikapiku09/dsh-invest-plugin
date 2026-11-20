@@ -1,6 +1,6 @@
 {
   "name": "@pikapiku09/dsh-invest-plugin",
-  "version": "0.73.0",
+  "version": "0.74.0",
   "description": "DSH 动态 Cordis 插件：多角色 A 股投研流水线（选股/消息/深度/总判断 4 角色子代理 + Tushare 实时数据 + SVG 图表卡片）",
   "private": true,
   "license": "MIT",
@@ -11,10 +11,12 @@
     "web:build": "npm --prefix web run build",
     "web:dev": "npm --prefix web run dev",
     "cleanup": "node tools/cleanup.js",
-    "cleanup:apply": "node tools/cleanup.js --apply"
+    "cleanup:apply": "node tools/cleanup.js --apply",
+    "compat": "node tools/compat-check.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18",
+    "dsh": ">=0.2.0 <0.3.0"
   },
   "keywords": [
     "dsh-plugin",
