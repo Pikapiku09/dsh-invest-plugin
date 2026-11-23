@@ -30,6 +30,34 @@
 | `ctx.get('attachments')` | 附件读取 | 个股知识库等受影响 |
 | `ctx.subagents` | 子代理注册/列举 | 角色编排受影响 |
 
+### 方法级依赖（2026-11-23 事故后补记）
+
+服务名对得上，不等于方法还在。DSH 0.2.x 的 `ctx.agents` 是 AgentService，只有
+`list() / get(id) / create(options) / register() / enter() / announce()`；
+**`roots()` 是 0.1.x 的老方法，0.2.x 已删除**。插件此前一律调 `agents.roots()`，
+在 0.2.x 上恒为 `[]`，三处静默失效：
+
+| 调用点 | 失效表现 |
+|---|---|
+| 沙箱策略候选（`fsPolicyCandidates`） | 候选为空 → `fs.writeText` 不带策略 → 宿主按「无会话」的部署默认根判定 → 工作区内也报 `file access denied under workspace-write mode`（账本/标的档案/审计/备份全写不进） |
+| 子代理 parent（`runPromptSubagent`） | 抛「没有可用的顶层 Agent」→ 视觉识别不可用，退本地 OCR |
+| 会话宿主模型（`resolveSessionHostModel`） | 模型设置里读不到会话模型 |
+
+现状：统一走模块级 `liveAgents(ctx)`（`list()` 优先、`roots()` 兜底），并新增
+`test/host-agents-contract.test.js` 用「只有 list() 的假宿主」守住这条契约。
+
+`ctx.sandboxPolicy.resolve(request)` 的契约（同版本源码）：
+
+```js
+resolve({ session }) // → { mode, workspaceRoot, additionalWritableRoots?, sessionId }
+// workspaceRoot = session.header.cwd ?? 部署配置的 workspaceRoot ?? process.cwd()
+// 不传 session 就是「无会话」的部署默认策略：根通常不是会话工作区，写工作区必被拒
+```
+
+`ctx.get('fs').writeText(target, content, expected, signal, sandboxPolicy)`：第 5 个参数才是策略，
+省略即用上面那个「无会话」默认策略。`resolve()` 返回的是 target **对象**
+（`{ displayPath, targetKey }`），`readText(target)` 收的也是它，不是字符串。
+
 ### 客户端注入（工作台前端）
 
 `dsh.client.inject` 依赖 5 个 `@deepseek-ai/dsh-client-*` 包（runtime / connection / ui-tool / ui-sidebar / ui-layout），

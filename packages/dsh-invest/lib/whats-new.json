@@ -1,7 +1,33 @@
 {
-  "latest": "0.75.2",
-  "generatedAt": "2026-11-20T07:15:49.958Z",
+  "latest": "0.75.4",
+  "generatedAt": "2026-11-23T02:40:00.000Z",
   "releases": [
+    {
+      "version": "0.75.4",
+      "date": "2026-11-23",
+      "title": "修复：账本/标的档案全线写不进去",
+      "items": [
+        "病根：DSH 0.2.x 的 ctx.agents 没有 roots()（0.1.x 老方法），插件 5 处调用恒得空数组",
+        "空候选 → fs.writeText 不带沙箱策略 → 宿主用「无会话」的部署默认根判定 → 工作区内也报 file access denied",
+        "新增 liveAgents()：list() 优先、roots() 兜底；子代理 parent、会话宿主模型、沙箱策略候选统一改过去",
+        "策略候选改为按目标路径过滤：只用 workspaceRoot 真覆盖目标的会话，不再盲试到别的会话",
+        "完全没有可覆盖会话时给能照着查的中文错误，而不是一句 file access denied",
+        "新增 test/host-agents-contract.test.js（假宿主只有 list()，照抄真实沙箱门槛）守住这条契约"
+      ]
+    },
+    {
+      "version": "0.75.3",
+      "date": "2026-11-20",
+      "title": "修复：持仓确认「账本成功、审计失败」",
+      "items": [
+        "v0.75.2 只给 writeJsonFile 加了候选重试，审计 holdings_audit.jsonl 与账本备份仍是单策略（candidates[0]），照样被错配的会话拒绝",
+        "后果：账本已落盘却提示「确认写入失败」；草稿不清理、标的档案不同步；响应里的备份路径其实没写成",
+        "所有落盘写入改走 writeTextWithPolicyRetry()，命中过的候选记住（fsPolicyHint），后续写入不再每次先失败一次",
+        "审计追加收敛为 appendHoldingsAudit()，confirm / 刷新现价 / 档案同步三处共用",
+        "审计与档案同步改为只回告警（响应新增 auditWarning），不再阻断已落盘的账本",
+        "新增回归测试 test/holdings-audit-policy.test.js：首个候选被拒时，账本、备份、审计仍必须全部写成功"
+      ]
+    },
     {
       "version": "0.75.2",
       "date": "2026-11-20",

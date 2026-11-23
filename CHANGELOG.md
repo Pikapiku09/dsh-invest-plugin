@@ -2,6 +2,85 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.75.4（2026-11-23）
+
+**修复：账本/标的档案/审计全线写不进去 —— 病根是 `agents.roots()` 在 DSH 0.2.x 已不存在**
+
+### 现象
+
+- 标的档案点「已清仓」报 `状态更新失败：cannot write "...\.dsh-invest\store\watchlist.json": file access denied under workspace-write mode`；
+- 持仓工作区确认/上传账本报同一类错；
+- 磁盘可写、目录里别的文件宿主也能写，只有插件自己的写入被拒。
+
+### 根因
+
+DSH 0.2.x 的 `ctx.agents` 是 AgentService，只有 `list()/get()/create()…`，**没有 `roots()`**（0.1.x 的老方法）。
+插件有 5 处 `agents.roots()`，在 0.2.x 上恒为 `[]`：
+
+1. `fsPolicyCandidates()` 恒为空 → `fs.writeText(target, text)` 不带策略 → 宿主退回「无会话」的部署默认策略
+   （`workspaceRoot = 配置的根 ?? process.cwd()`）→ 目标是会话工作区内的路径 → `FS_SANDBOX_DENIED`。
+   v0.75.2/v0.75.3 修的是「候选顺序」和「重试」，候选永远是空的时候，重试也就没有意义。
+2. `runPromptSubagent` 拿不到 parent → 抛「没有可用的顶层 Agent」→ 视觉识别不可用；
+3. `resolveSessionHostModel` 读不到会话模型。
+
+### 改动
+
+- 新增模块级 `liveAgents(ctx)`：`agents.list()` 优先、`roots()` 兜底，两个版本都能跑；5 处调用点统一改过去；
+- `fsPolicyCandidates(targetPath)` 改为**按目标路径过滤**：只保留 `workspaceRoot`（含 `additionalWritableRoots`）
+  确实覆盖目标的策略，不再盲试到别的会话；一个都不覆盖时保留部署默认策略作为最后候选；
+- `writeTextWithPolicyRetry` 用 `target.displayPath` 判定；完全没有候选且宿主拒绝时，
+  抛出能照着查的中文错误（含目标路径与活跃会话数），不再是一句 `file access denied`；
+- `runPromptSubagent` 的 parent 优先选「工作区覆盖 BASE_DIR」的会话；
+- 新增 `test/host-agents-contract.test.js`：假宿主只暴露 `list()` 且 `fs.writeText` 照抄真实沙箱门槛，
+  锁定「确认持仓」与「档案置已清仓」两条路径必须写成功；
+- `COMPATIBILITY.md` 补「方法级依赖」一节：服务名对得上不等于方法还在。
+
+### 边界
+
+仍然带策略、不绕过沙箱：选的是「覆盖目标路径的那个会话的策略」。
+没有可覆盖的会话时明确报错，而不是偷偷用无策略写入。
+
+### 生效方式
+
+后端 `lib/index.js` 函数体改动不热重载，**重启 DSH** 后生效。
+
+## v0.75.3（2026-11-20）
+
+**修复：持仓确认仍报「file access denied」——v0.75.2 只修了账本，没修审计**
+
+### 现象（v0.75.2 之后仍在）
+
+「持仓工作区」点「确认并写入账本」仍弹
+`FsError: cannot write "...\.dsh-invest\store\holdings_audit.jsonl": file access denied under workspace-write mode`，
+但同一目录下的 `持仓.json` 已经写入成功（更新时间就停在报错那一刻），磁盘也可写。
+
+### 根因（对 v0.75.2 的补充）
+
+v0.75.2 只给 `writeJsonFile` 加了候选重试；审计 JSONL 与账本备份这两个写入点仍是
+`getFsPolicy()`（= `fsPolicyCandidates()[0]`）。多工作区并行时第一个候选会解析成「别的会话」的策略，
+于是同一个目录里出现「账本被放行、审计被拒」。后果不止漏一行审计：
+
+- 前端把审计失败当成整次确认失败，用户看到「写入失败」，但账本其实已经改了——重试会重复写，不重试又缺审计；
+- 审计抛异常发生在 `delete holdingsDrafts[draftId]` 与标的档案同步之前 → 草稿不清理、档案不同步；
+- 备份写入一直静默失败（`try/catch` 吞掉），响应里却返回一个并不存在的备份路径。
+
+### 改动
+
+- 新增 `writeTextWithPolicyRetry()`：所有落盘写入共用，逐个候选策略重试；
+- 命中过的候选用 `fsPolicyHint` 记住，后续写入（含尚未改造的 `getFsPolicy()` 旧调用点）优先复用，不再每次先撞一次拒绝；
+- 新增 `appendJsonlLine()` / `appendHoldingsAudit()`：审计追加收敛成一处实现，三个写入点（confirm / refresh-quotes / watch-sync）全部改走重试；
+- 备份写入改走重试，写不出来时如实返回 `backup: null`，不再谎报路径；
+- 审计与档案同步改为「只回告警、不阻断」：账本已落盘时响应新增 `auditWarning`，草稿清理与档案同步照常执行；
+- 新增 `test/holdings-audit-policy.test.js`：让第一个候选必然拒绝，断言确认接口仍 200、账本/备份/审计三样都落盘、且确实发生过「先撞拒绝再换候选」。
+
+### 边界
+
+仍是「选对会话策略」，不是绕过沙箱：目标路径固定，策略只决定放行与否。
+
+### 生效方式
+
+后端 `lib/index.js` 的函数体改动不热重载，重启 DSH 后生效。
+
 ## v0.75.2（2026-11-20）
 
 **修复：持仓确认写入失败（沙箱策略取错了会话）**

@@ -87,6 +87,33 @@ function hostService(ctx, name, ...rest) {
   return ctx.get(name, ...rest)
 }
 
+/**
+ * 活的 Agent 列表（`ctx.agents`）。
+ *
+ * DSH 0.2.x 的 AgentService 只有 list()/get()/create()/register()…，**没有 roots()**
+ * （roots() 是 0.1.x 时代的方法）。插件此前一律写 `agents.roots()`，在 0.2.x 上恒为 `[]`，
+ * 于是三处静默失效：
+ *   ① 沙箱策略候选为空 → fs.writeText 不带策略 → 宿主按「无会话」的部署默认根判定
+ *      → 目标在工作区里也不被包含 → `file access denied under workspace-write mode`
+ *      （2026-11-23 用户遇到的账本/档案写不进去就是这条）；
+ *   ② 子代理拿不到 parent → 抛「没有可用的顶层 Agent」→ 视觉识别不可用，退本地 OCR；
+ *   ③ 会话宿主模型继承失效（模型设置里显示不出会话模型）。
+ *
+ * 这里按「新接口优先、老接口兜底」取值，两个版本都能跑。
+ */
+function liveAgents(ctx) {
+  const agents = hostService(ctx, "agents")
+  if (agents === void 0) return []
+  for (const method of ["list", "roots"]) {
+    if (typeof agents[method] !== "function") continue
+    try {
+      const out = agents[method]()
+      if (Array.isArray(out)) return out
+    } catch (e) { /* 试下一个 */ }
+  }
+  return []
+}
+
 function apply(ctx, config) {
   // ---- 宿主接口自检（2026-11-20）----
   // DSH 升级后若宿主接口改名/删除，插件会在注册阶段抛异常。注册阶段抛异常最坏的结果是
@@ -1043,17 +1070,15 @@ function apply(ctx, config) {
     const d = new Date()
     const stamp = localYmd() + "_" + z2(d.getHours()) + z2(d.getMinutes()) + z2(d.getSeconds())
     const backup = HOLDINGS_BACKUP_DIR + "/持仓_" + stamp + "_watch.json"
-    try { await fs.writeText(await fs.resolve(backup), JSON.stringify(current, null, 2) + "\n", void 0, void 0, getFsPolicy()) } catch (e) { /* 首次无账本可忽略 */ }
+    let backupOk = false
+    try { await writeTextWithPolicyRetry(await fs.resolve(backup), JSON.stringify(current, null, 2) + "\n"); backupOk = true } catch (e) { /* 首次无账本可忽略 */ }
     const updatedAt = d.toISOString()
     await writeJsonFile(HOLDINGS_FILE, { version: 1, updated_at: updatedAt, account, positions })
+    let auditWarning = ""
     try {
-      const auditTarget = await fs.resolve(HOLDINGS_AUDIT)
-      let oldLog = ""
-      try { oldLog = await fs.readText(auditTarget) } catch (e) { /* 首次 */ }
-      const audit = JSON.stringify({ ts: updatedAt, action: "watch-sync", watchAction: action, code, diff, positions, account })
-      await fs.writeText(auditTarget, oldLog + (oldLog && !oldLog.endsWith("\n") ? "\n" : "") + audit + "\n", void 0, void 0, getFsPolicy())
-    } catch (e) { /* 审计失败不阻断 */ }
-    return { changed: true, action, code, updated_at: updatedAt, backup, diff, warnings: [] }
+      await appendHoldingsAudit({ ts: updatedAt, action: "watch-sync", watchAction: action, code, diff, positions, account })
+    } catch (e) { auditWarning = "审计日志写入失败：" + String(e && e.message ? e.message : e).slice(0, 200) }
+    return { changed: true, action, code, updated_at: updatedAt, backup: backupOk ? backup : null, diff, warnings: auditWarning ? [auditWarning] : [] }
   })
   const confirmHoldingsDraft = async (draftId, rawPositions, account) => {
     const draft = holdingsDrafts[draftId]
@@ -1069,22 +1094,24 @@ function apply(ctx, config) {
     const d = new Date()
     const stamp = localYmd() + "_" + z2(d.getHours()) + z2(d.getMinutes()) + z2(d.getSeconds())
     const backup = HOLDINGS_BACKUP_DIR + "/持仓_" + stamp + ".json"
-    try { await fs.writeText(await fs.resolve(backup), JSON.stringify(current, null, 2) + "\n", void 0, void 0, getFsPolicy()) } catch (e) { /* 首次无账本可忽略 */ }
+    let backupOk = false
+    try { await writeTextWithPolicyRetry(await fs.resolve(backup), JSON.stringify(current, null, 2) + "\n"); backupOk = true } catch (e) { /* 首次无账本可忽略 */ }
     const updatedAt = d.toISOString()
     const next = { version: 1, updated_at: updatedAt, account: nextAccount, positions }
     await writeJsonFile(HOLDINGS_FILE, next)
-    const auditTarget = await fs.resolve(HOLDINGS_AUDIT)
-    let oldLog = ""
-    try { oldLog = await fs.readText(auditTarget) } catch (e) { /* 首次 */ }
-    const audit = JSON.stringify({ ts: updatedAt, action: "confirm", source: draft.source, draftId, diff, positions, account: nextAccount })
-    await fs.writeText(auditTarget, oldLog + (oldLog && !oldLog.endsWith("\n") ? "\n" : "") + audit + "\n", void 0, void 0, getFsPolicy())
+    // 账本已落盘 → 审计与档案同步都只回告警，不能把「写审计失败」当成「整次确认失败」：
+    // 旧行为下前端提示失败，但 持仓.json 其实已经改了，用户重试是重复写、不重试又缺审计与档案同步。
+    let auditWarning = ""
+    try {
+      await appendHoldingsAudit({ ts: updatedAt, action: "confirm", source: draft.source, draftId, diff, positions, account: nextAccount })
+    } catch (e) { auditWarning = "审计日志写入失败：" + String(e && e.message ? e.message : e).slice(0, 200) }
     // 账本已落盘 → 同步标的档案（失败不阻断账本写入，但把错误带回前端）
     let watchSync = []
     let watchSyncError = ""
     try { watchSync = await syncWatchlistFromHoldings(positions) }
     catch (e) { watchSyncError = String(e && e.message ? e.message : e).slice(0, 200) }
     delete holdingsDrafts[draftId]
-    return { ok: true, updated_at: updatedAt, backup, diff, watchSync, watchSyncError }
+    return { ok: true, updated_at: updatedAt, backup: backupOk ? backup : null, diff, watchSync, watchSyncError, auditWarning }
   }
   // 一键刷新现价（直接落账本，不生成草稿、不需要人工确认）：只改 current_price 并重算市值/盈亏/权重
   const refreshHoldingsPrices = async () => {
@@ -1122,20 +1149,20 @@ function apply(ctx, config) {
     const d = new Date()
     const stamp = localYmd() + "_" + z2(d.getHours()) + z2(d.getMinutes()) + z2(d.getSeconds())
     const backup = HOLDINGS_BACKUP_DIR + "/持仓_" + stamp + ".json"
-    try { await fs.writeText(await fs.resolve(backup), JSON.stringify(current, null, 2) + "\n", void 0, void 0, getFsPolicy()) } catch (e) { /* 首次无账本可忽略 */ }
+    let backupOk = false
+    try { await writeTextWithPolicyRetry(await fs.resolve(backup), JSON.stringify(current, null, 2) + "\n"); backupOk = true } catch (e) { /* 首次无账本可忽略 */ }
     const updatedAt = d.toISOString()
     const next = { version: 1, updated_at: updatedAt, account: nextAccount, positions: recalculated }
     await writeJsonFile(HOLDINGS_FILE, next)
-    const auditTarget = await fs.resolve(HOLDINGS_AUDIT)
-    let oldLog = ""
-    try { oldLog = await fs.readText(auditTarget) } catch (e) { /* 首次 */ }
-    const audit = JSON.stringify({ ts: updatedAt, action: "refresh-quotes", source: fetched.source || "tencent", prices, diff, positions: recalculated, account: nextAccount })
-    await fs.writeText(auditTarget, oldLog + (oldLog && !oldLog.endsWith("\n") ? "\n" : "") + audit + "\n", void 0, void 0, getFsPolicy())
+    let auditWarning = ""
+    try {
+      await appendHoldingsAudit({ ts: updatedAt, action: "refresh-quotes", source: fetched.source || "tencent", prices, diff, positions: recalculated, account: nextAccount })
+    } catch (e) { auditWarning = "审计日志写入失败：" + String(e && e.message ? e.message : e).slice(0, 200) }
     let watchSync = []
     let watchSyncError = ""
     try { watchSync = await syncWatchlistFromHoldings(recalculated) }
     catch (e) { watchSyncError = String(e && e.message ? e.message : e).slice(0, 200) }
-    return { ok: true, updated_at: updatedAt, updated: hit.length, total: codes.length, missing, prices, fetched_at: fetched.fetchedAt || updatedAt, backup, diff, watchSync, watchSyncError }
+    return { ok: true, updated_at: updatedAt, updated: hit.length, total: codes.length, missing, prices, fetched_at: fetched.fetchedAt || updatedAt, backup: backupOk ? backup : null, diff, watchSync, watchSyncError, auditWarning }
   }
   // 现价刷新：优先复用 scripts/realtime_quote.py；spawn python 不可用时退化到 Node 直接拉腾讯行情
   const fetchTencentViaNode = async (codes) => {
@@ -1238,10 +1265,17 @@ function apply(ctx, config) {
     const options = opts || {}
     const label = options.label || "投研子任务"
     const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000
-    const agents = hostService(ctx, "agents")
-    const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
-    const parent = roots[roots.length - 1]
-    if (!parent) throw new Error("没有可用的顶层 Agent，无法执行「" + label + "」")
+    // 父 Agent 优先选「工作区覆盖 BASE_DIR」的那个会话（子代理会继承它的沙箱根与模型）。
+    const live = liveAgents(ctx)
+    const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
+    const base = norm(BASE_DIR)
+    const coversBase = (ag) => {
+      const cwd = ag && ag.session && ag.session.header ? ag.session.header.cwd : ""
+      const c = norm(cwd)
+      return Boolean(c) && (base === c || base.startsWith(c + "/"))
+    }
+    const parent = live.filter(coversBase).pop() || live[live.length - 1]
+    if (!parent) throw new Error("没有可用的顶层 Agent，无法执行「" + label + "」（宿主 ctx.agents 里没有活跃会话 Agent）")
     const candidates = []
     try { if (ctx.subagents) candidates.push(ctx.subagents) } catch (e) { /* ignore */ }
     for (const n of ["subagents", "subagent"]) {
@@ -1370,18 +1404,40 @@ function apply(ctx, config) {
     if (fs === void 0) return fallback
     try { return JSON.parse(await fs.readText(await fs.resolve(path))) } catch (e) { return fallback }
   }
-  const writeJsonFile = async (path, value) => {
+  // v0.75.3：所有落到磁盘的写入统一走「多候选沙箱策略 + 记住命中者」
+  //
+  // v0.75.2 只给 writeJsonFile 加了候选重试，审计（holdings_audit.jsonl）与账本备份仍用
+  // getFsPolicy()（= candidates[0]）。本机多工作区并行时 candidates[0] 会解析成「别的会话」的策略，
+  // 于是同一个目录里出现「账本写成功、审计行写失败」：
+  //   FsError: cannot write "...holdings_audit.jsonl": file access denied under workspace-write mode
+  // 现象是磁盘明明可写、账本其实已经改了，用户却看到「确认写入失败」。
+  // 现在：写入端逐个候选重试；命中过的候选用下标记住（fsPolicyHint），后续写（含未改造的
+  // getFsPolicy() 旧调用点）优先复用它，不必每次都先撞一次拒绝。
+  let fsPolicyHint = -1
+  const writeTextWithPolicyRetry = async (target, text) => {
     const fs = hostService(ctx, "fs")
     if (fs === void 0) throw new Error("fs unavailable")
-    const target = await fs.resolve(path)
-    const text = JSON.stringify(value, null, 2) + "\n"
-    const cands = fsPolicyCandidates()
-    if (!cands.length) { await fs.writeText(target, text); return }
-    // 逐个候选策略重试：拿到「错的那个会话」时不再直接失败
+    const targetPath = String((target && target.displayPath) || target || "")
+    const cands = fsPolicyCandidates(targetPath)
+    if (!cands.length) {
+      // 没有任何候选带策略（宿主没有 sandboxPolicy 服务，或老版本 API）：交给宿主默认判定。
+      // 若宿主默认根不覆盖目标，这里会抛出 FS_SANDBOX_DENIED —— 换成能照着查的话再抛。
+      try { await fs.writeText(target, text); return } catch (e) {
+        if (!String(e && e.message ? e.message : e).includes("file access denied")) throw e
+        throw new Error("写入被沙箱拒绝，且没有可用的会话策略覆盖该路径：" + targetPath
+          + "（活跃会话数 " + liveAgents(ctx).length + "；请确认至少有一个会话的工作区包含该目录，或重启 DSH 让插件重新挂载）")
+      }
+    }
+    const list = cands.slice(0, 4)
+    if (fsPolicyHint > 0 && fsPolicyHint < list.length) {
+      list.unshift(list.splice(fsPolicyHint, 1)[0])
+    }
     let firstErr = null
-    for (const p of cands.slice(0, 4)) {
+    for (const p of list) {
       try {
         await fs.writeText(target, text, void 0, void 0, p)
+        const idx = cands.indexOf(p)
+        if (idx >= 0) fsPolicyHint = idx
         return
       } catch (e) {
         if (!firstErr) firstErr = e
@@ -1389,48 +1445,83 @@ function apply(ctx, config) {
     }
     throw firstErr
   }
-  // 写文件必须带沙箱 policy（宿主 workspace-write 模式会拒绝无 policy 的写入）
+  const writeJsonFile = async (path, value) => {
+    const fs = hostService(ctx, "fs")
+    if (fs === void 0) throw new Error("fs unavailable")
+    await writeTextWithPolicyRetry(await fs.resolve(path), JSON.stringify(value, null, 2) + "\n")
+  }
+  // 追加一行 JSONL（审计/日志）：读旧文 → 拼一行 → 全量重写。写入走候选重试，
+  // 不要再用单策略 getFsPolicy() —— 那个在「写账本成功之后」失败会把整次操作判成失败。
+  const appendJsonlLine = async (target, payload) => {
+    const fs = hostService(ctx, "fs")
+    if (fs === void 0) throw new Error("fs unavailable")
+    let oldLog = ""
+    try { oldLog = await fs.readText(target) } catch (e) { /* 首次 */ }
+    const line = typeof payload === "string" ? payload : JSON.stringify(payload)
+    await writeTextWithPolicyRetry(target, oldLog + (oldLog && !oldLog.endsWith("\n") ? "\n" : "") + line + "\n")
+  }
+  const appendHoldingsAudit = async (payload) => {
+    const fs = hostService(ctx, "fs")
+    if (fs === void 0) throw new Error("fs unavailable")
+    await appendJsonlLine(await fs.resolve(HOLDINGS_AUDIT), payload)
+  }
+  // 写文件必须带沙箱 policy（宿主 workspace-write 模式会拒绝无 policy 的写入）。
   //
-  // 2026-11-20 修正：原实现只取 roots[length-1]，即「最后一个会话根」，
-  // 而它未必是发起本次写入的会话。机器上同时存在多个工作区时
-  // （E:\Dsh_WorkSapce\Dify_Agents 与同级的 E:\Dsh_WorkSapce\0815-1120，
-  // 以及重启后新建的 no-cwd 会话），按后者的策略解析会把账本目录判为越界，
-  // 表现为 FsError: file access denied under workspace-write mode —— 磁盘明明可写。
+  // 2026-11-20 修正过「候选顺序」（原来只取最后一个会话根）。
+  // 2026-11-23 找到真正病根：候选来源用的是 `agents.roots()`，而 DSH 0.2.x 没有这个方法
+  // （AgentService 只有 list()/get()/create()）。于是候选恒为空 → 写入退回「无会话」的
+  // 部署默认根 → 工作区内的写全被 FS_SANDBOX_DENIED 拒掉（账本、watchlist、审计、备份都写不进）。
   //
-  // 现在的候选顺序：① 工作区（或 cwd）覆盖 BASE_DIR 的会话根优先；
-  // ② 其余按「越新越靠前」兜底。写入端逐个候选重试，不再赌某一个。
-  const fsPolicyCandidates = () => {
+  // 现在：候选来自 liveAgents()（list() 优先，roots() 兜底），并且**按目标路径过滤**——
+  // 只保留 workspaceRoot（含 additionalWritableRoots）确实覆盖目标的策略，不再盲试。
+  // 一个都不覆盖时也保留「部署默认策略」作为最后候选，让宿主给出它自己的拒因。
+  const policyCovers = (policy, targetPath) => {
+    if (!policy || !targetPath) return false
+    if (policy.mode === "danger-full-access") return true
+    if (policy.mode !== "workspace-write") return false
+    const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
+    const target = norm(targetPath)
+    if (!target) return false
+    const roots = [policy.workspaceRoot].concat(Array.isArray(policy.additionalWritableRoots) ? policy.additionalWritableRoots : [])
+    return roots.some((root) => {
+      const r = norm(root)
+      return Boolean(r) && (target === r || target.startsWith(r + "/"))
+    })
+  }
+  const fsPolicyCandidates = (targetPath) => {
     const out = []
+    const push = (policy) => {
+      if (policy === void 0 || policy === null) return
+      if (policyCovers(policy, targetPath)) {
+        const key = String(policy.mode) + "|" + String(policy.workspaceRoot || "")
+        if (out.some((item) => String(item.mode) + "|" + String(item.workspaceRoot || "") === key)) return
+      } else if (targetPath !== void 0) {
+        // 不覆盖目标的策略不进候选：以前盲试会先撞一次拒绝，日志里全是假红
+        return
+      }
+      out.push(policy)
+    }
     try {
       const sp = hostService(ctx, "sandboxPolicy")
       if (sp === void 0) return out
-      const agents = hostService(ctx, "agents")
-      const roots = (agents && typeof agents.roots === "function") ? agents.roots() : []
-      const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
-      const base = norm(BASE_DIR)
-      const covers = (r) => {
-        if (!r) return false
-        for (const key of ["workspace", "cwd", "root", "dir", "path"]) {
-          const ws = norm(r[key])
-          if (ws && (base === ws || base.startsWith(ws + "/"))) return true
-        }
-        return false
+      // ① 覆盖目标的活跃会话优先（保证写的是「看得见这个工作区」的那个会话的策略）
+      const agents = liveAgents(ctx)
+      for (let i = agents.length - 1; i >= 0; i -= 1) {
+        const session = agents[i] && agents[i].session
+        if (session === void 0) continue
+        try { push(sp.resolve({ session })) } catch (e) { /* 单个会话解析失败不影响其他候选 */ }
       }
-      const reversed = roots.slice().reverse()
-      const ordered = reversed.filter(covers).concat(reversed.filter((r) => !covers(r)))
-      for (const r of ordered) {
-        if (!r || !r.session) continue
-        try {
-          const p = sp.resolve({ session: r.session })
-          if (p !== void 0) out.push(p)
-        } catch (e) { /* 单个根解析失败不影响其他候选 */ }
-      }
+      // ② 无会话的部署默认策略：覆盖目标时才有意义（不覆盖会在写入端得到宿主的原始拒因）
+      try { push(sp.resolve()) } catch (e) { /* ignore */ }
     } catch (e) { /* 服务缺失 → 返回空，退回宿主默认策略 */ }
     return out
   }
-  const getFsPolicy = () => {
-    const c = fsPolicyCandidates()
-    return c.length ? c[0] : void 0
+  // 遗留的单策略调用点（运行日志 / 结论归档等）：优先用「上次写成功过」的候选。
+  const getFsPolicy = (targetPath) => {
+    const c = fsPolicyCandidates(targetPath === void 0 ? BASE_DIR : targetPath)
+    if (!c.length) return void 0
+    if (fsPolicyHint > 0 && fsPolicyHint < c.length) return c[fsPolicyHint]
+    return c[0]
   }
   const resolveTemplatePreset = async (templateId, fallback) => {    const settings = await readJsonFile(SETTINGS_FILE, {})
     const value = settings.templates && settings.templates[templateId]
@@ -1822,9 +1913,8 @@ function apply(ctx, config) {
   // 会话宿主模型 = 当前会话根 Agent 的 provider/model（网页任务在 executeJob 里原本继承的就是它）
   const resolveSessionHostModel = () => {
     try {
-      const agents = hostService(ctx, "agents")
-      const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
-      const host = roots[roots.length - 1]
+      const live = liveAgents(ctx)
+      const host = live[live.length - 1]
       const opt = (host && host.options) ? host.options : {}
       const model = opt.model
       if (!model) return null
@@ -2761,7 +2851,7 @@ function apply(ctx, config) {
             : "wb-task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8)
           // 专用 Agent 装上宿主模型：使"继承宿主"类角色能继承到有效模型
           // 宿主模型优先级：模型设置里的覆盖（settings.defaultModel）> 当前会话根 Agent 的模型
-          const roots0 = agents.roots ? agents.roots() : []
+          const roots0 = liveAgents(ctx)
           const hostAgent = roots0[roots0.length - 1]
           const hostModel = await resolveHostModel()
           const agentOptions = hostModel
@@ -2783,8 +2873,8 @@ function apply(ctx, config) {
         } catch (e) { /* 创建失败则回退到顶层 Agent */ }
       }
       if (!parent) {
-        const roots = agents && typeof agents.roots === "function" ? agents.roots() : []
-        parent = roots[roots.length - 1]
+        const live = liveAgents(ctx)
+        parent = live[live.length - 1]
       }
       if (!parent) throw new Error("当前没有可用的执行 Agent；请先打开一个 DSH 会话再启动网页任务")
       const controller = new AbortController()
