@@ -5,8 +5,9 @@
 // 「已是最新版本 v0.75.4」（服务端读的是实时 package.json）——同一个页面两个版本号打架，
 // 看着像升级没生效。
 //
-// 机制：vite 构建时把 package.json 的 version 注入 __APP_VERSION__，产物落在运行目录
-// （<BASE_DIR>/.dsh-invest/web/dist，不在仓库里），所以改版本号后必须重新构建。
+// 机制：vite 构建时把 package.json 的 version 注入 __APP_VERSION__，产物 v0.79.0 起落在
+// 包内 packages/dsh-invest/web-dist/（早先是运行目录 <BASE_DIR>/.dsh-invest/web/dist），
+// 所以改版本号后必须重新构建。
 //
 // 这里只在产物存在时校验（CI/新克隆没有 dist，自动跳过），锁住「改了版本号忘记重建前端」。
 const test = require('node:test')
@@ -16,8 +17,18 @@ const path = require('node:path')
 
 const root = path.join(__dirname, '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'packages', 'dsh-invest', 'package.json'), 'utf8'))
-const baseDir = process.env.DSH_INVEST_BASE_DIR || path.resolve(root, '..')
-const distDir = process.env.DSH_INVEST_WEB_DIST || path.join(baseDir, '.dsh-invest', 'web', 'dist')
+const PKG_DIST = path.join(root, 'packages', 'dsh-invest', 'web-dist')
+const legacyBaseDir = process.env.DSH_INVEST_BASE_DIR || path.resolve(root, '..')
+const LEGACY_DIST = path.join(legacyBaseDir, '.dsh-invest', 'web', 'dist')
+
+/** 产物目录解析顺序与 Host 端一致：env → 包内 web-dist → 旧的运行目录 */
+function resolveDistDir() {
+  if (process.env.DSH_INVEST_WEB_DIST) return process.env.DSH_INVEST_WEB_DIST
+  if (fs.existsSync(path.join(PKG_DIST, 'workbench.js'))) return PKG_DIST
+  return LEGACY_DIST
+}
+
+const distDir = resolveDistDir()
 const bundle = path.join(distDir, 'workbench.js')
 
 test('工作台前端产物必须内嵌当前版本号（改版本号后要重建 dist）', (t) => {

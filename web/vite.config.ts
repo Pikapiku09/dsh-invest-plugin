@@ -2,10 +2,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
-// 前端产物必须落到「运行目录」而不是仓库里：插件从 <BASE_DIR>/.dsh-invest/web/dist 实时读取
-// （no-store，刷新即生效）。BASE_DIR 默认是仓库所在工作区，可用 DSH_INVEST_BASE_DIR / DSH_INVEST_WEB_DIST 覆盖。
-const BASE_DIR = process.env.DSH_INVEST_BASE_DIR || resolve(__dirname, '../..');
-const OUT_DIR = process.env.DSH_INVEST_WEB_DIST || resolve(BASE_DIR, '.dsh-invest/web/dist');
+// 前端产物落到「包内」packages/dsh-invest/web-dist/：
+// 别人 clone 或从 npm 安装后，Host 端直接读包内产物即可出界面，不必再装 vite/Node 依赖。
+// （Host 端解析顺序：DSH_INVEST_WEB_DIST → 包内 web-dist → 工作区 .dsh-invest/web/dist 兼容旧装）
+// 开发期若想输出到别处：DSH_INVEST_WEB_DIST=<dir>。
+const PKG_DIR = resolve(__dirname, '../packages/dsh-invest');
+const OUT_DIR = process.env.DSH_INVEST_WEB_DIST || resolve(PKG_DIR, 'web-dist');
 
 // 版本号唯一事实来源 = packages/dsh-invest/package.json（test/version-sync.test.js 保证各处一致）。
 // 构建时注入为 __APP_VERSION__，界面上只负责显示，不在前端硬编码任何版本字符串。

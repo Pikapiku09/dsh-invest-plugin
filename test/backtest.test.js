@@ -203,8 +203,16 @@ test('回测：无结论与缺日线都优雅降级（不 500）', async (t) => 
   assert.ok(r0.json.warnings.length >= 1, '空库应提示暂无结论')
 
   // 有结论但完全没有日线缓存，且无 token（离线环境）→ 行级丢弃 + warning，仍 200
+  // 用 DSH_INVEST_OFFLINE 显式模拟离线：否则腾讯免费兜底会在有网机器上真的拉到日线，
+  // 这条「离线优雅降级」的语义就测不出来了。（联网兜底另有正向测试覆盖）
+  const prevOffline = process.env.DSH_INVEST_OFFLINE
+  process.env.DSH_INVEST_OFFLINE = '1'
   const h = makeHarness({ conclusions: [CONCLUSION()] })
-  t.after(h.cleanup)
+  t.after(() => {
+    h.cleanup()
+    if (prevOffline === undefined) delete process.env.DSH_INVEST_OFFLINE
+    else process.env.DSH_INVEST_OFFLINE = prevOffline
+  })
   const r1 = await h.call('GET', '/dsh-invest/api/backtest')
   assert.equal(r1.status, 200)
   assert.equal(r1.json.matched, 0)

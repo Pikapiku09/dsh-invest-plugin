@@ -385,6 +385,8 @@ export interface AppState {
   daoChatError: string;
   /** 正在把对话沉淀成条目草稿 */
   daoDistilling: boolean;
+  /** 底部条目库抽屉：默认收起，只有一条细带，别抢对话的位置 */
+  daoDockOpen: boolean;
 }
 
 const DAO_PERSISTED = readDaoThread();
@@ -428,5 +430,5 @@ export const state: AppState = {
   daoQuery: '', daoKindFilter: '全部', daoRoleFilter: '全部', daoDraft: emptyDaoDraft(),
   daoSaving: false, daoNotice: '',
   daoPersona: DAO_PERSISTED.persona, daoThread: DAO_PERSISTED.turns,
-  daoChatDraft: '', daoChatLoading: false, daoChatError: '', daoDistilling: false,
+  daoChatDraft: '', daoChatLoading: false, daoChatError: '', daoDistilling: false, daoDockOpen: false,
 };

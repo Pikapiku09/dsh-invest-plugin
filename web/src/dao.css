@@ -1,64 +1,617 @@
-/* ===== 悟道（v0.78.0）===== */
-.dao-stats { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 18px; }
-.dao-stat { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 12px; }
-.dao-stat strong { color: var(--text); font-size: 14px; font-variant-numeric: tabular-nums; }
+/* 悟道 v0.79.0 — 一屏三件事：星环背景、一条对话框、一条抽屉。
+   页面整体固定走深色，不跟随浅色主题：背景是实拍星环，浅色化只会脏。
+   条目库全部收进底部抽屉，默认收起，让"说话"这件事占据唯一的视觉焦点。 */
+
+.dao-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* 与 .content:has(.dao-stage) 的上下内边距（18+12）配平，正好铺满一屏 */
+  height: calc(100vh - 30px);
+  min-height: 560px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 20px;
+  overflow: hidden;
+  background: #040405;
+  color: #f2f2f4;
+  isolation: isolate;
+}
+
+/* 悟道是一屏，不要外面的 30px 留白把「一屏」撑出滚动条 */
+.content:has(.dao-stage) {
+  max-width: none;
+  padding: 18px 22px 12px;
+}
+
+/* 背景：星环实拍图，cover 居中；不用 filter:blur，糊掉噪点反而假 */
+.dao-stage-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center 46%;
+  background-repeat: no-repeat;
+  opacity: .92;
+  transform: scale(1.02);
+  pointer-events: none;
+}
+
+/* 压暗：中心留亮，四周沉下去，保证文字对比度 ≥ 7:1 */
+.dao-stage-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(118% 86% at 50% 44%, rgba(0, 0, 0, .06) 0%, rgba(0, 0, 0, .42) 58%, rgba(0, 0, 0, .82) 100%),
+    linear-gradient(180deg, rgba(0, 0, 0, .62) 0%, rgba(0, 0, 0, .12) 26%, rgba(0, 0, 0, .34) 66%, rgba(0, 0, 0, .9) 100%);
+}
+
+.dao-stage-head {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  padding: 26px 30px 0;
+  text-align: center;
+}
+
+.dao-stage-head h1 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: .42em;
+  text-indent: .42em;
+  color: rgba(255, 255, 255, .9);
+  text-transform: none;
+}
+
+.dao-stage-head p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, .44);
+}
+
+.dao-stage-main {
+  position: relative;
+  z-index: 2;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 16px 24px 22px;
+}
+
+/* 空态：对话框正落星环中心，像把话递给那个环 */
+.dao-stage.is-empty .dao-stage-main {
+  justify-content: center;
+  padding-bottom: 8%;
+}
+
+/* ── 条目库组件基底 ───────────────────────────────────
+   v0.79.0 重写时这组规则被整体删掉过一次，结果卡片退化成 inline：
+   「类型 / 纪律 / 反思」全挤在一行里。结构规则必须留着，
+   颜色一律交给下面 .dao-dock / .dao-draft 的作用域覆盖去改。 */
+.dao-stats { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.dao-stat { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 11px; border: 1px solid rgba(255, 255, 255, .14); border-radius: 999px; background: rgba(255, 255, 255, .04); color: rgba(255, 255, 255, .5); font-size: 12px; }
+.dao-stat strong { color: #f0f0f4; font-size: 14px; font-variant-numeric: tabular-nums; }
 .dao-stat.is-zero { opacity: .55; }
-.dao-layout { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 18px; align-items: start; }
-.dao-list { display: flex; flex-direction: column; gap: 12px; position: sticky; top: 14px; max-height: calc(100vh - 150px); }
+.dao-list { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .dao-list-head { display: flex; flex-direction: column; gap: 10px; }
 .dao-list-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .dao-list-actions .button { padding: 7px 12px; font-size: 13px; }
 .dao-filter-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.dao-filter-label { font-size: 11px; color: var(--muted); letter-spacing: .04em; }
-.dao-chip { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
-.dao-chip:hover { color: var(--text); border-color: var(--accent); }
-.dao-chip.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.dao-filter-label { font-size: 11px; color: rgba(255, 255, 255, .42); letter-spacing: .04em; }
+.dao-chip { padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, .14); background: transparent; color: rgba(255, 255, 255, .5); font-size: 12px; cursor: pointer; }
 .dao-chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
 .dao-list-body { display: flex; flex-direction: column; gap: 8px; overflow: auto; padding-right: 4px; }
-.dao-card { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
-.dao-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-.dao-card.pinned { border-left: 3px solid var(--amber); }
-.dao-card-main { display: flex; flex-direction: column; gap: 7px; width: 100%; padding: 11px 12px 6px; background: transparent; border: 0; text-align: left; cursor: pointer; color: var(--text); }
+.dao-card { border: 1px solid rgba(255, 255, 255, .1); border-radius: 12px; background: rgba(255, 255, 255, .03); overflow: hidden; }
+.dao-card-main { display: flex; flex-direction: column; gap: 7px; width: 100%; padding: 11px 12px 6px; background: transparent; border: 0; text-align: left; cursor: pointer; color: #f2f2f4; }
 .dao-card-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .dao-card-head strong { font-size: 13.5px; font-weight: 600; }
-.dao-kind { flex: none; padding: 2px 7px; border-radius: 6px; font-size: 11px; background: var(--accent-soft); color: var(--accent); }
-.dao-kind-反思 { background: rgba(174, 148, 232, .14); color: var(--violet); }
-.dao-kind-复盘 { background: rgba(80, 200, 172, .14); color: var(--mint); }
-.dao-kind-心得 { background: rgba(217, 174, 100, .14); color: var(--amber); }
-.dao-pin { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--amber); }
+.dao-kind { flex: none; padding: 2px 7px; border-radius: 6px; font-size: 11px; }
+.dao-pin { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; }
 .dao-card-tags { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
-.dao-tag { padding: 1px 7px; border-radius: 5px; border: 1px solid var(--line-soft); font-size: 11px; color: var(--muted); }
+.dao-tag { padding: 1px 7px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, .14); font-size: 11px; }
 .dao-tag-general { border-style: dashed; }
-.dao-card-time { margin-left: auto; font-size: 11px; color: var(--muted); }
-.dao-card-body { font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+.dao-card-time { margin-left: auto; font-size: 11px; }
+.dao-card-body { font-size: 12.5px; line-height: 1.6; }
 .dao-card-actions { display: flex; gap: 4px; justify-content: flex-end; padding: 0 10px 9px; }
 .dao-card-actions .text-button { font-size: 11.5px; }
-.dao-card-actions .danger { color: var(--red); }
-.dao-list-foot { margin: 0; font-size: 11px; line-height: 1.6; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 10px; }
+.dao-list-foot { margin: 0; font-size: 11px; line-height: 1.6; border-top: 1px dashed rgba(255, 255, 255, .12); padding-top: 10px; }
 .dao-list-empty { padding: 16px 4px; font-size: 12.5px; }
-.dao-error { margin: 0; font-size: 12px; color: var(--red); }
-.dao-notice { margin: 0; font-size: 12px; color: var(--mint); }
-.dao-main { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.dao-editor, .dao-chat { display: flex; flex-direction: column; gap: 12px; }
 .dao-field { display: flex; flex-direction: column; gap: 6px; }
-.dao-field > span { font-size: 12px; font-weight: 600; color: var(--text); }
-.dao-field > span em { font-style: normal; font-weight: 400; font-size: 11px; color: var(--muted); margin-left: 6px; }
-.dao-field input, .dao-field textarea { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; resize: vertical; }
+.dao-field > span { font-size: 12px; font-weight: 600; }
+.dao-field > span em { font-style: normal; font-weight: 400; font-size: 11px; margin-left: 6px; }
+.dao-field input, .dao-field textarea { width: 100%; padding: 9px 11px; border: 1px solid rgba(255, 255, 255, .14); border-radius: 10px; background: rgba(255, 255, 255, .04); font: inherit; font-size: 13px; resize: vertical; }
 .dao-field textarea { line-height: 1.65; }
-.dao-field input:focus, .dao-field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.dao-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.dao-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
+.dao-editor { display: flex; flex-direction: column; gap: 12px; }
 .dao-editor-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.dao-chat-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.dao-persona { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
-.dao-persona select { padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 12.5px; }
-.dao-thread { max-height: 380px; overflow: auto; padding-right: 4px; }
-.dao-composer { display: flex; flex-direction: column; gap: 8px; }
-.dao-composer textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; line-height: 1.6; resize: vertical; }
-.dao-composer textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.dao-composer-actions { display: flex; justify-content: flex-end; gap: 8px; }
-@media (max-width: 1100px) {
-  .dao-layout { grid-template-columns: 1fr; }
-  .dao-list { position: static; max-height: none; }
-  .dao-list-body { max-height: 46vh; }
+
+/* ── 对话 ───────────────────────────────────────────── */
+
+.dao-thread {
+  width: min(720px, 100%);
+  max-height: min(44vh, 420px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, .18) transparent;
+  mask-image: linear-gradient(180deg, transparent 0, #000 18px);
 }
-.theme-light .dao-kind { background: rgba(61, 111, 206, .10); }
+
+.dao-turn { display: flex; }
+
+.dao-turn-user { justify-content: flex-end; }
+
+.dao-bubble {
+  max-width: 88%;
+  padding: 10px 14px;
+  border-radius: 16px 16px 4px 16px;
+  background: rgba(255, 255, 255, .1);
+  border: 1px solid rgba(255, 255, 255, .12);
+  font-size: 13px;
+  line-height: 1.7;
+  color: #f4f4f6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dao-turn-assistant .dao-bubble {
+  max-width: 96%;
+  border-radius: 16px 16px 16px 4px;
+  background: rgba(12, 12, 15, .62);
+  border-color: rgba(255, 255, 255, .1);
+  color: #e9e9ee;
+  backdrop-filter: blur(16px) saturate(120%);
+  white-space: normal;
+}
+
+.dao-turn-assistant .dao-bubble p:first-child { margin-top: 0; }
+.dao-turn-assistant .dao-bubble p:last-child { margin-bottom: 0; }
+.dao-bubble code { padding: 1px 5px; border-radius: 5px; background: rgba(255, 255, 255, .12); font-size: 12px; }
+.dao-bubble strong { color: #fff; }
+
+/* ── 输入条 ─────────────────────────────────────────── */
+
+.dao-composer-wrap {
+  position: relative;
+  width: min(720px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 环内那点微光：让输入条像浮在星环中央，而不是贴上去 */
+.dao-composer-wrap::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: 132%;
+  height: 220%;
+  transform: translate(-50%, -50%);
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(closest-side, rgba(255, 255, 255, .09), rgba(255, 255, 255, .02) 46%, transparent 72%);
+}
+
+.dao-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 9px 9px 9px 18px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 26px;
+  background: rgba(255, 255, 255, .07);
+  backdrop-filter: blur(20px) saturate(130%);
+  box-shadow:
+    0 22px 52px -20px rgba(0, 0, 0, .95),
+    0 0 0 1px rgba(255, 255, 255, .04) inset;
+  transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+}
+
+.dao-bar:focus-within {
+  border-color: rgba(255, 255, 255, .4);
+  background: rgba(255, 255, 255, .1);
+  box-shadow:
+    0 22px 64px -18px rgba(0, 0, 0, .95),
+    0 0 34px -6px rgba(255, 255, 255, .16),
+    0 0 0 1px rgba(255, 255, 255, .06) inset;
+}
+
+.dao-bar-input {
+  flex: 1;
+  min-height: 26px;
+  max-height: 168px;
+  padding: 6px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #f6f6f8;
+  font: inherit;
+  font-size: 14.5px;
+  line-height: 1.6;
+  resize: none;
+  caret-color: #fff;
+  overflow-y: auto;
+}
+
+.dao-bar-input::placeholder { color: rgba(255, 255, 255, .38); }
+
+.dao-send {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #ffffff, #dcdce2);
+  color: #08080a;
+  cursor: pointer;
+  transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease;
+  box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+}
+
+.dao-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 0 26px -2px rgba(255, 255, 255, .45);
+}
+
+.dao-send:active:not(:disabled) { transform: translateY(0) scale(.97); }
+
+.dao-send:disabled { opacity: .42; cursor: default; }
+
+.dao-send-wait { font-size: 13px; letter-spacing: .1em; }
+
+/* 发送按钮下方一行：人格在最左，动作在右——人格是"谁在说话"，属于次要设置 */
+.dao-under {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .46);
+}
+
+.dao-under-spacer { flex: 1; }
+
+.dao-persona {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, .5);
+}
+
+.dao-persona select {
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .06);
+  color: #e8e8ee;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dao-persona select:focus { outline: none; border-color: rgba(255, 255, 255, .38); }
+.dao-persona select option { background: #16161a; color: #e8e8ee; }
+
+.dao-under .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, .58);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color .15s ease;
+}
+
+.dao-under .text-button:hover:not(:disabled) { color: #fff; }
+.dao-under .text-button:disabled { opacity: .3; cursor: default; }
+
+.dao-stage .dao-error { color: #ff8f8f; font-size: 12px; margin: 0 8px; }
+.dao-stage .dao-notice { color: #8fe0c0; font-size: 12px; margin: 0; }
+
+/* ── 对话里的「入库标签卡」 ──────────────────────────── */
+
+.dao-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 13px 15px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 16px;
+  background: rgba(16, 16, 20, .78);
+  backdrop-filter: blur(18px) saturate(130%);
+  box-shadow: 0 18px 40px -22px rgba(0, 0, 0, .9);
+}
+
+.dao-draft-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  letter-spacing: .06em;
+  color: rgba(255, 255, 255, .52);
+}
+
+.dao-draft-head .text-button { margin-left: auto; }
+
+.dao-draft-title {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .05);
+  color: #f4f4f7;
+  font: inherit;
+  font-size: 13px;
+}
+
+.dao-draft-title:focus { outline: none; border-color: rgba(255, 255, 255, .36); }
+
+.dao-draft-body {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, .62);
+  max-height: 92px;
+  overflow: auto;
+}
+
+.dao-draft-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dao-draft-actions { display: flex; justify-content: flex-end; }
+
+.dao-draft .dao-chip {
+  border-color: rgba(255, 255, 255, .16);
+  color: rgba(255, 255, 255, .6);
+  background: transparent;
+}
+
+.dao-draft .dao-chip:hover { color: #fff; border-color: rgba(255, 255, 255, .42); }
+
+.dao-draft .dao-chip.active {
+  background: rgba(255, 255, 255, .92);
+  border-color: transparent;
+  color: #0b0b0e;
+}
+
+.dao-draft .dao-filter-label { color: rgba(255, 255, 255, .4); }
+
+.dao-draft .button-primary {
+  border: 0;
+  background: linear-gradient(180deg, #ffffff, #dedee4);
+  color: #0a0a0c;
+}
+
+.dao-draft .button-primary:hover:not(:disabled) { box-shadow: 0 0 22px -4px rgba(255, 255, 255, .5); }
+
+/* ── 底部抽屉 ───────────────────────────────────────── */
+
+.dao-dock {
+  position: relative;
+  z-index: 3;
+  flex: none;
+  border-top: 1px solid rgba(255, 255, 255, .1);
+  background: linear-gradient(180deg, rgba(6, 6, 9, .42), rgba(4, 4, 6, .96) 42%);
+  backdrop-filter: blur(20px) saturate(120%);
+}
+
+.dao-dock-handle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 20px 11px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, .5);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color .15s ease;
+}
+
+.dao-dock-handle:hover { color: #fff; }
+
+.dao-dock-grip {
+  width: 34px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .22);
+}
+
+.dao-dock-handle:hover .dao-dock-grip { background: rgba(255, 255, 255, .42); }
+
+.dao-dock-label { display: inline-flex; align-items: center; gap: 6px; }
+.dao-dock-label strong { color: rgba(255, 255, 255, .82); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.dao-dock-hint { margin-left: auto; font-size: 11px; color: rgba(255, 255, 255, .34); letter-spacing: .06em; }
+
+.dao-dock.is-open .dao-dock-grip { background: rgba(255, 255, 255, .52); }
+
+.dao-dock .dao-stats {
+  margin: 0;
+  padding: 0 20px 10px;
+  border-top: 0;
+}
+
+.dao-dock .dao-stat {
+  border-color: rgba(255, 255, 255, .12);
+  background: rgba(255, 255, 255, .04);
+  color: rgba(255, 255, 255, .48);
+}
+
+.dao-dock .dao-stat strong { color: #f0f0f4; }
+
+.dao-dock-body {
+  display: grid;
+  grid-template-columns: minmax(300px, 400px) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 18px;
+  padding: 0 20px 18px;
+  max-height: 44vh;
+  /* 两列各自滚：外框不滚，避免「滚一下列表、编辑区跟着跑」 */
+  overflow: hidden;
+}
+
+/* 抽屉内部统一压成玻璃暗色：外层是深空，浅色控件会跳出来 */
+.dao-dock .dao-list {
+  position: static;
+  max-height: none;
+  min-height: 0;
+  overflow: auto;
+  gap: 10px;
+}
+
+.dao-dock .dao-list-head { gap: 9px; }
+
+.dao-dock .search-field {
+  background: rgba(255, 255, 255, .05);
+  border-color: rgba(255, 255, 255, .12);
+  color: rgba(255, 255, 255, .7);
+}
+
+.dao-dock .search-field input { color: #f2f2f5; }
+.dao-dock .search-field input::placeholder { color: rgba(255, 255, 255, .34); }
+
+.dao-dock .button-secondary,
+.dao-dock .dao-list-actions .button {
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: rgba(255, 255, 255, .06);
+  color: #ececf1;
+}
+
+.dao-dock .button-secondary:hover:not(:disabled),
+.dao-dock .dao-list-actions .button:hover:not(:disabled) { border-color: rgba(255, 255, 255, .4); }
+
+.dao-dock .dao-list-actions .button-primary,
+.dao-dock .dao-editor-actions .button-primary {
+  border: 0;
+  background: linear-gradient(180deg, #ffffff, #dedee4);
+  color: #0a0a0c;
+}
+
+.dao-dock .dao-chip {
+  border-color: rgba(255, 255, 255, .14);
+  color: rgba(255, 255, 255, .56);
+}
+
+.dao-dock .dao-chip:hover { color: #fff; border-color: rgba(255, 255, 255, .4); }
+
+.dao-dock .dao-chip.active {
+  background: rgba(255, 255, 255, .92);
+  border-color: transparent;
+  color: #0b0b0e;
+}
+
+.dao-dock .dao-filter-label,
+.dao-dock .muted,
+.dao-dock .dao-list-empty,
+.dao-dock .compact { color: rgba(255, 255, 255, .42); }
+
+.dao-dock .dao-card {
+  border-color: rgba(255, 255, 255, .1);
+  background: rgba(255, 255, 255, .045);
+}
+
+.dao-dock .dao-card:hover { border-color: rgba(255, 255, 255, .22); }
+
+.dao-dock .dao-card.selected {
+  border-color: rgba(255, 255, 255, .42);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .2) inset;
+}
+
+.dao-dock .dao-card.pinned { border-left-color: rgba(255, 255, 255, .6); }
+.dao-dock .dao-card-head strong { color: #f4f4f7; }
+.dao-dock .dao-card-body,
+.dao-dock .dao-card-time { color: rgba(255, 255, 255, .46); }
+.dao-dock .dao-tag { border-color: rgba(255, 255, 255, .14); color: rgba(255, 255, 255, .5); }
+
+.dao-dock .dao-kind {
+  background: rgba(255, 255, 255, .12);
+  color: #f0f0f5;
+}
+
+.dao-dock .dao-kind-反思 { background: rgba(174, 148, 232, .26); color: #cdbbf5; }
+.dao-dock .dao-kind-复盘 { background: rgba(80, 200, 172, .24); color: #96e6cf; }
+.dao-dock .dao-kind-心得 { background: rgba(217, 174, 100, .24); color: #efcb90; }
+
+.dao-dock .dao-list-foot {
+  border-top-color: rgba(255, 255, 255, .1);
+  color: rgba(255, 255, 255, .32);
+}
+
+.dao-dock .dao-card-actions .danger { color: #ff9a9a; }
+
+.dao-dock .dao-editor,
+.dao-dock .dao-dock-empty {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, .09);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .028);
+}
+
+.dao-dock .dao-dock-empty { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+.dao-dock .dao-dock-empty p { margin: 0; font-size: 12.5px; line-height: 1.7; color: rgba(255, 255, 255, .5); }
+.dao-dock .dao-dock-empty p.muted { color: rgba(255, 255, 255, .34); }
+
+.dao-dock .dao-field > span { color: rgba(255, 255, 255, .74); }
+.dao-dock .dao-field > span em { color: rgba(255, 255, 255, .38); }
+
+.dao-dock .dao-field input,
+.dao-dock .dao-field textarea {
+  border-color: rgba(255, 255, 255, .12);
+  background: rgba(0, 0, 0, .42);
+  color: #f2f2f5;
+}
+
+.dao-dock .dao-field input::placeholder,
+.dao-dock .dao-field textarea::placeholder { color: rgba(255, 255, 255, .28); }
+
+.dao-dock .dao-field input:focus,
+.dao-dock .dao-field textarea:focus {
+  border-color: rgba(255, 255, 255, .4);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, .07);
+}
+
+.dao-dock .dao-check { color: rgba(255, 255, 255, .56); }
+.dao-dock .dao-notice { color: #8fe0c0; }
+.dao-dock .dao-error { color: #ff9a9a; }
+
+/* ── 响应式 ─────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .dao-stage { height: calc(100vh - 84px); border-radius: 14px; }
+  .dao-stage-head { padding: 20px 20px 0; }
+  .dao-stage-main { padding: 12px 14px 16px; }
+  .dao-dock-body { grid-template-columns: minmax(0, 1fr); max-height: 62vh; padding: 0 14px 14px; }
+  .dao-thread { max-height: 40vh; }
+}
+
+@media (max-width: 560px) {
+  .dao-stage-head h1 { font-size: 13px; letter-spacing: .3em; }
+  .dao-under { flex-wrap: wrap; }
+  .dao-bubble { max-width: 100%; }
+}

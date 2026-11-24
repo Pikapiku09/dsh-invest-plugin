@@ -2,7 +2,10 @@
 // 常规 Cordis 插件（profile bundle 挂载），所有会话可见
 // 宿主私有包（schemastery / dsh-tools）走可选导入：见 host-deps.js（干净 clone / 测试环境缺包时自动降级）
 import { z, defineTool } from "./host-deps.js"
-import { promises as fsp } from "node:fs"
+import { promises as fsp, existsSync } from "node:fs"
+import { homedir } from "node:os"
+import { fileURLToPath } from "node:url"
+import { fetchTencentDaily, describeSource, buildOnboardingHint } from "./source.js"
 import { DATA_BASE, TOOL_REDLINE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY } from "./prompts.js"
 import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv, z2, localYmd, cmpVersion as cmpVersionPure } from "./pure.js"
 import { DEFAULT_PRESET, PRESETS, ROLE_CODES, mergeRoutes, formatRoute, formatRouteChain, parseRoute, parseRouteList, parseRoutesJson } from "./routes.js"
@@ -180,10 +183,36 @@ function apply(ctx, config) {
     }
   }
   const progressStore = {}
+  // 数据源状态（v0.79.0）：哪种能力用了哪个源，进报告头 + /api/datasource 可查。
+  // 原则是「降级必须留痕」——用户不能因为看得见图表，就以为数据是完整的。
+  const DATA_SOURCE = { daily: "", adj: "", quote: "tencent", fundamentals: "", error: "", at: "", hasToken: null }
+  const noteSource = (capability, name) => {
+    if (!capability) return
+    DATA_SOURCE[capability] = String(name || "")
+    DATA_SOURCE.at = new Date().toISOString()
+  }
+  const noteSourceError = (message) => {
+    DATA_SOURCE.error = String(message || "").slice(0, 160)
+    DATA_SOURCE.at = new Date().toISOString()
+  }
+  const sourceSummary = () => describeSource(DATA_SOURCE)
   // 最近一次运行日志写入错误（诊断用；正常为空串，随 /api/jobs 返回）
   let lastRunLogError = ""
-  // 工作区基目录：默认 E:/Dsh_WorkSapce/Dify_Agents，可用 DSH_INVEST_BASE_DIR 覆盖
-  const BASE_DIR = (typeof process !== "undefined" && process.env && process.env.DSH_INVEST_BASE_DIR) || "E:/Dsh_WorkSapce/Dify_Agents"
+  // 工作区基目录。解析顺序（v0.79.0 起可移植，不再硬编码作者本机路径）：
+  //   ① DSH_INVEST_BASE_DIR 环境变量（显式指定，最优先）
+  //   ② 旧版默认路径且已有数据 → 继续用，避免升级后账本/悟道「消失」
+  //   ③ 进程工作目录（DSH 里通常就是用户的工作区）
+  //   ④ 用户主目录（保底，cwd 不可写时仍能跑）
+  const LEGACY_BASE_DIR = "E:/Dsh_WorkSapce/Dify_Agents"
+  const normDir = (p) => String(p || "").replace(/\\/g, "/").replace(/\/$/, "")
+  const BASE_DIR = (() => {
+    const envDir = (typeof process !== "undefined" && process.env && process.env.DSH_INVEST_BASE_DIR) || ""
+    if (envDir) return normDir(envDir)
+    try { if (existsSync(LEGACY_BASE_DIR + "/.dsh-invest/store")) return LEGACY_BASE_DIR } catch (e) { /* 探不到就走后面 */ }
+    try { const cwd = typeof process !== "undefined" && process.cwd ? process.cwd() : ""; if (cwd) return normDir(cwd) } catch (e) { /* 忽略 */ }
+    try { return normDir(homedir()) } catch (e) { /* 忽略 */ }
+    return "."
+  })()
   // 按 key 串行化的异步锁：并发任务下，jsonl/watchlist 这类「读-改-写」必须串行，否则会互相覆盖丢数据
   const lockChains = new Map()
   const withLock = (key, fn) => {
@@ -287,7 +316,16 @@ function apply(ctx, config) {
   // 个股分析知识库：报告按「个股」切段归集（清单 + 每只股票一份 Markdown）
   const STOCK_NOTES_FILE = BASE_DIR + "/.dsh-invest/store/stock-notes.json"
   const STOCK_NOTES_DIR = BASE_DIR + "/.dsh-invest/store/stocks"
-  const WEB_DIST_DIR = BASE_DIR + "/.dsh-invest/web/dist"
+  // 前端产物目录。v0.79.0 起构建进包内（packages/dsh-invest/web-dist/）——别人安装后
+  // 不必再装 vite/Node 依赖就能看到界面；开发期可用 DSH_INVEST_WEB_DIST 指向工作区实时产物。
+  const PKG_ROOT = (() => { try { return normDir(fileURLToPath(new URL("..", import.meta.url))) } catch (e) { return "" } })()
+  const PKG_WEB_DIST = PKG_ROOT ? PKG_ROOT + "/web-dist" : ""
+  const WEB_DIST_DIR = (() => {
+    const envDist = (typeof process !== "undefined" && process.env && process.env.DSH_INVEST_WEB_DIST) || ""
+    if (envDist) return normDir(envDist)
+    try { if (PKG_WEB_DIST && existsSync(PKG_WEB_DIST + "/index.html")) return PKG_WEB_DIST } catch (e) { /* 包内没有就回落工作区 */ }
+    return BASE_DIR + "/.dsh-invest/web/dist"
+  })()
   const WEB_DIST_INDEX = WEB_DIST_DIR + "/index.html"
   const WEB_DIST_JS = WEB_DIST_DIR + "/workbench.js"
   const WEB_DIST_CSS = WEB_DIST_DIR + "/workbench.css"
@@ -2455,28 +2493,47 @@ function apply(ctx, config) {
         if (Array.isArray(rows) && rows.length >= 30) return rows
       } catch (e) { /* 坏缓存，走在线 */ }
     }
-    if (!token) return null
     const p2 = (n) => String(n).padStart(2, "0")
     const ymd = (d) => "" + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate())
     const end = new Date()
     const start = new Date(end.getTime() - 400 * 86400000)
-    try {
-      const r = await fetch("https://api.tushare.pro", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_name: isIndex ? "index_daily" : "daily", token, params: { ts_code: code, start_date: ymd(start), end_date: ymd(end) } }),
-      })
-      const j = JSON.parse(await r.text())
-      if (j.code !== 0 || !j.data || !Array.isArray(j.data.items)) return null
-      const fields = j.data.fields
-      const rows = j.data.items.map((it) => { const o = {}; fields.forEach((k, i) => { o[k] = it[i] }); return o })
-        .sort((a, b) => String(a.trade_date).localeCompare(String(b.trade_date)))
-      if (rows.length < 30) return null
+    const writeCache = (rows) => {
       try {
         mkdirSync(dir, { recursive: true })
         writeFileSync(dir + "/" + prefix + ymd(end) + ".json", JSON.stringify({ code, endYmd: ymd(end), rows }))
       } catch (e) { /* 回写失败不影响本次 */ }
-      return rows
-    } catch (e) { return null }
+    }
+    DATA_SOURCE.hasToken = !!token
+    if (token) {
+      try {
+        const r = await fetch("https://api.tushare.pro", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_name: isIndex ? "index_daily" : "daily", token, params: { ts_code: code, start_date: ymd(start), end_date: ymd(end) } }),
+        })
+        const j = JSON.parse(await r.text())
+        if (j.code === 0 && j.data && Array.isArray(j.data.items)) {
+          const fields = j.data.fields
+          const rows = j.data.items.map((it) => { const o = {}; fields.forEach((k, i) => { o[k] = it[i] }); return o })
+            .sort((a, b) => String(a.trade_date).localeCompare(String(b.trade_date)))
+          if (rows.length >= 30) { writeCache(rows); noteSource("daily", "tushare"); return rows }
+          noteSourceError("Tushare 返回行数不足（" + code + "，" + rows.length + " 行）")
+        } else {
+          noteSourceError("Tushare 取数失败：" + String(j.msg || j.code || "unknown").slice(0, 120))
+        }
+      } catch (e) {
+        noteSourceError("Tushare 请求失败：" + (e && e.message ? e.message : String(e)))
+      }
+    }
+    // Tushare 不可用（无 token / 积分不足 / 频次限制 / 网络失败）→ 腾讯免费源兜底。
+    // 腾讯返回前复权价，与 Tushare 的未复权价口径不同，所以走这条分支时不乘复权因子。
+    const tencentRows = await fetchTencentDaily(code, isIndex, 400)
+    if (Array.isArray(tencentRows) && tencentRows.length >= 30) {
+      writeCache(tencentRows)
+      noteSource("daily", "tencent")
+      return tencentRows
+    }
+    noteSource("daily", "none")
+    return null
   }
   // 复权因子（v0.46.0）：Tushare `daily` 返回的是未复权价，除权除息日价格自然下跳，
   // 直接用未复权 close 算区间收益，会把「分红送转」误算成「下跌」。
@@ -2501,7 +2558,8 @@ function apply(ctx, config) {
         if (c.noAdj === true) return null
       } catch (e) { /* 坏缓存，走在线 */ }
     }
-    if (!token) return null
+    // 腾讯源拿到的已经是前复权价，无需再乘因子；这条分支返回 null 是正确语义
+    if (!token) { noteSource("adj", "tencent"); return null }
     const p2 = (n) => String(n).padStart(2, "0")
     const ymd = (d) => "" + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate())
     const end = new Date()
@@ -4384,19 +4442,26 @@ function apply(ctx, config) {
         if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
         const url = new URL(req.url ?? "/", "http://localhost")
         const p = queryParam(url, "path") ?? ""
-        if (!/\.(svg|png)$/i.test(p) || !p.startsWith(CHARTS_DIR)) { writeJson(res, 400, { error: "denied" }); return }
+        // 白名单两侧同口径比较：请求路径可能来自 Windows（反斜杠）或前端（正斜杠），
+        // 统一 normDir 后再 startsWith，避免因分隔符差异误判成越界。
+        // 另外显式拒绝 ".." 段：startsWith 只看前缀，charts/../../x.png 这种能骗过前缀检查。
+        const wanted = normDir(p)
+        if (!/\.(svg|png)$/i.test(wanted) || /(^|\/)\.\.(\/|$)/.test(wanted) || !wanted.startsWith(normDir(CHARTS_DIR))) {
+          writeJson(res, 400, { error: "denied" })
+          return
+        }
         const fs = hostService(ctx, "fs")
         if (fs === void 0) { writeJson(res, 503, { error: "fs unavailable" }); return }
         try {
           // PNG 走 node:fs 直读（路径已通过 startsWith 白名单 + 扩展名校验）；
           // fs.resolve 返回的是 DSH fs 的句柄对象，node:fs 吃不了，只能传字符串路径。
-          if (/\.png$/i.test(p)) {
-            const buf = await fsp.readFile(p)
+          if (/\.png$/i.test(wanted)) {
+            const buf = await fsp.readFile(wanted)
             if (buf.length > 4_000_000) { writeJson(res, 413, { error: "too large" }); return }
-            writeJson(res, 200, { path: p, png: buf.toString("base64") })
+            writeJson(res, 200, { path: wanted, png: buf.toString("base64") })
             return
           }
-          const target = await fs.resolve(p)
+          const target = await fs.resolve(wanted)
           const svg = await fs.readText(target)
           if (svg.length > 160000) { writeJson(res, 413, { error: "too large" }); return }
           writeJson(res, 200, { path: p, svg })
@@ -4933,6 +4998,28 @@ function apply(ctx, config) {
       },
     },
     {
+      // 数据源现状：页面顶部据此显示「Tushare / 腾讯兜底」,并在无 token 时给一次性引导。
+      // 降级必须可见——这是本插件对「结论可追溯」的底线。
+      kind: "exact",
+      path: "/dsh-invest/api/datasource",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const token = await btReadToken()
+          const hasToken = !!token
+          writeJson(res, 200, {
+            ok: true,
+            hasToken,
+            state: Object.assign({}, DATA_SOURCE),
+            summary: sourceSummary(),
+            hint: buildOnboardingHint(hasToken),
+            baseDir: BASE_DIR,
+          })
+        } catch (e) { writeJson(res, 500, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
+      },
+    },
+    {
       // 强制重建个股知识库（改了报告或标记格式后手动触发）
       kind: "exact",
       path: "/dsh-invest/api/stock-notes/rebuild",
@@ -4978,6 +5065,22 @@ function apply(ctx, config) {
           res.setHeader("cache-control", "no-store")
           res.end(text)
         } catch (e) { res.statusCode = 404; res.end("workbench css not built") }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/dao-space.webp",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { res.statusCode = 403; res.end("forbidden"); return }
+        if (req.method !== "GET") { res.statusCode = 405; res.end("method not allowed"); return }
+        try {
+          // 悟道背景是二进制资源，只能 node:fs 直读；路径固定在本插件产物内，不接受外部参数
+          const buf = await fsp.readFile(WEB_DIST_DIR + "/dao-space.webp")
+          res.statusCode = 200
+          res.setHeader("content-type", "image/webp")
+          res.setHeader("cache-control", "no-store")
+          res.end(buf)
+        } catch (e) { res.statusCode = 404; res.end("dao background not built") }
       },
     },
     {
@@ -5785,6 +5888,10 @@ function apply(ctx, config) {
         const reports = Array.isArray(value.reports) ? value.reports : []
         if (value.error) lines.push("错误：" + String(value.error))
         lines.push("invest_run 模式=" + String(value.mode || "") + " ｜ 阶段数=" + outputs.length + (charts.length ? " ｜ 图表=" + charts.length + " 张" : "") + (reports.length ? " ｜ 报告已归档" : "") + " ｜ detail=" + detail)
+        // 数据源必须写在最前面：读者先知道这份结论建立在什么数据上，再看结论
+        const srcLine = sourceSummary()
+        if (srcLine) lines.push(srcLine)
+        if (DATA_SOURCE.hasToken === false) lines.push(buildOnboardingHint(false))
         for (const o of outputs) {
           lines.push("")
           lines.push("=== " + o.stage + " ｜ " + (o.route || "继承宿主") + (o.ok ? " ｜ 耗时 " + (o.elapsedMs / 1000).toFixed(1) + "s" : " ｜ 失败") + " ===")

@@ -28,7 +28,7 @@ import { APP_VERSION } from './version';
 import { handbookIndexForView, renderHandbookPanel } from './handbook';
 import { lastPromptedVersion, lastSeenVersion, markVersionPrompted, markVersionSeen, renderUpdateDialog, renderWhatsNew, shouldPromptUpdate, unseenReleases } from './whats-new';
 import { compareStockName } from './stock-index';
-import type { ConclusionRecord, HoldingPosition, HoldingsImportInput, Job, LiveWatchResponse, ModelSettingsSaveInput, TaskTemplate, UpdateCheckResponse, WatchAlert, WorkbenchView, WatchlistUpdateInput, LedgerColKey } from './types';
+import type { ConclusionRecord, HoldingPosition, HoldingsImportInput, Job, LiveWatchResponse, ModelSettingsSaveInput, TaskTemplate, UpdateCheckResponse, WatchAlert, WorkbenchView, WatchlistUpdateInput, LedgerColKey, DaoRole } from './types';
 
 const viewElement = document.getElementById('view')!;
 const pollingJobs = new Set<string>();
@@ -1379,7 +1379,7 @@ function editDaoEntry(id: string): void {
   render();
 }
 
-function toggleDaoTag(tag: string): void {
+function toggleDaoTag(tag: DaoRole): void {
   const tags = state.daoDraft.tags;
   state.daoDraft.tags = tags.includes(tag) ? tags.filter((item) => item !== tag) : [...tags, tag];
   render();
@@ -2604,7 +2604,7 @@ document.addEventListener('click', (event) => {
     state.daoDraft.kind = target.dataset.kind as typeof state.daoDraft.kind;
     render();
   }
-  else if (action === 'dao-tag' && target.dataset.tag) toggleDaoTag(target.dataset.tag);
+  else if (action === 'dao-tag' && target.dataset.tag) toggleDaoTag(target.dataset.tag as DaoRole);
   else if (action === 'dao-pin') { state.daoDraft.pinned = !state.daoDraft.pinned; render(); }
   else if (action === 'dao-filter-kind' && target.dataset.kind) {
     state.daoKindFilter = target.dataset.kind as typeof state.daoKindFilter;
@@ -2617,6 +2617,7 @@ document.addEventListener('click', (event) => {
   else if (action === 'dao-send') void sendDaoMessage();
   else if (action === 'dao-distill') void distillDao();
   else if (action === 'dao-clear-thread') clearDaoThread();
+  else if (action === 'dao-dock-toggle') { state.daoDockOpen = !state.daoDockOpen; render(); }
   else if (action === 'ask-suggest-reset') {
     state.askSuggestions = [...DEFAULT_ASK_SUGGESTIONS];
     persistAskSuggestionList();
@@ -2751,7 +2752,12 @@ document.addEventListener('input', (event) => {
     const counter = viewElement.querySelector<HTMLElement>('[data-dao-body-count]');
     if (counter) counter.textContent = `${target.value.length} / 4000 字；进提示词只取前 160 字摘要`;
   }
-  else if (target.dataset.field === 'dao-chat') { state.daoChatDraft = target.value; }
+  else if (target.dataset.field === 'dao-chat') {
+    state.daoChatDraft = target.value;
+    // 长条输入随内容长高：空态像一条线，多行时最多到 168px 再内部滚动
+    target.style.height = 'auto';
+    target.style.height = `${Math.min(target.scrollHeight, 168)}px`;
+  }
   else if (target.dataset.field === 'compare-question') { state.compareQuestion = target.value; }
   else if (target.dataset.field === 'compare-follow') { state.compareFollowDraft = target.value; }
   if (target.dataset.templateId && target.dataset.draft) {

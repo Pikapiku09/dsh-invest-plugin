@@ -83,6 +83,14 @@ test('图表接口：白名单仍然生效（越出 charts 目录 / 非 svg|png 
   assert.equal((await call('POST', '/api/dsh-invest/chart?path=x.svg')).status, 405)
 })
 
+test('图表接口：.. 穿越骗不过前缀检查', async () => {
+  // startsWith 只看字符串前缀：charts/../../outside.svg 是能过前缀的，必须单独拒绝
+  const evil = chartsUrl + '/../../outside.svg'
+  assert.equal((await call('GET', '/api/dsh-invest/chart?path=' + encodeURIComponent(evil))).status, 400)
+  const evilBackslash = chartsUrl + '\\..\\..\\outside.svg'
+  assert.equal((await call('GET', '/api/dsh-invest/chart?path=' + encodeURIComponent(evilBackslash))).status, 400)
+})
+
 test('stock-charts：按 6 位代码归集，svg+png 都收、按时间倒序、限 24 张', async () => {
   const now = Date.now()
   const mk = (name, ageMs) => {

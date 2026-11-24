@@ -10,6 +10,7 @@ const paths: Record<string, string> = {
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
+  send: '<path d="M20.5 3.5 3.8 9.9c-.9.35-.86 1.63.06 1.92l6.4 2.02 2.02 6.4c.29.92 1.57.96 1.92.06L20.5 3.5z"/><path d="M20.5 3.5 10.3 13.9"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   alert: '<path d="M10.3 3.7 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
