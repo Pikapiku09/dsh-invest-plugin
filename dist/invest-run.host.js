@@ -3,6 +3,7 @@
 
 const PROMPTS = {
   "DATA_BASE": "# 数据获取（使用 pwsh 工具，重要）\n- Tushare token 文件：{{BASE_DIR}}/.dsh-invest/tushare.token（用 pwsh 执行 Get-Content 读取并去除换行）\n- 取数方式（首选，最稳）：用 pwsh 执行 python \"{{BASE_DIR}}/scripts/tushare_query.py\" <api_name> k=v ...（脚本已 strip token，输出 {ok,code,msg,fields,rows}；加 --raw 看原始响应）。token 文件若带尾随换行，接口会直接返回 40101「您的token不对」——不要手写 token 拼接\n- 取数首选（一次调用拿全套，优先用这个）：用 pwsh 执行 node \"{{BASE_DIR}}/scripts/fetch_pack.js\" <ts_code>（第 2 参数为日线根数，默认 120；ts_code 形如 600519.SH，也可只写 600519）。一次返回「基本信息/价格与区间涨跌/均线/估值/主力资金（近5日、近20日、逐日）/财务/业绩/龙虎榜/融资/相对指数强度」的排版摘要，金额已折算为亿元、比例已带 %、单位口径统一，**摘要里已有的数字一律直接引用，严禁再取一遍**；完整原始数据落在 {{BASE_DIR}}/.dsh-invest/cache/pack/pack_<code>_<日期>.json，只有摘要未覆盖的字段才用 tushare_query.py 补单接口\n- 取数方式（备选）：用 pwsh 工具执行 node -e 后接双引号包裹的 JS；JS 内用单引号字符串；结构为：fetch 发送 POST 到 https://api.tushare.pro，请求体 JSON.stringify({api_name:接口名, token:令牌.trim(), params:{参数}})，然后 r.text() 后 console.log 输出\n- 接口速查：trade_cal(交易日历) / index_daily(指数，ts_code=000001.SH) / daily(日线，ts_code 形如 600519.SH，start_date/end_date 为 YYYYMMDD) / limit_list_d(涨跌停列表) / moneyflow(资金流，ts_code) / sw_daily(申万行业) / weekly(周线) / income(利润表) / fina_indicator(财务指标) / daily_basic(每日指标PE/PB) / news(新闻) / major_news(重大新闻) / express(业绩快报) / forecast(业绩预告)\n- 特色数据速查（概念/资金流/金股）：concept(概念板块列表，必带 trade_date=YYYYMMDD) / dc_index(东财概念指数行情，含领涨股与涨跌幅) / dc_member(东财概念成分，必带 trade_date，字段 con_code/con_name) / ths_index(同花顺概念指数，ts_code 形如 883300.TI) / ths_member(同花顺概念成分，ts_code=板块代码如 881174.TI) / moneyflow_dc(东财个股资金流，含主力净流入 net_amount) / moneyflow_ind_dc(东财板块资金流，content_type 区分 行业/概念/地域，概念资金流看题材主线) / moneyflow_ind_ths(同花顺板块资金流，含 net_buy_amount/net_amount) / moneyflow_ths(同花顺个股资金流) / broker_recommend(券商月度金股，month=YYYYMM，字段 month/broker/ts_code/name)\n- 日期锚定铁律：禁止用模型自身时间概念判断今天/上周/最近；先用 index_daily(ts_code=000001.SH, end_date=当年年末) 取返回记录中最大 trade_date 作为真实最新交易日；trade_cal 含未来日期，只能用于判断某日是否开市；所有行情查询 end_date 用真实最新交易日，start_date 往前推 60-120 自然日\n- 数据覆盖铁律：分析对象必须实际取到真实行情后才能给出具体价格；取数失败或接口无权限时如实标注，严禁编造数字；接口报错信息要贴出来\n- 禁止递归：你绝不可调用 invest_run、subagent、workflow 等任何子代理/流水线工具，也不能再发起子代理——取数只能自己用 pwsh 调 Tushare，分析只能自己完成，直接输出结果即可\n- 行情缓存：取数前先用 pwsh 检查缓存文件 {{BASE_DIR}}/.dsh-invest/cache/quotes/<接口>_<ts_code>_<end_date>_<start_date或na>.json 是否存在（<end_date> 填本次要查的日期、<start_date> 填本次查询区间起点，无区间参数的接口（如 daily_basic/income/fina_indicator）填 na；目录不存在视为未命中）；存在则 Get-Content 读取其内容直接使用，跳过该接口请求。每次取数成功后用 pwsh 把接口响应原文写入该路径（目录不存在先 New-Item -ItemType Directory -Force），供本流水线后续阶段与本日其他运行复用；缓存命中时在报告中标注[缓存命中]\n- 图表（强制，一条命令出图）：**严禁手写图表 JSON、严禁在命令行内联 SVG 或长脚本**（长命令会被截断是已知故障；手写上百个数值既慢又易错，单标的曾因此多耗 80–160 秒）。唯一方式：用 pwsh 执行 node \"{{BASE_DIR}}/scripts/stockchart.js\" <ts_code> both  （第 2 参数可填 price / macd / both，第 3 参数为日线根数，默认 145）。脚本一次完成取数、MA5/10/20/60、MACD(DIF/DEA/柱)、九转序列、关键价位、MACD 背离检测，直接产出 SVG，并在 stdout 返回 {ok, charts:[{type,svg}], digest:\"技术面摘要\"}。**digest 里的数字全部由脚本计算，直接引用写进报告，禁止自己重算、禁止为画图重复取数**。【数量上限】单标的调用 1 次（both = 走势图 + MACD 图两张）；多标的对比时每个标的各 1 次；输入中已有【上游图表】清单时，同类图表直接引用其完整绝对路径，禁止重复生成。【绝对路径】报告正文提及图表必须写完整绝对路径（以 E:/ 开头），禁止只写文件名\n- 实时行情兜底：若行情接口最新交易日早于今日（盘中尤其明显），用 pwsh 执行 python \"{{BASE_DIR}}/scripts/realtime_quote.py\" <代码1> <代码2> 取腾讯财经实时价；正文用 [实时·腾讯 HH:MM] 与 [日线·TuShare YYYYMMDD] 双标注；技术指标（MA/MACD/九转/周线）只能用日线收盘计算，实时价仅作盘中参考，严禁混用\n- 持仓账本：{{BASE_DIR}}/.dsh-invest/持仓.json（流水线已自动注入【当前持仓账本】摘要；需要细节用 pwsh 执行 python \"{{BASE_DIR}}/scripts/holdings.py\" list；严禁编造账本外持仓）\n- 结论结构化（强制，供工作台结论链与标的档案读取）：报告末尾必须为每个核心标的（最多 3 个）各输出一行，格式严格为：【结论结构化】{\"code\":\"600519.SH\",\"stance\":\"观察\",\"confidence\":0.72,\"target\":123.45,\"stop\":110.0,\"buy_low\":118.0,\"buy_high\":123.0,\"thesis\":\"80字内论据\",\"invalidate_if\":\"结论失效条件\",\"counter_case\":\"如果我判断错了，最可能错在哪、什么信号会证明我错\"}；stance 只能取 看多/拒绝/观察/持有/减仓/离场；当 stance 为 观察/看多 时，buy_low/buy_high 必须给出建议买入区间的下沿/上沿（结合支撑位/均线/估值推导），供标的档案做买入区间监控；其余 stance 或无把握时填 null；未知数字填 null，不得编造。【confidence 必填】0.0–1.0 的实数，代表你对这条结论的把握程度：0.5 表示和抛硬币差不多，0.8 以上表示证据充分且多个维度互相印证，0.3 以下表示数据不足只能猜。不要为了显得笃定而填高值——这个数字会被拿去和真实走势做校准比对，虚高会被记录下来。【counter_case 必填】一句话写出「如果我错了会怎么错」，必须具体到可观测的信号（价格/成交/资金/事件），不要写「可能会有风险」这类空话。该行之后可再写免责声明，但不得省略此结构\n- 反方论证（强制，仅当你的结论为 看多/持有/加仓 时）：在给出【结论结构化】之前，必须先写一段【反方论证】，用至少 3 条独立理由论证「为什么这笔不该做/现在不该买」，然后逐条反驳或部分采纳。目的不是自我否定，而是防止顺着上游观点一路论证下去；如果你无法写出有分量的反方理由，说明你可能没有真正审视过这笔交易，此时应把 confidence 降到 0.6 以下\n- 效率纪律：① 取数一律先跑 scripts/fetch_pack.js（一次拿全）；它已覆盖的接口严禁再取第二遍，只有未覆盖的字段才用 tushare_query.py 补单接口；确需自写脚本时必须在一个 node -e 内合并多个接口，严禁每个接口单独跑一次 pwsh；② 取数预算：单个标的的行情/资金/财务类请求合计不超过 3 次；③ 输出精炼：最终 text 输出控制在 2500 字以内，reasoning 里不要重复粘贴已取到的数据，直接进入分析结论",
+  "TOOL_REDLINE": "【工具红线·最高优先级，违反即事故】\n1. 严禁任何桌面自动化/窗口类工具（`mcp__wincu__*`、launch_app、type_text、keypress、screenshot、ocr 等）：它们会真的弹出窗口、抢走用户键鼠，窗口一关你的任务当场被杀。\n2. 需要跑命令时只用 `pwsh`（后台执行、直接返回输出）；严禁「先开 PowerShell 窗口再敲命令」。\n3. 不调用 invest_run / subagent / workflow（禁止递归），不碰 acp_*/compress/plugin_manager/schedule_*。\n4. `pwsh` 失败最多换写法重试一次；仍失败就在报告里标【待核实：取数失败，原因…】并继续，不得改用桌面自动化或其它变通手段。",
   "CHECKLIST": "# 开仓强制Checklist（给出买入/加仓结论前的强制闸门）\n凡涉及「是否买入/加仓/值不值得买」的决策，无论结论是买入还是拒绝，都必须**在结论之前**输出完整的【开仓强制Checklist】。任一项目「拒绝」，结论必须为「拒绝买入/拒绝加仓」并说明原因；结论为不买入时也要在该项标「拒绝」+原因——拒绝必须可见、可审计。禁止跳步：未输出完整 Checklist 的买入建议视为无效输出。\n【开仓强制Checklist 输出格式】\n1. 仓位预算：本票拟投入____元；账户总资产____元（用户未提供账户快照则标注「未提供」，并提示用户开仓前补充）；占比____%（上限20%）→ 通过/拒绝/未知\n2. 板块集中：同板块现有____% + 本票____% = ____%（上限40%；持仓未提供则标注未知）→ 通过/拒绝/未知\n3. 止损预设：止损价____（=成本×92%，或跌破10日线，先到先走）→ 必须给出\n4. 止盈预设：目标价____；移动止盈规则（如盈利回撤至+3%或跌破10日线离场）→ 必须给出\n5. 交易频率：本月该票已交易____次（上限3；未提供则标注未知）；近3笔结果____（连亏3笔=停手一个月）→ 通过/拒绝/未知\n6. 追高检查：现价距10日线乖离____%；乖离>8%视为追高，拒绝或等回踩 → 通过/拒绝\n7. 基本面核验：买入逻辑____；估值位置____；催化剂/消息面____；风险点____（122波实证：ROE/净利同比/营收同比/毛利率/PB分位均不区分盈亏，|δ|≤0.19、FDR≥0.51，基本面烂不构成回避理由）\n8. 心理门禁：用户是否透露「必须赚/报复/焦虑」信号（未透露标注未知并提示）→ 通过/拒绝/未知\n9. 五日观察哨（预登记）：建仓日____；观察到期日（第5个交易日）____；到期收盘涨幅____% → <0% 减半+离场复核｜0~+2% 持有但禁加仓、不上调目标｜≥+2% 按原计划（114波实证：前5日<0% 最终胜率27~41%，0~+2% 为73%，>+5% 为89.5%）；若该标的已有明确止损纪律，本项与系统化止损高度重叠（2年仅触发3次、边际价值近零），可只记录不强制离场 → 通过/拒绝/未知\n最终结论：买入 / 拒绝买入（原因：____）。\n铁则：账户与持仓类数据（总资产/现有持仓/板块集中度）**优先取自本地持仓账本**（输入里的【当前持仓账本】摘要或其文件 {{BASE_DIR}}/.dsh-invest/持仓.json）；账本未覆盖的字段（本月交易次数/心态/拟投入金额）只能来自用户提供，未提供则标注「未知」并提示补充，严禁编造或自行假设。",
   "KB_PSY": "# 交易心理基座（Trading in the Zone，全角色必须遵守）\n- 5个基本事实（信念基座）：①任何事都可能发生；②赚钱不必知道下一步；③赢亏在优势内随机分布、每笔独立；④优势只是较高概率不是确定；⑤市场任何时刻都是独特的\n- 核心原则：对原则死板、对期望灵活——止损/仓位/纪律100%执行，单笔结果零期待；市场信息是中性的，痛苦来自你的解读而非市场\n- 交易前三问（缺一不下结论）：优势是什么？最大亏损多少（价格+金额）？能坦然接受吗（不能则降低仓位建议或放弃）\n- 单笔独立纪律：禁止用上一笔盈亏修改下一笔执行标准；连亏2笔=强制降仓或停手（联想机制放大风险感），连盈3笔=强制检查仓位是否过大（兴奋抑制风险感）\n- 禁止表述：「我知道市场会…」「上次这形态涨所以这次也涨」——相似形态只提高概率，不决定结果\n- 归因纪律：判断错误时禁止归因市场/主力/消息；复盘只答两问——我守纪律了吗（改行为）/ 逻辑是否有负期望（改方法）\n- 情绪检查点：出现「市场和我作对/要证明自己/报复性操作」念头=未接受风险，立即停止；持仓期必须主动收集与自己结论相反的信息，发现选择性忽略利空=风险信号\n- 绩效评估：以20笔为一组的统计结果（胜率/盈亏比）评价，不以单笔对错论英雄；风险回报比低于3:1的机会明确标注性价比不足",
   "KB_SELECT": "# 选股知识库（超级强势股共性 + 博弈筛选）\n- 超级强势股六要素（出现越多越强）：①业绩拐点——最新季度EPS同比爆发(+150%以上)且逐季连升；②年化PE 6-10倍（低估起点）；③高经营杠杆（收入小增→利润大增）；④可持续盈利依据明确（订单/积压订单攀升、新签大合同、新产品、行业周期向上）；⑤小流通盘/小市值（筹码轻易拉升，流通盘/日成交额之比是关键）；⑥有激发想象力的\"超级题材\"（新技术/新产品/行业催化剂）\n- 技术面启动特征：周线长期坚实底部（9-20周+）→ 放量突破30周线（量能为底部5倍以上=机构建仓证据）→ 沿某条均线（10周线附近）震荡走高=神奇支撑线 → 45°上攻\n- 加分项：内部人士/董监高大额增持（金额相对薪酬巨大、筑底期、多人跟风，往往预示重大利好；内部人踊跃买入也是被收购前兆）、机构举牌、无券商覆盖（冷门=机会）、融券余额低、昔日强势股深调70%后缩量筑底\"重生\"\n- 猎豹出击纪律：只从少数熟悉板块/形态中选股；题材共振主线优先（概念资金流排名领先的方向）；冷门无人问津时发现优于人尽皆知后追入——题材人尽皆知即放弃\n- 排除项：增发/解禁在即、商誉高企、控股股东高质押、长期债务重、上市不满一年、流通盘过大筹码散乱",
@@ -809,6 +810,19 @@ return {
           return { error: 'subagents not mounted（start()/startActivation() 均不可用）；候选 ' + allCands.length + ' 个；探测键名: ' + keys.join(',') + '；ctx.get 类型: ' + (typeof ctx.get) }
         }
         // 统一入口：旧宿主走原生 start()；新宿主翻译为 startActivation（返回同形状 {result,...}）
+        // 2026-11-23 修复（第四版）：0.2.x 的 startActivation 在 spec 顶层读 parent
+        // （dsh-subagent: `spec.parent.id`），旧代码塞进 request.parent → spec.parent 为 undefined
+        // → 每个阶段子代理 15ms 内抛 TypeError: Cannot read properties of undefined (reading 'id')。
+        // 新契约与宿主 dsh-tool-subagent 同源：{provider,label,prompt,parent,agentOptions?,signal,delivery}
+        const activationSpecFor = (spec2, text2, delivery2) => {
+          if (!spec2 || !spec2.parent) throw new Error('子代理缺少父 Agent（parent 为空）：无法创建阶段子代理')
+          return Object.assign({
+            provider: 'spawn',
+            label: spec2.label,
+            prompt: [{ type: 'text', text: text2 }],
+            parent: spec2.parent,
+          }, spec2.agentOptions ? { agentOptions: spec2.agentOptions } : {}, spec2.cwd ? { cwd: spec2.cwd } : {}, spec2.signal !== undefined ? { signal: spec2.signal } : {}, { delivery: delivery2 })
+        }
         const startStage = async (spec) => {
           if (nativeStart !== undefined) return nativeStart.start('spawn', spec)
           const plain = Array.isArray(spec.prompt)
@@ -817,15 +831,7 @@ return {
           const text = spec.persona ? '【角色设定】\n' + spec.persona + '\n\n' + plain : plain
           // maxDepth 不显式传：继承宿主设置（默认 1 = 本级允许、孙代被拒，等效旧的“禁止递归”）。
           // 实测 maxDepth:0 表示“禁止本级”——子代深度 1 会直接 SubagentDepthError。
-          const request = { prompt: [{ type: 'text', text }], parent: spec.parent }
-          if (spec.agentOptions) request.agentOptions = spec.agentOptions
-          const call = (delivery) => activationHost.startActivation({
-            provider: 'spawn',
-            label: spec.label,
-            request,
-            signal: spec.signal,
-            delivery,
-          })
+          const call = (delivery) => activationHost.startActivation(activationSpecFor(spec, text, delivery))
           let act
           try {
             act = await call('caller')   // 程序化调用方语义：不向父会话投递完成通知
@@ -910,7 +916,13 @@ return {
             parts.push('【' + h.stage + ' 产出（请基于其继续，勿重复取数已覆盖内容）】\n' + h.text)
           }
           parts.push('请按你的角色职责完成分析并输出完整结果。')
-          const basePrompt = parts.join('\n\n')
+          // v0.75.7：工具红线前置（见 CHANGELOG）
+          const basePrompt = ['【工具红线·最高优先级，违反即事故】',
+            '1. 严禁任何桌面自动化/窗口类工具（mcp__wincu__*、launch_app、type_text、keypress、screenshot、ocr 等）：会弹窗、抢键鼠，窗口一关任务当场被杀。',
+            '2. 跑命令只用 pwsh（后台执行、直接返回输出），严禁先开 PowerShell 窗口再敲命令。',
+            '3. 不调用 invest_run / subagent / workflow，不碰 acp_*/compress/plugin_manager/schedule_*。',
+            '4. pwsh 失败最多换写法重试一次，仍失败标【待核实】继续，不得改用桌面自动化。',
+          ].join('\n') + '\n\n' + parts.join('\n\n')
           let lastErr = ''
           // 本阶段实际使用的模型路由（null = 不传 agentOptions，完整继承宿主会话）
           let route = chosenRoutes[s.code] || null

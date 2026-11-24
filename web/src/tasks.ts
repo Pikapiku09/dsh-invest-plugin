@@ -106,6 +106,7 @@ function templateCard(template: TaskTemplate, state: AppState, index: number, to
 function progressDetails(progress: JobProgress | undefined, job: Job): { label: string; percent: number | null } {
   if (job.status === 'done') return { label: '分析完成，报告已归档', percent: 100 };
   if (job.status === 'failed') return { label: job.error || '任务执行失败', percent: null };
+  if (job.status === 'cancelled') return { label: job.error || '任务已取消', percent: null };
   if (job.status === 'queued') return { label: '任务已入队，等待执行器接收', percent: 0 };
   if (typeof progress === 'string') return { label: progress, percent: null };
   if (typeof progress === 'number') return { label: `当前进度 ${Math.round(progress)}%`, percent: progress };
@@ -129,9 +130,13 @@ function jobCard(job: Job): string {
   const percent = progress.percent === null ? null : Math.max(0, Math.min(100, progress.percent));
   const outputCount = Array.isArray(job.result?.outputs) ? job.result.outputs.length : 0;
   const historyTag = job.persisted ? '<span class="job-history-tag" title="来自持久化的历史任务（跨 web 关闭保留）">历史</span>' : '';
-  return `<article class="job-card"><div class="job-summary"><span class="job-status-icon ${job.status}">${icon(job.status === 'done' ? 'check' : job.status === 'failed' ? 'alert' : 'sparkles', 18)}</span><div class="job-title"><div><strong>${escapeHtml(job.name || job.templateName || job.templateId || '投研分析任务')}</strong>${jobStatusBadge(job.status)}${historyTag}</div><p>${job.code ? `<span class="mono">${escapeHtml(job.code)}</span> · ` : ''}${escapeHtml(truncate(job.question || '按模板执行', 70))}</p></div><div class="job-time"><span>${formatDateTime(job.createdAt, true)}</span><strong>${formatDuration(job.elapsedMs)}</strong></div></div>
+  const cancellable = job.status === 'queued' || job.status === 'running';
+  const cancelAction = cancellable
+    ? `<div class="job-actions"><button class="button button-secondary job-cancel-button" data-action="cancel-job" data-id="${escapeHtml(job.id)}" title="${job.status === 'queued' ? '从队列中取回，立即取消' : '立即中断当前分析，结果不归档'}">${icon('close', 15)}取消任务</button></div>`
+    : '';
+  return `<article class="job-card"><div class="job-summary"><span class="job-status-icon ${job.status}">${icon(job.status === 'done' ? 'check' : job.status === 'failed' ? 'alert' : job.status === 'cancelled' ? 'close' : 'sparkles', 18)}</span><div class="job-title"><div><strong>${escapeHtml(job.name || job.templateName || job.templateId || '投研分析任务')}</strong>${jobStatusBadge(job.status)}${historyTag}</div><p>${job.code ? `<span class="mono">${escapeHtml(job.code)}</span> · ` : ''}${escapeHtml(truncate(job.question || '按模板执行', 70))}</p></div><div class="job-time"><span>${formatDateTime(job.createdAt, true)}</span><strong>${formatDuration(job.elapsedMs)}</strong></div></div>
     <div class="job-progress-row"><div class="job-progress-copy"><span class="${job.status === 'failed' ? 'danger-text' : ''}">${escapeHtml(progress.label)}</span><small>JOB ${escapeHtml(job.id)}${outputCount ? ` · ${outputCount} 项输出` : ''}</small></div><div class="progress-track ${percent === null && job.status === 'running' ? 'indeterminate' : ''}">${percent !== null ? `<i style="width:${percent}%"></i>` : '<i></i>'}</div></div>
-    ${job.status === 'done' || job.persisted ? `<div class="job-actions">${report ? `<button class="button button-secondary" data-action="open-job-report" data-id="${escapeHtml(job.id)}">${icon('file', 15)}查看报告</button><button class="button button-secondary" data-action="ask-report" data-path="${escapeHtml(report.path)}">${icon('chat', 15)}追问</button>` : '<span class="muted">任务完成，未返回报告路径</span>'}</div>` : ''}
+    ${cancelAction || (job.status === 'done' || job.persisted ? `<div class="job-actions">${report ? `<button class="button button-secondary" data-action="open-job-report" data-id="${escapeHtml(job.id)}">${icon('file', 15)}查看报告</button><button class="button button-secondary" data-action="ask-report" data-path="${escapeHtml(report.path)}">${icon('chat', 15)}追问</button>` : '<span class="muted">任务完成，未返回报告路径</span>'}</div>` : '')}
   </article>`;
 }
 

@@ -331,6 +331,19 @@ return {
           return { error: 'subagents not mounted（start()/startActivation() 均不可用）；候选 ' + allCands.length + ' 个；探测键名: ' + keys.join(',') + '；ctx.get 类型: ' + (typeof ctx.get) }
         }
         // 统一入口：旧宿主走原生 start()；新宿主翻译为 startActivation（返回同形状 {result,...}）
+        // 2026-11-23 修复（第四版）：0.2.x 的 startActivation 在 spec 顶层读 parent
+        // （dsh-subagent: `spec.parent.id`），旧代码塞进 request.parent → spec.parent 为 undefined
+        // → 每个阶段子代理 15ms 内抛 TypeError: Cannot read properties of undefined (reading 'id')。
+        // 新契约与宿主 dsh-tool-subagent 同源：{provider,label,prompt,parent,agentOptions?,signal,delivery}
+        const activationSpecFor = (spec2, text2, delivery2) => {
+          if (!spec2 || !spec2.parent) throw new Error('子代理缺少父 Agent（parent 为空）：无法创建阶段子代理')
+          return Object.assign({
+            provider: 'spawn',
+            label: spec2.label,
+            prompt: [{ type: 'text', text: text2 }],
+            parent: spec2.parent,
+          }, spec2.agentOptions ? { agentOptions: spec2.agentOptions } : {}, spec2.cwd ? { cwd: spec2.cwd } : {}, spec2.signal !== undefined ? { signal: spec2.signal } : {}, { delivery: delivery2 })
+        }
         const startStage = async (spec) => {
           if (nativeStart !== undefined) return nativeStart.start('spawn', spec)
           const plain = Array.isArray(spec.prompt)
@@ -339,15 +352,7 @@ return {
           const text = spec.persona ? '【角色设定】\n' + spec.persona + '\n\n' + plain : plain
           // maxDepth 不显式传：继承宿主设置（默认 1 = 本级允许、孙代被拒，等效旧的“禁止递归”）。
           // 实测 maxDepth:0 表示“禁止本级”——子代深度 1 会直接 SubagentDepthError。
-          const request = { prompt: [{ type: 'text', text }], parent: spec.parent }
-          if (spec.agentOptions) request.agentOptions = spec.agentOptions
-          const call = (delivery) => activationHost.startActivation({
-            provider: 'spawn',
-            label: spec.label,
-            request,
-            signal: spec.signal,
-            delivery,
-          })
+          const call = (delivery) => activationHost.startActivation(activationSpecFor(spec, text, delivery))
           let act
           try {
             act = await call('caller')   // 程序化调用方语义：不向父会话投递完成通知
@@ -432,7 +437,13 @@ return {
             parts.push('【' + h.stage + ' 产出（请基于其继续，勿重复取数已覆盖内容）】\n' + h.text)
           }
           parts.push('请按你的角色职责完成分析并输出完整结果。')
-          const basePrompt = parts.join('\n\n')
+          // v0.75.7：工具红线前置（见 CHANGELOG）
+          const basePrompt = ['【工具红线·最高优先级，违反即事故】',
+            '1. 严禁任何桌面自动化/窗口类工具（mcp__wincu__*、launch_app、type_text、keypress、screenshot、ocr 等）：会弹窗、抢键鼠，窗口一关任务当场被杀。',
+            '2. 跑命令只用 pwsh（后台执行、直接返回输出），严禁先开 PowerShell 窗口再敲命令。',
+            '3. 不调用 invest_run / subagent / workflow，不碰 acp_*/compress/plugin_manager/schedule_*。',
+            '4. pwsh 失败最多换写法重试一次，仍失败标【待核实】继续，不得改用桌面自动化。',
+          ].join('\n') + '\n\n' + parts.join('\n\n')
           let lastErr = ''
           // 本阶段实际使用的模型路由（null = 不传 agentOptions，完整继承宿主会话）
           let route = chosenRoutes[s.code] || null

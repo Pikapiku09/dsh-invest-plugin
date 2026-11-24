@@ -22,6 +22,17 @@ const DATA_BASE = [
   '- 效率纪律：① 取数一律先跑 scripts/fetch_pack.js（一次拿全）；它已覆盖的接口严禁再取第二遍，只有未覆盖的字段才用 tushare_query.py 补单接口；确需自写脚本时必须在一个 node -e 内合并多个接口，严禁每个接口单独跑一次 pwsh；② 取数预算：单个标的的行情/资金/财务类请求合计不超过 3 次；③ 输出精炼：最终 text 输出控制在 2500 字以内，reasoning 里不要重复粘贴已取到的数据，直接进入分析结论',
 ].join('\n')
 
+// 运行时红线：由 startStage 拼在每个阶段任务提示的最前面（不进角色 prompt 长度预算）。
+// 起因见 CHANGELOG v0.75.7：深度分析师用桌面自动化 launch_app 打开 PowerShell 敲命令，
+// 用户关掉窗口 → 进程被杀 → 任务中断。
+const TOOL_REDLINE = [
+  '【工具红线·最高优先级，违反即事故】',
+  '1. 严禁任何桌面自动化/窗口类工具（`mcp__wincu__*`、launch_app、type_text、keypress、screenshot、ocr 等）：它们会真的弹出窗口、抢走用户键鼠，窗口一关你的任务当场被杀。',
+  '2. 需要跑命令时只用 `pwsh`（后台执行、直接返回输出）；严禁「先开 PowerShell 窗口再敲命令」。',
+  '3. 不调用 invest_run / subagent / workflow（禁止递归），不碰 acp_*/compress/plugin_manager/schedule_*。',
+  '4. `pwsh` 失败最多换写法重试一次；仍失败就在报告里标【待核实：取数失败，原因…】并继续，不得改用桌面自动化或其它变通手段。',
+].join('\n')
+
 // 开仓强制Checklist：任何「买入/加仓」类结论的强制闸门（铁则不可跳过）
 // 与 docs/开仓前强制Checklist.md 同源；账户类数据只能来自用户提供，严禁编造
 const CHECKLIST = [
@@ -333,4 +344,4 @@ const P_SUMMARY = [
   '- 直接输出 Markdown 正文，不要任何前言、说明或代码块包裹。',
 ].join('\n')
 
-export { DATA_BASE, CHECKLIST, KB_PSY, KB_SELECT, KB_NEWS, KB_VERIFIED, KB_BEHAVIOR, KB_DEEP, KB_FINAL, SWING_RULES, KB_MARK, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY }
+export { DATA_BASE, TOOL_REDLINE, CHECKLIST, KB_PSY, KB_SELECT, KB_NEWS, KB_VERIFIED, KB_BEHAVIOR, KB_DEEP, KB_FINAL, SWING_RULES, KB_MARK, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY }
