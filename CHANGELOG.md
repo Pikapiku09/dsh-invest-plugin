@@ -2,6 +2,176 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.76.1（2026-11-24）
+
+**修复：重启后验收发现的两个真 bug；把预留的两个开关接上**
+
+- 0.76.0 交付后用户重启 DSH 加载新后端，验收时发现两处逻辑错，且当时 `notifyLevel` / `llmExplain`
+  只是写进了设置结构、没有消费方。本版把它们补完。
+
+### 修复
+
+- **点三档预设无效**：`POST /api/live-watch` 里「手改间隔 → 降级为自定义」的判断在选了预设时也会执行，
+  刚写进去的 `preset` 立刻被覆盖成「自定义」，于是三档按钮永远选不中、看板永远不高亮当前档。
+  改为仅在请求未显式带 `preset` 时才做降级判断。
+- **盘中快问配额可能被覆盖**：解释层调用会让 `llmCount` +1，但同一 tick 末尾的 patch 用的是 tick 开始时的旧值，
+  会把 +1 覆盖回去（表现为配额永远用不完）。改为末尾重读设置后取较大值。
+
+### 新增接线
+
+- `notifyLevel`：概览页轮询到 **规则层触发的事件**（不含 30 分钟例行播报）时，
+  按 `bad` / `warn` / `all` 门槛推系统通知，去重键含时间戳，重复轮询不会重复弹。
+- `llmExplain`：开关打开且事件达到 `llmMinLevel` 时，自动生成一句解释写入时间线
+  （kind=`explain`），仍受 `llmDailyCap` 约束；解释失败不影响规则层产出。
+
+### 测试
+
+- 新增 `test/live-watch-api.test.js`（11 项）：快照口径（实时价重算、非实盘过滤、生效止损优先级、
+  结论冲突、今日信号、观察池排序）、三档预设与自定义降级、越界拒绝、环回守卫。仓库测试 260 → 271。
+
+### 验收证据（真实行情，2026-11-24 11:26）
+
+- 规则层实跑：4 只持仓全部取到实时价（000823 19.59 −1.51%、600118 49.44 +4.19%、
+  159813 0.537 +2.68%、510500 6.203 +0.70%），市值/权重/浮动按实时价重算（市值 92,534、浮动 −35），
+  播报正文正常渲染（含「接近买区」三条与「止损口径冲突 2 项」）。
+- 闸门与去重：清掉 `last_signal_key` 后首 tick 触发两条止损并播报；第二 tick 不重复触发、
+  30 分钟内不重复播报（`ticks=2 events=2`）。
+- 页面呈现仍需人在 GUI 内肉眼验收：DSH 的 Web server 对全部路径统一鉴权（未登录一律 401），
+  插件路由无法从命令行验证，只能靠接口测试证明 handler 行为。
+
+## v0.76.0（2026-11-24）
+
+**新增：盘中盯盘（live-watch）+ 概览页改造成「现在怎么样了」**
+
+### 为什么做
+
+- 原有流水线是批处理：跑一次 → 出一份报告 → 下一个交易时段再跑。行情变化快的时候，
+  真正要回答的是「现在距我设的线还有多远、有没有已经破了、观察池有没有到价」，
+  而这部分以前只能靠人盯盘或手动点「刷新现价」。
+- 同时盘中最怕两件事：① 为了几十秒的判断去烧一整个多角色流水线（几分钟 + 大量 token）；
+  ② 高频抓价把 `watchlist.json` 反复全量重写（60 秒一次 ≈ 11.5MB/日）。
+- 另外 `observed` 现价只落 `current_price`，没有当日涨跌，看板无法一眼判断「今天是不是在动」。
+
+### 改动
+
+- **三层解耦**：规则层（抓价 + 算偏离 + 比对规则，0 token）／播报层（模板渲染事实对照，0 token）／
+  解释层（仅手动点「为什么」才调 LLM，每日上限 `llmDailyCap` 20 次）。
+- **三档预设**：极简（120 秒判定 / 不例行播报）、**标准（60 秒 / 30 分钟播报，默认）**、
+  盯盘（30 秒 / 15 分钟播报）。手改间隔即退化为「自定义」。
+- **防插针**：`stop`/`invalidate`/`target` 需连续 `confirmTicks`（默认 2）次成立，或破线幅度
+  ≥ `confirmBandPct`（默认 0.3%）直接成立；`buy`/`add`/`trim` 机会类信号不设门槛
+  （错过买点的成本高于误报）。价格回到线内即清零待确认计数，不允许「隔一小时凑够两次」。
+- **时段闸**：仅工作日 09:30–11:30 / 13:00–15:00 自动跑；手动「立即刷新」不受限制。
+- **节流与退避**：按预设间隔节流；连续 3 次抓取失败退避 5 分钟并写一条 `tick-error` 时间线。
+- **只做事实对照**：播报正文给现价、权重、生效止损、距止损、观察池是否到价，
+  **不新造买卖建议**；止损口径冲突（档案/执行 vs 最新结论，相差 >3%）在看板上标 ⚠ 交人决定。
+- **盘中快问**：概览看板每行「为什么」，只依据快照 + 最新结论 + 当日事件答 3 句，禁新造价位。
+- **落盘**：`store/live-watch.json`（设置 + 当日计数）、`store/live-log.jsonl`（时间线，保留 300 行）。
+- **watchlist 补字段**：`monitor.prev_close` / `monitor.change_pct`（腾讯行情字段 4 / 32），
+  概览看板据此显示当日涨跌。
+- **`refreshWatchPrices(opts)`**：新增 `gate(it, sig)` 信号闸门与 `lazy` 无变化不写盘；
+  整体包 `withLock("watchlist")`，与「刷新现价」按钮、观察仓日检共用同一实现。
+- **概览页**：删除行业热力面板（快照从未生成、4 只持仓里 2 只是 ETF 无行业分类，长期停在
+  「跑脚本生成快照」提示上）；盘中看板置顶；最近运行由 5 条压到 3 条。
+  热力 API 与 `refresh_heatmap_snapshot.py` 保留备用。
+
+### 影响面
+
+- 后端在 `packages/dsh-invest/lib/index.js`（新增 3 条路由：`/api/live-watch`、
+  `/api/live-watch/tick`、`/api/live-ask`；新增 15 秒调度 effect，`DSH_INVEST_LIVE_WATCH=0` 可停用）。
+- 前端 `web/src/{overview,main,api,state,types}.ts` + `style.css`。
+- **默认关闭**（`enabled: false`）：盯盘是显式开启的能力，不默认偷跑；开启后下一轮 15 秒内生效。
+- 需重启 DSH 才能加载新后端路由；前端 dist 已重建。
+
+## v0.75.7（2026-11-23）
+
+**修复：跑分析时桌面自己弹出 PowerShell 窗口，关掉就中断任务**
+
+### 现象
+
+- 用户在「个股体检」运行中（约 2 分 37 秒）发现桌面突然出现一个 `Windows PowerShell 5.1` 窗口，
+  里面已经敲好 `echo UIA_TEST_OK; node ".../scripts/fetch_pack.js" 600118`；用户以为是系统异常关掉窗口，任务随即中断。
+
+### 根因
+
+- 一键任务的阶段子代理继承了完整工具目录（97 个），其中包含 `mcp__wincu__windows_computer_use_*` 桌面自动化全家桶。
+- 深度分析师想执行 `fetch_pack.js` 时没有用后台的 `pwsh`，而是 `launch_app(powershell.exe)` → `type_text` → `keypress(enter)`，
+  把窗口弹到用户桌面上；用户关闭窗口即杀掉该进程，阶段中断、任务失败。
+- 会话取证：本次阶段会话 `tool/call` 序列为 `acp_status → wincu_health → list_windows → launch_app → type_text → keypress → ocr`；
+  同款 `launch_app` 调用在 11-20 就已出现过，只是当时没有被注意到。
+
+### 改动
+
+- `src/prompts.js` 的公共数据段 `DATA_BASE` 顶部新增「工具红线」：
+  - 严禁 `mcp__wincu__*` 及任何桌面自动化/窗口类工具（会弹窗、抢键鼠，窗口一关任务即死）；
+  - 跑命令唯一允许用 `pwsh`（后台执行、直接返回 stdout）；
+  - 无关工具一律不碰：`acp_*`、`compress`/`decompress`/`search_context`、`plugin_manager`、`schedule_*`、
+    `create_worktree`、`workflow`、`subagent`、`invest_run`（禁止递归）；
+  - 给出允许清单（pwsh / read / grep / glob / write / web_search / web_fetch / read_page / weknora_* / mem_recall）；
+  - `pwsh` 失败最多换写法重试一次，仍失败标注【待核实】继续，**不得**用桌面自动化等变通手段。
+- 该段随 4 个角色提示词与波段周检共用，改一处覆盖全部阶段。
+
+### 影响面
+
+- 只改提示词文本，不动工具挂载与流水线逻辑；重建 `dist/` 与 `packages/dsh-invest/lib/prompts.js` 后生效（需重启 DSH）。
+
+## v0.75.6（2026-11-23）
+
+**新增：最近任务「取消任务」——排队中直接摘出队列，运行中立即中断**
+
+### 改动
+
+- 后端新增 `POST /dsh-invest/api/job/cancel`（body `{ id }`）与 `cancelJob()`：
+  - 排队中：从 `taskQueue` 摘除，状态置 `cancelled`，立刻腾出并发位；
+  - 运行中：打 `cancelRequested` 标记并 `abort()` 当前 AbortController，当前角色阶段立即终止；
+  - 已结束任务再取消 → 409，未知任务 → 404。
+- `executeJob` 增加取消闸门：取消发生在「创建执行 Agent」期间时直接结束、不进入 LLM 流水线；
+  工具返回后也不再把状态覆盖成 `done`；`finally` 里的重建索引与知识库整理对已取消任务跳过。
+- 前端：`JobStatus` 新增 `cancelled`（「已取消」灰徽标）；最近任务卡片在「排队中 / 运行中」时显示「取消任务」按钮，
+  二次确认文案按状态区分；1.2 秒轮询遇到 `cancelled` 即收尾并提示。
+- 测试：新增 `test/job-cancel.test.js`（排队取消 / 运行中中断 / 重复取消 409 / 未知任务 404）。
+
+### 行为说明
+
+- 取消不归档本次结果（不写报告、不进结论库），已产生的中间内容不保留；
+- 取消后专用执行 Agent 仍会正常 `dispose()`，不会泄漏。
+
+## v0.75.5（2026-11-23）
+
+**修复：一键任务「任务进度中断：TypeError: Cannot read properties of undefined (reading 'id')」——子代理激活 spec 形状不合 0.2.x 契约**
+
+### 现象
+
+- 标的档案点「个股体检」，几秒内中断，toast 报上面那句 `TypeError`；
+- `runs.jsonl` 里三个角色阶段（市场消息 / 深度分析 / 总判断）在 15ms 内全部同句失败、`ms: 0`，
+  模型和行情接口根本没走到——说明炸在「创建子代理」这一步，不是分析逻辑。
+
+### 根因
+
+DSH 0.2.x 的 `subagents.startActivation(spec)` 在 **spec 顶层**取父 Agent：
+
+`dsh-subagent/lib/index.js:3024` → `this.ctx.get("agents")?.get(spec.parent.id) !== spec.parent`
+
+插件自 2026-10-29「第三版」起把 parent 塞进 `spec.request.parent`（0.1.x `start()` 时代的旧形状），
+于是 `spec.parent === undefined`，读 `spec.parent.id` 直接抛 TypeError。
+与 v0.75.4 的 `agents.roots()` 同源：宿主 0.2.x 换代留下的第二个**方法级**契约洞
+（服务名对得上 ≠ 方法签名没变），只测「接口存在」测不出来。
+
+### 改动
+
+- 新增模块级 `activationSpecFor(spec, text, delivery)`，按 0.2.x 契约产出
+  `{ provider, label, prompt:[{type:"text",text}], parent, agentOptions?, cwd?, signal?, delivery }`，**parent 在顶层**；
+  缺 parent 时抛中文可读错误（「子代理缺少父 Agent（parent 为空）」），不再让宿主抛 TypeError；
+- `startStage`（一键任务阶段）与 `runPromptSubagent`（辅助子代理）统一走它，保留 `caller → parent` 的 delivery 回退；
+- `src/host.js`（dist 生成源，code.host 形态）同步同一处改动，`node tools/build.js` 产物与源码一致；
+- 新增 `test/subagent-activation-contract.test.js`：假宿主**只有** `startActivation` 且照抄 `spec.parent.id` 语义，
+  含「旧形状必须复现那句 TypeError」的回归锚点，以及一条真跑 `tool.execute({mode:'个股'})` 的端到端用例。
+
+### 影响面
+
+所有一键任务（个股体检、海选全流程、早盘异动、波段周检）的阶段子代理此前都是秒失败；
+本次修复后需**重启 DSH 或重新加载插件**才生效（后端插件不热重载）。
+
 ## v0.75.4（2026-11-23）
 
 **修复：账本/标的档案/审计全线写不进去 —— 病根是 `agents.roots()` 在 DSH 0.2.x 已不存在**

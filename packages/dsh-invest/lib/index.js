@@ -3,7 +3,7 @@
 // 宿主私有包（schemastery / dsh-tools）走可选导入：见 host-deps.js（干净 clone / 测试环境缺包时自动降级）
 import { z, defineTool } from "./host-deps.js"
 import { promises as fsp } from "node:fs"
-import { DATA_BASE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY } from "./prompts.js"
+import { DATA_BASE, TOOL_REDLINE, P_SELECT, P_NEWS, P_DEEP, P_FINAL, P_SWING, P_SUMMARY } from "./prompts.js"
 import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServePath, extractInvestCodes, parseConclusionBlocks, parseEastmoneyCsv, z2, localYmd, cmpVersion as cmpVersionPure } from "./pure.js"
 import { DEFAULT_PRESET, PRESETS, ROLE_CODES, mergeRoutes, formatRoute, formatRouteChain, parseRoute, parseRouteList, parseRoutesJson } from "./routes.js"
 import { buildStockNotes, normalizeCode, stockFileName } from "./stock-notes.js"
@@ -112,6 +112,36 @@ function liveAgents(ctx) {
     } catch (e) { /* 试下一个 */ }
   }
   return []
+}
+
+/**
+ * 构造 DSH 0.2.x `subagents.startActivation(spec)` 的 spec（2026-11-23）。
+ *
+ * 血泪教训：0.2.x 的 `startActivation` 在 **spec 顶层** 读 `parent`——
+ *   dsh-subagent/lib/index.js:3024
+ *   `if (this.ctx.get("agents")?.get(spec.parent.id) !== spec.parent) throw ...`
+ * 旧代码把 parent 塞进 `spec.request.parent`，于是 `spec.parent === undefined`，
+ * 每个阶段子代理都在 15ms 内抛 `TypeError: Cannot read properties of undefined (reading 'id')`
+ * ——个股体检一键任务「任务进度中断」就是这么来的（3 个阶段同时失败、耗时 15ms）。
+ *
+ * 新契约与宿主 `@deepseek-ai/dsh-tool-subagent` 同源：
+ *   `{ provider, label, prompt, parent, agentOptions?, cwd?, maxDepth?, signal, delivery }`
+ * 注意 person/toolFilter 属于 0.1.x 老字段：角色设定已折进 prompt 文本，toolFilter 不再下发。
+ */
+function activationSpecFor(spec, text, delivery) {
+  if (!spec || !spec.parent) {
+    throw new Error("子代理缺少父 Agent（parent 为空）：无法创建阶段子代理；请确认任务 Agent 已创建成功")
+  }
+  return {
+    provider: "spawn",
+    label: spec.label,
+    prompt: [{ type: "text", text }],
+    parent: spec.parent,
+    ...(spec.agentOptions ? { agentOptions: spec.agentOptions } : {}),
+    ...(spec.cwd ? { cwd: spec.cwd } : {}),
+    ...(spec.signal !== void 0 ? { signal: spec.signal } : {}),
+    delivery,
+  }
 }
 
 function apply(ctx, config) {
@@ -245,6 +275,9 @@ function apply(ctx, config) {
   const WATCHLIST_ALERTS = BASE_DIR + "/.dsh-invest/store/watchlist_alerts.jsonl"
   // 观察仓日检状态：开关、定时时刻、开机/收盘两次跑批的日期标记（各自每天只跑一次）
   const WATCH_DAILY_FILE = BASE_DIR + "/.dsh-invest/store/watch-daily.json"
+  // 盘中盯盘（live-watch）：开关/三档预设/播报节奏/当日计数；盘中时间线单独一份日志
+  const LIVE_WATCH_FILE = BASE_DIR + "/.dsh-invest/store/live-watch.json"
+  const LIVE_LOG_FILE = BASE_DIR + "/.dsh-invest/store/live-log.jsonl"
   // 证券名称索引（code → 名称）：结论流水不带 name，观察档案建档时用它补全
   const NAMES_FILE = BASE_DIR + "/.dsh-invest/store/names.json"
   // 个股分析知识库：报告按「个股」切段归集（清单 + 每只股票一份 Markdown）
@@ -1189,7 +1222,14 @@ function apply(ctx, config) {
       const fld = body.split("~")
       if (fld.length < 4) continue
       const price = Number(fld[3])
-      quotes.push({ code: fld[2], price: Number.isFinite(price) ? price : null })
+      // 盘中看板要显示「今日涨跌」：腾讯行情 fld[4]=昨收、fld[32]=涨跌幅(%)，一并带出，
+      // 免得前端为了算一个百分比再发一次请求。
+      quotes.push({
+        code: fld[2],
+        price: Number.isFinite(price) ? price : null,
+        prev_close: wNum(fld[4]),
+        change_pct: wNum(fld[32]),
+      })
     }
     return quotes
   }
@@ -1228,36 +1268,61 @@ function apply(ctx, config) {
     throw new Error(run.reason || "实时行情获取失败")
   }
   // 批量刷新现价 + 比对信号（观察仓日检与「刷新现价」按钮共用，避免两套逻辑漂移）
-  // 返回 { doc, refreshed, fired, fetchedAt }；无观察/持有标的时 refreshed=0，不抛错
-  const refreshWatchPrices = async () => withLock("watchlist", async () => {
+  // 返回 { doc, refreshed, fired, fetchedAt, changed }；无观察/持有标的时 refreshed=0，不抛错
+  //
+  // opts.gate(it, sig) → boolean：信号闸门（盘中盯盘用来做「连续 2 次成立 / 破线 ≥0.3%」确认）。
+  //   返回 false 时只是不落提醒，last_signal_key 保持不动，下一个 tick 还能再次触发。
+  // opts.lazy：无变化（现价与信号键都没变）时不重写 watchlist.json。
+  //   盘中 60s 一次的全量重写 ≈ 11.5MB/日，横盘时这些写盘全是噪声。
+  const refreshWatchPrices = async (opts) => withLock("watchlist", async () => {
+    const options = opts || {}
+    const gate = typeof options.gate === "function" ? options.gate : null
     const doc = await readWatchlist()
     // 需要现价的标的：观察 + 持有（已清仓/已移除跳过）
     const active = doc.items.filter((it) => it && (it.state === "观察" || it.state === "持有"))
-    if (!active.length) return { doc, refreshed: 0, fired: [], fetchedAt: null }
+    if (!active.length) return { doc, refreshed: 0, fired: [], fetchedAt: null, changed: false }
+    const before = active.map((it) => String((it.monitor && it.monitor.current_price) ?? "") + ":" + String((it.monitor && it.monitor.last_signal_key) || ""))
     const codes = active.map((it) => it.code)
     const result = await fetchQuotePrices(codes)
     const byDigits = {}
     for (const q of result.quotes) {
       const digits = String(q && q.code != null ? q.code : "").replace(/\D/g, "").slice(0, 6)
       const price = (q == null || q.price === null || q.price === void 0 || q.price === "") ? null : Number(q.price)
-      if (digits.length === 6 && price !== null && Number.isFinite(price)) byDigits[digits] = price
+      if (digits.length === 6 && price !== null && Number.isFinite(price)) {
+        byDigits[digits] = {
+          price,
+          prev_close: (q && q.prev_close !== void 0) ? wNum(q.prev_close) : null,
+          change_pct: (q && q.change_pct !== void 0) ? wNum(q.change_pct) : null,
+        }
+      }
     }
     const fired = []
     for (const it of active) {
       const digits = String(it.code).replace(/\D/g, "").slice(0, 6)
-      const p = byDigits[digits]
+      const row = byDigits[digits]
       const m = it.monitor || (it.monitor = {})
-      if (p !== undefined) { m.current_price = p } else { m.current_price = null }
+      if (row) {
+        m.current_price = row.price
+        m.prev_close = row.prev_close
+        m.change_pct = row.change_pct
+      } else {
+        m.current_price = null
+        m.prev_close = null
+        m.change_pct = null
+      }
       m.refreshed_at = result.fetchedAt || new Date().toISOString()
       deriveWatch(it)
       const sig = evalWatchSignal(it)
       if (sig) {
+        if (gate && !gate(it, sig)) continue
         const rec = await appendAlert(doc, it, sig)
         if (rec) fired.push(rec)
       }
     }
-    await writeWatchlist(doc)
-    return { doc, refreshed: active.length, fired, fetchedAt: result.fetchedAt || new Date().toISOString() }
+    const after = active.map((it) => String((it.monitor && it.monitor.current_price) ?? "") + ":" + String((it.monitor && it.monitor.last_signal_key) || ""))
+    const changed = before.join("|") !== after.join("|")
+    if (changed || !options.lazy) await writeWatchlist(doc)
+    return { doc, refreshed: active.length, fired, fetchedAt: result.fetchedAt || new Date().toISOString(), changed }
   })
   const runVisionSubagent = async (prompt) => runPromptSubagent(prompt, { label: "持仓截图识别", timeoutMs: 120000 })
   // 通用子代理执行（单个阶段式提问）：限流 + 超时 + 禁止递归
@@ -1296,7 +1361,17 @@ function apply(ctx, config) {
     let run
     if (native) run = await native.start("spawn", spec)
     else if (activation) {
-      const act = await activation.startActivation({ provider: "spawn", label, request: spec, signal, delivery: "caller" })
+      // 0.2.x：startActivation 读 spec 顶层的 parent，不能塞进 request（见 activationSpecFor 注释）
+      const promptText = typeof prompt === "string"
+        ? prompt
+        : (Array.isArray(prompt) ? prompt.map((b) => (b && b.text) || "").join("\n") : String(prompt || ""))
+      let act
+      try {
+        act = await activation.startActivation(activationSpecFor(spec, promptText, "caller"))
+      } catch (e) {
+        if (/delivery|caller|UNSUPPORTED/i.test(String(e))) act = await activation.startActivation(activationSpecFor(spec, promptText, "parent"))
+        else throw e
+      }
       run = { result: act.result }
     } else throw new Error("子代理服务不可用，无法执行「" + label + "」")
     // 超时守卫：无论成功失败都要清掉定时器，否则会拖住进程/事件循环
@@ -2879,15 +2954,28 @@ function apply(ctx, config) {
       if (!parent) throw new Error("当前没有可用的执行 Agent；请先打开一个 DSH 会话再启动网页任务")
       const controller = new AbortController()
       job.abort = () => controller.abort()
+      // 取消闸门：任务在 prepare/create 阶段就被取消时，直接结束，不进入 LLM 流水线
+      if (job.cancelRequested) {
+        controller.abort()
+        job.status = "cancelled"
+        job.error = job.error || "已取消：任务在执行前被用户中断"
+        return
+      }
       const preset = await resolveTemplatePreset(job.templateId, job.preset)
       const result = await tool.execute({ mode: job.mode, question: job.question, roles: job.roles, preset, detail: "full", ...(Array.isArray(job.sequence) && job.sequence.length ? { sequence: job.sequence } : {}) }, { callId: job.id, agent: parent, signal: controller.signal })
-      job.result = result
-      const outs = Array.isArray(result.outputs) ? result.outputs : []
-      job.status = result.error || (outs.length && outs.every((o) => !o.ok)) ? "failed" : "done"
-      job.error = result.error || (outs.find((o) => !o.ok) || {}).error || ""
+      if (job.cancelRequested) {
+        // 用户已中断：结果不归档成 done，保留「已取消」状态
+        job.status = "cancelled"
+        job.error = job.error || "已取消：用户中断，本次分析结果不归档"
+      } else {
+        job.result = result
+        const outs = Array.isArray(result.outputs) ? result.outputs : []
+        job.status = result.error || (outs.length && outs.every((o) => !o.ok)) ? "failed" : "done"
+        job.error = result.error || (outs.find((o) => !o.ok) || {}).error || ""
+      }
     } catch (e) {
-      job.status = "failed"
-      job.error = String(e).slice(0, 600)
+      job.status = job.cancelRequested ? "cancelled" : "failed"
+      job.error = job.cancelRequested ? (job.error || "已取消：用户中断") : String(e).slice(0, 600)
     } finally {
       job.elapsedMs = Date.now() - job.startedAt
       job.abort = null
@@ -2897,13 +2985,16 @@ function apply(ctx, config) {
       if (taskHandle && typeof taskHandle.dispose === "function") {
         try { await taskHandle.dispose() } catch (e) { /* ignore */ }
       }
-      try { job.reindexStats = await runReindex() } catch (e) { job.reindexError = String(e).slice(0, 200) }
-      // 报告落盘后刷新个股知识库（增量），并把有新材料的股票排进「二次整理」队列
-      if (process.env.DSH_INVEST_SKIP_STOCK_NOTES !== "1") {
-        try {
-          const notes = await ensureStockNotes(true)
-          await requestCurationForTouched(notes)
-        } catch (e) { /* ignore */ }
+      // 取消的任务没有新报告，跳过重建索引与知识库整理，尽快回到空闲
+      if (job.status !== "cancelled") {
+        try { job.reindexStats = await runReindex() } catch (e) { job.reindexError = String(e).slice(0, 200) }
+        // 报告落盘后刷新个股知识库（增量），并把有新材料的股票排进「二次整理」队列
+        if (process.env.DSH_INVEST_SKIP_STOCK_NOTES !== "1") {
+          try {
+            const notes = await ensureStockNotes(true)
+            await requestCurationForTouched(notes)
+          } catch (e) { /* ignore */ }
+        }
       }
     }
   }
@@ -2937,6 +3028,33 @@ function apply(ctx, config) {
     taskQueue.push(job)
     void pumpJobs()
     return job
+  }
+
+  // 取消任务：排队中的直接摘出队列；运行中的立刻 abort（当前阶段终止，结果不归档）
+  const cancelJob = (id) => {
+    const job = jobStore[id]
+    if (!job) return { ok: false, code: 404, error: "任务不存在（可能已被清理）" }
+    if (job.status === "cancelled") return { ok: false, code: 409, error: "任务已经是取消状态" }
+    if (job.status === "queued") {
+      const idx = taskQueue.indexOf(job)
+      if (idx >= 0) taskQueue.splice(idx, 1)
+      job.cancelRequested = true
+      job.status = "cancelled"
+      job.elapsedMs = 0
+      job.error = "已取消：排队中，未开始执行"
+      void rememberRecentJob(job).catch(() => { /* ignore */ })
+      return { ok: true, code: 200, job }
+    }
+    if (job.status === "running") {
+      job.cancelRequested = true
+      job.status = "cancelled"
+      job.error = "已取消：用户手动中断"
+      if (typeof job.abort === "function") {
+        try { job.abort() } catch (e) { /* ignore */ }
+      }
+      return { ok: true, code: 200, job }
+    }
+    return { ok: false, code: 409, error: "任务已结束（" + job.status + "），无法取消" }
   }
 
   // ============ 观察仓日检（watch-daily）：规则层天天跑，LLM 层只跑触发者 ============
@@ -3016,7 +3134,402 @@ function apply(ctx, config) {
     }
   }
 
-  // ============ 基本面评级（v0.58.0）============
+  // ============ 盘中盯盘 + 定时播报（live-watch）：规则层高频跑，LLM 只做解释 ============
+  // 与 watch-daily 的分工：日检管「收盘后要不要重跑分析」，盘中盯盘管「现在偏离计划多远、有没有破线」。
+  // 盘中只做两件事：把现价写回档案 + 把「现价 vs 计划」的事实对照播报出来。
+  // 不给新买卖建议、不用盘中价算技术指标（MA/量能一律用日线收盘）。
+  //
+  // 三档预设是「节奏」的唯一事实来源：改了预设就同步写死 intervalSec/broadcastEveryMin，
+  // 手改间隔则把 preset 记成「自定义」，避免出现「显示标准、实际跑 30 秒」。
+  const LIVE_PRESETS = {
+    极简: { intervalSec: 120, broadcastEveryMin: 0 },
+    标准: { intervalSec: 60, broadcastEveryMin: 30 },
+    盯盘: { intervalSec: 30, broadcastEveryMin: 15 },
+  }
+  const LIVE_DEFAULTS = {
+    version: 1,
+    enabled: false,             // 默认关闭：盯盘是用户显式开启的能力，不能默认偷跑
+    preset: "标准",             // 极简 / 标准 / 盯盘 / 自定义
+    intervalSec: 60,
+    broadcastEveryMin: 30,      // 0 = 不例行播报，只在事件发生时播
+    confirmTicks: 2,            // 防插针：连续 N 次成立才落提醒（stop/invalidate/target）
+    confirmBandPct: 0.3,        // 或破线幅度 ≥ 0.3% 直接成立
+    llmExplain: false,          // 解释层默认关闭
+    llmMinLevel: "bad",         // 只有 bad 级事件才自动调 LLM
+    llmDailyCap: 20,            // 盘中快问每日上限（防烧 token）
+    notifyLevel: "bad",         // 系统通知门槛：bad / warn / all（复用既有提醒通道）
+    sessionOnly: true,          // 只在交易时段自动跑
+    // —— 运行时状态 ——
+    ymd: "", tickCount: 0, eventCount: 0, llmCount: 0,
+    lastTickAt: "", lastTickStatus: "", lastError: "",
+    lastBroadcastAt: "", lastBroadcastNote: "", backoffUntil: "",
+  }
+  const readLiveWatch = async () => {
+    const raw = await readJsonFile(LIVE_WATCH_FILE, {})
+    const st = Object.assign({}, LIVE_DEFAULTS, (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {})
+    const preset = LIVE_PRESETS[st.preset]
+    if (preset) { st.intervalSec = preset.intervalSec; st.broadcastEveryMin = preset.broadcastEveryMin }
+    return st
+  }
+  const patchLiveWatch = async (patch) => {
+    const next = Object.assign({}, await readLiveWatch(), patch, { updated_at: new Date().toISOString() })
+    await writeJsonFile(LIVE_WATCH_FILE, next)
+    return next
+  }
+  // 交易时段闸：A 股连续竞价 09:30–11:30 / 13:00–15:00，工作日。节假日不特判，靠「价格不动」自然降级。
+  const liveSession = (d) => {
+    const t = d || new Date()
+    const day = t.getDay()
+    const weekday = day >= 1 && day <= 5
+    const m = t.getHours() * 60 + t.getMinutes()
+    const am = m >= 570 && m <= 690
+    const pm = m >= 780 && m <= 900
+    const inSession = weekday && (am || pm)
+    let label = "非交易日"
+    if (weekday) {
+      if (inSession) label = "盘中"
+      else if (m >= 555 && m < 570) label = "集合竞价"
+      else if (m > 690 && m < 780) label = "午休"
+      else if (m >= 900) label = "已收盘"
+      else label = "未开盘"
+    }
+    return { inSession, label, hm: localHm(t), weekday, minute: m }
+  }
+  // 盘中时间线：只留最近 300 行，追加时顺手压缩（读-拼-写与 appendJsonlLine 同源策略）
+  const LIVE_LOG_MAX_LINES = 300
+  const readLiveLog = async (limit) => {
+    const fs = hostService(ctx, "fs")
+    if (fs === void 0) return []
+    let text = ""
+    try { text = await fs.readText(await fs.resolve(LIVE_LOG_FILE)) } catch (e) { return [] }
+    const lines = String(text || "").split(/\r?\n/).filter((l) => l.trim())
+    const out = []
+    for (const line of lines.slice(-Math.max(1, Number(limit) || 40))) {
+      try { out.push(JSON.parse(line)) } catch (e) { /* 跳过坏行 */ }
+    }
+    return out.reverse() // 新的在前，前端直接渲染
+  }
+  const appendLiveLog = async (rec) => {
+    try {
+      const fs = hostService(ctx, "fs")
+      if (fs === void 0) return null
+      const target = await fs.resolve(LIVE_LOG_FILE)
+      let old = ""
+      try { old = await fs.readText(target) } catch (e) { /* 首次 */ }
+      const lines = String(old || "").split(/\r?\n/).filter((l) => l.trim())
+      const kept = lines.length >= LIVE_LOG_MAX_LINES ? lines.slice(-(LIVE_LOG_MAX_LINES - 1)) : lines
+      await writeTextWithPolicyRetry(target, (kept.length ? kept.join("\n") + "\n" : "") + JSON.stringify(rec) + "\n")
+      return rec
+    } catch (e) { return null }
+  }
+  // 该标的最近一条结构化结论（只看 code 命中的，取 ts 最大）
+  const liveLatestConclusions = async (codes) => {
+    const want = new Set((codes || []).map((c) => String(c || "").toUpperCase()).filter(Boolean))
+    const out = {}
+    for (const b of await readConclusionRecords()) {
+      const code = String(b.code || "").toUpperCase()
+      if (want.size && !want.has(code)) continue
+      const prev = out[code]
+      if (!prev || String(b.ts || "") > String(prev.ts || "")) out[code] = b
+    }
+    return out
+  }
+  const liveNum = (v) => {
+    if (v === null || v === void 0 || v === "") return null
+    const n = typeof v === "number" ? v : Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  const liveFmt = (v, digits) => {
+    const n = liveNum(v)
+    if (n === null) return "—"
+    const d = digits === void 0 ? 0 : digits
+    const s = Math.abs(n).toLocaleString("zh-CN", { minimumFractionDigits: d, maximumFractionDigits: d })
+    return (n < 0 ? "-" : "") + s
+  }
+  const liveRound = (v, d) => {
+    const n = liveNum(v)
+    if (n === null) return null
+    const p = Math.pow(10, d === void 0 ? 2 : d)
+    return Math.round(n * p) / p
+  }
+  // 今日已触发信号（从 last_signal_key 还原，key 形如 code|kind|ymd）
+  const liveTodaySignal = (it) => {
+    const m = (it && it.monitor) || {}
+    const parts = String(m.last_signal_key || "").split("|")
+    if (parts.length < 3 || parts[2] !== localYmd()) return null
+    return { kind: parts[1], at: m.last_signal_at || null }
+  }
+  // 盘中快照：持仓偏离 + 观察池到价 + 账户口径（全部用实时价重算，不信账本里的旧 current_price）
+  const buildLiveSnapshot = async (doc, opts) => {
+    const options = opts || {}
+    const wl = doc || await readWatchlist()
+    const items = Array.isArray(wl.items) ? wl.items : []
+    const ledger = await readHoldingsDoc()
+    const positions = (Array.isArray(ledger.positions) ? ledger.positions : []).filter((p) => {
+      if (!p || !String(p.code || "").trim()) return false
+      if (p.pool && String(p.pool) !== "实盘") return false
+      const sh = liveNum(p.shares)
+      return sh === null ? false : sh > 0
+    })
+    const byCode = new Map()
+    for (const it of items) byCode.set(String(it.code || "").toUpperCase(), it)
+    const concl = await liveLatestConclusions(positions.map((p) => p.code))
+    const holdings = []
+    const conflicts = []
+    let marketValue = 0
+    let floatPnl = 0
+    let missing = 0
+    for (const p of positions) {
+      const code = String(p.code || "").toUpperCase()
+      const it = byCode.get(code)
+      const monitor = (it && it.monitor) || {}
+      const price = liveNum(monitor.current_price)
+      const shares = liveNum(p.shares) || 0
+      const cost = liveNum(p.cost)
+      const mv = price === null ? (liveNum(p.market_value) || 0) : price * shares
+      marketValue += mv
+      if (price === null) missing += 1
+      const pnl = (price !== null && cost !== null) ? (price - cost) * shares : null
+      if (pnl !== null) floatPnl += pnl
+      const pos = (it && it.position) || {}
+      const w = (it && it.watch) || {}
+      const posStop = liveNum(pos.stop)
+      const watchStop = liveNum(w.stop)
+      const effStop = posStop !== null ? posStop : watchStop
+      const effStopSrc = posStop !== null ? "档案" : (watchStop !== null ? "失效价" : "—")
+      const c = concl[code]
+      const conclStop = liveNum(c && c.stop)
+      const stopConflict = Boolean(effStop && conclStop && Math.abs(conclStop - effStop) / effStop > 0.03)
+      if (stopConflict) conflicts.push(code + " " + (p.name || "") + " 档案止损 " + effStop + " 与最新结论 " + conclStop + " 相差 " + Math.abs(Math.round(((conclStop - effStop) / effStop) * 100)) + "%")
+      const dist = (price !== null && effStop) ? liveRound(((price - effStop) / effStop) * 100, 2) : null
+      holdings.push({
+        code, name: p.name || (it && it.name) || code, state: "持有",
+        price, prev_close: liveNum(monitor.prev_close), change_pct: liveNum(monitor.change_pct),
+        cost, shares, pnl: liveRound(pnl, 2), pnl_pct: (price !== null && cost) ? liveRound(((price - cost) / cost) * 100, 2) : null,
+        market_value: liveRound(mv, 2), weight_pct: null,
+        eff_stop: effStop, eff_stop_src: effStopSrc,
+        dist_stop_pct: dist,
+        stop_state: effStop === null ? "未设止损" : (price !== null && price <= effStop ? "已破 " + liveFmt(Math.abs(dist), 2) + "%" : "缓冲 " + liveFmt(dist, 2) + "%"),
+        concl_stop: conclStop, concl_ts: (c && c.ts) || null, concl_stance: (c && c.stance) || null,
+        stop_conflict: stopConflict,
+        signal: liveTodaySignal(it),
+      })
+    }
+    const cash = liveNum(ledger.account && ledger.account.available_cash) ?? liveNum(ledger.account && ledger.account.cash) ?? 0
+    const totalAsset = marketValue + cash
+    for (const h of holdings) h.weight_pct = totalAsset > 0 ? liveRound((h.market_value / totalAsset) * 100, 2) : null
+    const watch = []
+    for (const it of items) {
+      if (!it || it.state !== "观察") continue
+      const m = it.monitor || {}, w = it.watch || {}
+      const price = liveNum(m.current_price)
+      const lo = liveNum(w.buy_low), hi = liveNum(w.buy_high)
+      watch.push({
+        code: it.code, name: it.name || it.code, state: "观察",
+        price, prev_close: liveNum(m.prev_close), change_pct: liveNum(m.change_pct),
+        buy_low: lo, buy_high: hi, ideal_buy: liveNum(w.ideal_buy), buy_qty: liveNum(w.buy_qty),
+        dist_buy_pct: liveNum(m.dist_buy_pct),
+        in_buy_zone: Boolean(lo !== null && hi !== null && price !== null && price >= lo && price <= hi),
+        signal: liveTodaySignal(it),
+      })
+    }
+    watch.sort((a, b) => Math.abs(a.dist_buy_pct ?? 999) - Math.abs(b.dist_buy_pct ?? 999))
+    return {
+      asof: new Date().toISOString(),
+      session: liveSession(),
+      account: {
+        cash: liveRound(cash, 2), market_value: liveRound(marketValue, 2), total_asset: liveRound(totalAsset, 2),
+        position_pct: totalAsset > 0 ? liveRound((marketValue / totalAsset) * 100, 2) : null,
+        float_pnl: liveRound(floatPnl, 2),
+        float_pnl_pct: marketValue > 0 ? liveRound((floatPnl / marketValue) * 100, 2) : null,
+      },
+      holdings, watch, conflicts, events: Array.isArray(options.events) ? options.events : [],
+      missing_prices: missing,
+    }
+  }
+  // 播报正文：只做事实对照，不写「建议买/卖」——判断权留给用户
+  const renderLiveBroadcastText = (snap, explainText) => {
+    const a = snap.account
+    const lines = []
+    lines.push("【盘中播报 " + snap.session.hm + "】持仓 " + snap.holdings.length + " 只 · 市值 " + liveFmt(a.market_value) + " · 现金 " + liveFmt(a.cash) + " · 仓位 " + liveFmt(a.position_pct, 1) + "% · 浮动 " + (a.float_pnl !== null && a.float_pnl > 0 ? "+" : "") + liveFmt(a.float_pnl))
+    for (const h of snap.holdings) {
+      const chg = h.change_pct === null ? "" : " " + (h.change_pct > 0 ? "+" : "") + liveFmt(h.change_pct, 2) + "%"
+      lines.push(h.code.replace(/\..*$/, "") + " " + h.name + " " + liveFmt(h.price, 3) + chg + " · 权重 " + liveFmt(h.weight_pct, 1) + "% · " + (h.eff_stop === null ? "未设止损" : "止损 " + liveFmt(h.eff_stop, 3) + "（" + h.stop_state + "）"))
+    }
+    const inZone = snap.watch.filter((x) => x.in_buy_zone)
+    if (inZone.length) lines.push("观察池进买区 " + inZone.length + " 只：" + inZone.map((x) => x.name + " " + liveFmt(x.price, 3)).join("、"))
+    const near = snap.watch.filter((x) => !x.in_buy_zone && x.dist_buy_pct !== null && x.dist_buy_pct > -3).slice(0, 3)
+    if (near.length) lines.push("接近买区：" + near.map((x) => x.name + " 距 " + liveFmt(x.dist_buy_pct, 2) + "%").join("、"))
+    if (snap.events.length) lines.push("本次事件 " + snap.events.length + " 条：" + snap.events.slice(0, 3).map((e) => String(e.message || "")).join(" / "))
+    if (snap.conflicts.length) lines.push("止损口径冲突 " + snap.conflicts.length + " 项（看板已标⚠）")
+    if (explainText) lines.push("解释：" + String(explainText).replace(/\s+/g, " ").slice(0, 160))
+    return lines.join("\n")
+  }
+  // 防插针闸门：stop/invalidate/target 要连续 confirmTicks 次成立，或破线幅度 ≥ confirmBandPct。
+  // 机会类信号（buy/add/trim）不设门槛——错过买点的成本高于误报。
+  let liveTickState = null
+  let livePendingSignals = Object.create(null)
+  let liveSeenSignals = null
+  const liveSignalGate = (it, sig) => {
+    const st = liveTickState || {}
+    const needConfirm = sig.kind === "stop" || sig.kind === "invalidate" || sig.kind === "target"
+    if (!needConfirm) return true
+    const price = liveNum(it && it.monitor && it.monitor.current_price)
+    const level = sig.kind === "stop" ? liveNum(it.position && it.position.stop)
+      : sig.kind === "invalidate" ? liveNum(it.watch && it.watch.stop)
+        : liveNum(it.position && it.position.target)
+    if (price !== null && level) {
+      const band = Math.abs((price - level) / level) * 100
+      if (band >= (liveNum(st.confirmBandPct) ?? 0.3)) { if (liveSeenSignals) liveSeenSignals.add(sig.key); return true }
+    }
+    livePendingSignals[sig.key] = (livePendingSignals[sig.key] || 0) + 1
+    if (liveSeenSignals) liveSeenSignals.add(sig.key)
+    return livePendingSignals[sig.key] >= Math.max(1, liveNum(st.confirmTicks) ?? 2)
+  }
+  let liveWatchBusy = false
+  let liveFailStreak = 0
+  const liveTick = async (opts) => {
+    const options = opts || {}
+    const manual = Boolean(options.manual)
+    if (liveWatchBusy) return { ok: false, skipped: "busy" }
+    liveWatchBusy = true
+    try {
+      const st = await readLiveWatch()
+      const now = new Date()
+      const sess = liveSession(now)
+      if (!manual) {
+        if (!st.enabled) return { ok: true, skipped: "disabled", session: sess }
+        if (st.sessionOnly && !sess.inSession) return { ok: true, skipped: "off-session", session: sess }
+        const lastMs = Date.parse(st.lastTickAt || "") || 0
+        const gapMs = Math.max(15, liveNum(st.intervalSec) ?? 60) * 1000
+        if (lastMs && now.getTime() - lastMs < gapMs - 1500) return { ok: true, skipped: "throttled", session: sess }
+        const boMs = Date.parse(st.backoffUntil || "") || 0
+        if (boMs && now.getTime() < boMs) return { ok: true, skipped: "backoff", session: sess }
+      }
+      liveTickState = st
+      liveSeenSignals = new Set()
+      let r
+      try {
+        r = await refreshWatchPrices({ gate: liveSignalGate, lazy: true })
+        liveFailStreak = 0
+      } catch (e) {
+        liveFailStreak += 1
+        const msg = String(e && e.message ? e.message : e).slice(0, 200)
+        const backoff = liveFailStreak >= 3 ? new Date(now.getTime() + 5 * 60 * 1000).toISOString() : ""
+        const patch = { lastTickAt: now.toISOString(), lastTickStatus: "error", lastError: msg }
+        if (backoff) patch.backoffUntil = backoff
+        try { await patchLiveWatch(patch) } catch (e2) { /* 状态写失败不阻断 */ }
+        await appendLiveLog({ ts: now.toISOString(), ymd: localYmd(), kind: "tick-error", level: "warn", text: "行情抓取失败：" + msg + (backoff ? "（连续 " + liveFailStreak + " 次，退避 5 分钟）" : "") })
+        return { ok: false, skipped: "error", error: msg, session: sess }
+      } finally {
+        // 只保留本 tick 仍然成立的待确认信号：价格回到线内就清零，避免「隔一小时又凑够 2 次」
+        if (liveSeenSignals) {
+          for (const k of Object.keys(livePendingSignals)) if (!liveSeenSignals.has(k)) delete livePendingSignals[k]
+        }
+        liveSeenSignals = null
+      }
+      const ymd = localYmd()
+      const fresh = st.ymd === ymd
+      let tickCount = (fresh ? liveNum(st.tickCount) : 0) ?? 0
+      let eventCount = (fresh ? liveNum(st.eventCount) : 0) ?? 0
+      const llmCount = (fresh ? liveNum(st.llmCount) : 0) ?? 0
+      tickCount += 1
+      const events = Array.isArray(r.fired) ? r.fired : []
+      eventCount += events.length
+      for (const ev of events) {
+        await appendLiveLog({
+          ts: ev.ts || now.toISOString(), ymd, kind: "event", level: ev.level || "info",
+          code: ev.code, name: ev.name, eventKind: ev.kind, qty: ev.qty === void 0 ? null : ev.qty, message: ev.message,
+        })
+      }
+      // 解释层（可选）：只有开关打开 + 事件达门槛 + 当日配额未用完才调模型。
+      // 放在播报之前，播报里可以带一句人话解释；解释失败绝不影响规则层产出（规则层已经落盘了）。
+      let explainText = ""
+      if (st.llmExplain && events.length) {
+        const rank = { good: 0, info: 0, warn: 1, bad: 2 }
+        const need = rank[String(st.llmMinLevel || "bad")] ?? 2
+        const hot = events.filter((ev) => (rank[String(ev.level || "info")] ?? 0) >= need)
+        const cap = liveNum(st.llmDailyCap) ?? 20
+        const usedNow = (st.ymd === ymd ? liveNum(st.llmCount) : 0) ?? 0
+        if (hot.length && usedNow < cap) {
+          const first = hot[0]
+          const r2 = await liveAsk({ code: first.code, question: "自动解释本次触发：" + String(first.message || ""), auto: true })
+          if (r2 && r2.ok && r2.answer) explainText = String(r2.answer)
+        }
+      }
+      const snap = await buildLiveSnapshot(r.doc, { events })
+      let broadcast = null
+      const every = liveNum(st.broadcastEveryMin) ?? 0
+      const allowBroadcast = Boolean(st.enabled)
+      if (allowBroadcast) {
+        const lastB = Date.parse(st.lastBroadcastAt || "") || 0
+        const due = every > 0 ? (now.getTime() - lastB >= every * 60 * 1000) : events.length > 0
+        if (due) {
+          const text = renderLiveBroadcastText(snap, explainText)
+          broadcast = await appendLiveLog({ ts: now.toISOString(), ymd, kind: "broadcast", level: "info", reason: events.length ? "event" : "scheduled", text, snapshot: { account: snap.account, holdings: snap.holdings.length, watch: snap.watch.length } })
+        }
+      }
+      // llmCount 在解释层里由 liveAsk 自己 +1 落盘，这里必须重读后取大值，
+      // 否则本 tick 的旧计数会把刚写进去的 +1 覆盖回去（表现为「配额永远用不完」）。
+      const freshState = await readLiveWatch()
+      const llmFinal = Math.max(llmCount, freshState.ymd === ymd ? (liveNum(freshState.llmCount) ?? 0) : 0)
+      const patch = { lastTickAt: now.toISOString(), lastTickStatus: "ok", lastError: "", ymd, tickCount, eventCount, llmCount: llmFinal }
+      if (broadcast) { patch.lastBroadcastAt = broadcast.ts; patch.lastBroadcastNote = broadcast.reason }
+      try { await patchLiveWatch(patch) } catch (e) { /* 状态写失败不阻断 */ }
+      return { ok: true, skipped: null, fired: events, snapshot: snap, broadcast: broadcast ? broadcast.text : null, session: sess, changed: Boolean(r.changed) }
+    } finally {
+      liveWatchBusy = false
+    }
+  }
+  // 定时器入口：先读设置，关着就直接返回，一次行情请求都不发
+  const maybeTickLiveWatch = async () => {
+    try {
+      const st = await readLiveWatch()
+      if (!st.enabled) return
+      await liveTick({ manual: false })
+    } catch (e) { /* 自动 tick 失败静默：错误已写进时间线 */ }
+  }
+  // P3 解释层：只依据给定事实说 3 句，禁止新造价位；每日上限 llmDailyCap
+  const liveAsk = async (body) => {
+    const question = String((body && body.question) || "").trim()
+    const code = String((body && body.code) || "").trim().toUpperCase()
+    if (!question && !code) return { ok: false, error: "缺少问题或标的" }
+    const st = await readLiveWatch()
+    const ymd = localYmd()
+    const used = (st.ymd === ymd ? liveNum(st.llmCount) : 0) ?? 0
+    const cap = liveNum(st.llmDailyCap) ?? 20
+    if (used >= cap) return { ok: false, error: "今日盘中快问已用 " + used + "/" + cap + " 次（防烧 token 上限，可在「盘中盯盘」设置里调大）" }
+    const log = await readLiveLog(80)
+    const todayEvents = log.filter((x) => x && x.kind === "event" && x.ymd === ymd)
+    const snap = await buildLiveSnapshot(null, { events: todayEvents })
+    const row = code ? (snap.holdings.find((h) => h.code === code) || snap.watch.find((w) => w.code === code)) : null
+    const concl = code ? (await liveLatestConclusions([code]))[code] : null
+    const lines = []
+    lines.push("你是盘中盯盘助手。只依据给定事实回答，不调用任何工具、不编造价格或消息、不新造目标价或止损价。")
+    lines.push("回答格式：3 句以内。第一句给结论（是/否/尚未/已破线），第二句给具体数字依据，第三句给下一步该看什么或触发条件。")
+    lines.push("【时间】" + snap.session.hm + "（" + snap.session.label + "）")
+    lines.push("【问题】" + (question || "这只标的现在偏离计划多远？"))
+    if (row) {
+      lines.push("【标的】" + row.code + " " + row.name + "：现价 " + liveFmt(row.price, 3) + "，今日 " + (row.change_pct === null ? "—" : liveFmt(row.change_pct, 2) + "%") + "，成本 " + (row.cost === null ? "—" : liveFmt(row.cost, 3)) + "，浮盈 " + (row.pnl_pct === null ? "—" : liveFmt(row.pnl_pct, 2) + "%") + "，权重 " + (row.weight_pct === null ? "—" : liveFmt(row.weight_pct, 2) + "%"))
+      if (row.eff_stop !== null) lines.push("【生效止损】" + liveFmt(row.eff_stop, 3) + "（来源 " + row.eff_stop_src + "），距止损 " + (row.dist_stop_pct === null ? "—" : liveFmt(row.dist_stop_pct, 2) + "%") + "，" + row.stop_state)
+      if (row.buy_low !== null) lines.push("【买入区】" + liveFmt(row.buy_low, 3) + " ~ " + (row.buy_high === null ? "—" : liveFmt(row.buy_high, 3)) + "，距买区 " + (row.dist_buy_pct === null ? "—" : liveFmt(row.dist_buy_pct, 2) + "%"))
+    }
+    if (concl) lines.push("【最新结论】" + String(concl.ts || "") + " stance=" + String(concl.stance || "—") + " target=" + (concl.target ?? "—") + " stop=" + (concl.stop ?? "—") + "；逻辑=" + String(concl.thesis || "").slice(0, 140) + "；失效条件=" + String(concl.invalidate_if || "").slice(0, 140))
+    if (todayEvents.length) lines.push("【今日已触发】" + todayEvents.slice(0, 5).map((e) => String(e.message || "")).join(" / "))
+    const acct = snap.account
+    lines.push("【账户】总资产 " + liveFmt(acct.total_asset) + "，现金 " + liveFmt(acct.cash) + "，仓位 " + liveFmt(acct.position_pct, 1) + "%，浮动 " + liveFmt(acct.float_pnl))
+    let answer
+    try {
+      answer = await runPromptSubagent(lines.join("\n"), { label: "盘中快问", timeoutMs: 90000 })
+    } catch (e) {
+      return { ok: false, error: "解释失败：" + String(e && e.message ? e.message : e).slice(0, 200) }
+    }
+    const text = String(typeof answer === "string" ? answer : (answer && answer.text) || "").trim()
+    await patchLiveWatch({ ymd, llmCount: used + 1 })
+    await appendLiveLog({ ts: new Date().toISOString(), ymd, kind: (body && body.auto) ? "explain" : "ask", level: "info", code: code || null, question: question || ("解释 " + code), answer: text })
+    return { ok: true, answer: text, code: code || null, used: used + 1, cap }
+  }
+
   // 口径：行业横截面分位（同 Tushare industry 分类），不联网算分——分位算在纯函数 fundamentals.js 里，
   // 这里只负责「把全市场三张表拉下来缓存好」。一次刷新 = 3 次 API 调用覆盖全市场，
   // 单只股票查询是纯查表，毫秒级、0 token。
@@ -3334,6 +3847,98 @@ function apply(ctx, config) {
   }
 
   const routes = [
+    {
+      // 盘中盯盘：读设置 + 实时快照 + 时间线。快照每次都用实时价重算，
+      // 不复用账本里可能已经过期的 current_price / weight_pct。
+      kind: "exact",
+      path: "/dsh-invest/api/live-watch",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method === "GET") {
+          try {
+            const settings = await readLiveWatch()
+            const snapshot = await buildLiveSnapshot()
+            const log = await readLiveLog(40)
+            writeJson(res, 200, { ok: true, settings, session: liveSession(), snapshot, presets: LIVE_PRESETS, log })
+          } catch (e) {
+            writeJson(res, 500, { error: String(e && e.message ? e.message : e).slice(0, 200) })
+          }
+          return
+        }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const patch = {}
+          if (body && typeof body.enabled === "boolean") patch.enabled = body.enabled
+          if (body && typeof body.sessionOnly === "boolean") patch.sessionOnly = body.sessionOnly
+          if (body && typeof body.llmExplain === "boolean") patch.llmExplain = body.llmExplain
+          if (body && typeof body.notifyLevel === "string" && ["bad", "warn", "all"].includes(body.notifyLevel)) patch.notifyLevel = body.notifyLevel
+          if (body && body.preset !== void 0) {
+            const name = String(body.preset)
+            if (!LIVE_PRESETS[name]) { writeJson(res, 400, { error: "未知预设：" + name.slice(0, 20) }); return }
+            patch.preset = name
+            patch.intervalSec = LIVE_PRESETS[name].intervalSec
+            patch.broadcastEveryMin = LIVE_PRESETS[name].broadcastEveryMin
+          }
+          // 手改间隔：预设退化为「自定义」，否则读回来的仍是预设值，看起来像没保存
+          const numField = (key, min, max) => {
+            if (!body || body[key] === void 0) return
+            const n = liveNum(body[key])
+            if (n === null || n < min || n > max) throw new Error(key + " 需在 " + min + "~" + max + " 之间")
+            patch[key] = n
+          }
+          numField("intervalSec", 15, 3600)
+          numField("broadcastEveryMin", 0, 240)
+          numField("confirmTicks", 1, 10)
+          numField("confirmBandPct", 0, 10)
+          numField("llmDailyCap", 1, 200)
+          // 手改间隔：预设退化为「自定义」，否则读回来的仍是预设值，看起来像没保存。
+          // 注意：显式选了预设时绝不能走这段，否则刚写进去的 preset 会被覆盖成「自定义」。
+          if (patch.preset === void 0 && (patch.intervalSec !== void 0 || patch.broadcastEveryMin !== void 0)) {
+            const cur = await readLiveWatch()
+            const p = LIVE_PRESETS[cur.preset]
+            const sameAsPreset = p && (patch.intervalSec ?? p.intervalSec) === p.intervalSec && (patch.broadcastEveryMin ?? p.broadcastEveryMin) === p.broadcastEveryMin
+            patch.preset = sameAsPreset ? cur.preset : "自定义"
+          }
+          const settings = await patchLiveWatch(patch)
+          const snapshot = await buildLiveSnapshot()
+          writeJson(res, 200, { ok: true, settings, session: liveSession(), snapshot, presets: LIVE_PRESETS })
+        } catch (e) {
+          writeJson(res, 400, { error: String(e && e.message ? e.message : e).slice(0, 200) })
+        }
+      },
+    },
+    {
+      // 手动立即抓一次：不受 enabled / 交易时段限制（用户点了就是要看现在的数）
+      kind: "exact",
+      path: "/dsh-invest/api/live-watch/tick",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const r = await liveTick({ manual: true })
+          writeJson(res, r.ok ? 200 : 500, r)
+        } catch (e) {
+          writeJson(res, 500, { ok: false, error: String(e && e.message ? e.message : e).slice(0, 200) })
+        }
+      },
+    },
+    {
+      // 盘中快问（P3）：只依据快照 + 最新结论 + 今日事件，3 句以内，不新造价位
+      kind: "exact",
+      path: "/dsh-invest/api/live-ask",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const r = await liveAsk(body || {})
+          writeJson(res, r.ok ? 200 : 429, r)
+        } catch (e) {
+          writeJson(res, 500, { ok: false, error: String(e && e.message ? e.message : e).slice(0, 200) })
+        }
+      },
+    },
     {
       kind: "exact",
       path: "/api/dsh-invest/chart",
@@ -4122,6 +4727,21 @@ function apply(ctx, config) {
     },
     {
       kind: "exact",
+      path: "/dsh-invest/api/job/cancel",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const outcome = cancelJob(String(body.id || "").trim())
+          if (!outcome.ok) { writeJson(res, outcome.code, { ok: false, error: outcome.error }); return }
+          const job = outcome.job
+          writeJson(res, 200, { ok: true, status: job.status, id: job.id, elapsedMs: job.elapsedMs || 0, error: job.error || "" })
+        } catch (e) { writeJson(res, 400, { ok: false, error: String(e && e.message ? e.message : e).slice(0, 300) }) }
+      },
+    },
+    {
+      kind: "exact",
       path: "/dsh-invest/api/jobs",
       handler: async (req, res) => {
         if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
@@ -4732,6 +5352,9 @@ function apply(ctx, config) {
         return { error: "subagents not mounted（start()/startActivation() 均不可用）；候选 " + allCands.length + " 个；探测键名: " + keys.join(",") + "；ctx.get 类型: " + (typeof ctx.get) }
       }
       // 统一入口：旧宿主走原生 start()；新宿主翻译为 startActivation（返回同形状 {result,...}）
+      // 2026-11-23 修复（第四版）：0.2.x 的 startActivation 在 spec 顶层读 parent，
+      // 旧代码塞进 request.parent 导致 spec.parent 为 undefined → 阶段子代理全部 TypeError
+      // （Cannot read properties of undefined (reading 'id')）。详见 activationSpecFor 的注释。
       const startStage = async (spec) => {
         if (nativeStart !== void 0) return nativeStart.start("spawn", spec)
         const plain = Array.isArray(spec.prompt)
@@ -4740,15 +5363,7 @@ function apply(ctx, config) {
         const text = spec.persona ? "【角色设定】\n" + spec.persona + "\n\n" + plain : plain
         // maxDepth 不显式传：继承宿主设置（默认 1 = 本级允许、孙代被拒，等效旧的“禁止递归”）。
         // 实测 maxDepth:0 表示“禁止本级”——子代深度 1 会直接 SubagentDepthError。
-        const request = { prompt: [{ type: "text", text }], parent: spec.parent }
-        if (spec.agentOptions) request.agentOptions = spec.agentOptions
-        const call = (delivery) => activationHost.startActivation({
-          provider: "spawn",
-          label: spec.label,
-          request,
-          signal: spec.signal,
-          delivery,
-        })
+        const call = (delivery) => activationHost.startActivation(activationSpecFor(spec, text, delivery))
         let act
         try {
           act = await call("caller")   // 程序化调用方语义：不向父会话投递完成通知
@@ -4848,7 +5463,8 @@ function apply(ctx, config) {
           parts.push("【" + h.stage + " 产出（请基于其继续，勿重复取数已覆盖内容）】\n" + h.text)
         }
         parts.push("请按你的角色职责完成分析并输出完整结果。")
-        const basePrompt = parts.join("\n\n")
+        // v0.75.7：工具红线前置（见 CHANGELOG；防止阶段子代理误用桌面自动化开窗口）
+        const basePrompt = TOOL_REDLINE + "\n\n" + parts.join("\n\n")
         let lastErr = ""
         // 本阶段实际使用的模型路由（null = 不传 agentOptions，完整继承宿主会话）
         let route = chosenRoutes[s.code] || null
@@ -5204,6 +5820,18 @@ function apply(ctx, config) {
   }, "dsh-invest: watch-daily auto")
 
   ctx.effect(() => {
+    // 盘中盯盘调度：每 15 秒叫一次，真正的节流（默认 60s/30s/120s）在 liveTick 里按预设判。
+    // 用 15 秒的粗粒度轮询而不是给每个预设单独建定时器：切档立刻生效，不用重挂 timer。
+    // node --test 下 effect 会立即执行，必须早退，避免测试中途跑真实行情。
+    if (process.env.NODE_TEST_CONTEXT || process.env.DSH_INVEST_LIVE_WATCH === "0") return () => {}
+    const boot = setTimeout(() => { void maybeTickLiveWatch() }, 30000)
+    const tick = setInterval(() => { void maybeTickLiveWatch() }, 15000)
+    if (typeof boot.unref === "function") boot.unref()
+    if (typeof tick.unref === "function") tick.unref()
+    return () => { clearTimeout(boot); clearInterval(tick) }
+  }, "dsh-invest: live-watch auto")
+
+  ctx.effect(() => {
     const disposers = routes.map((route) => ctx.webServer.register(route))
     return () => {
       for (const dispose of disposers) dispose()
@@ -5222,4 +5850,4 @@ function apply(ctx, config) {
   })
 }
 
-export { name, inject, apply, Config }
+export { name, inject, apply, Config, activationSpecFor }

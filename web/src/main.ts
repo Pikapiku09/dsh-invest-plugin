@@ -26,7 +26,7 @@ import { APP_VERSION } from './version';
 import { handbookIndexForView, renderHandbookPanel } from './handbook';
 import { lastPromptedVersion, lastSeenVersion, markVersionPrompted, markVersionSeen, renderUpdateDialog, renderWhatsNew, shouldPromptUpdate, unseenReleases } from './whats-new';
 import { compareStockName } from './stock-index';
-import type { ConclusionRecord, HoldingPosition, HoldingsImportInput, Job, ModelSettingsSaveInput, TaskTemplate, UpdateCheckResponse, WatchAlert, WorkbenchView, WatchlistUpdateInput, LedgerColKey } from './types';
+import type { ConclusionRecord, HoldingPosition, HoldingsImportInput, Job, LiveWatchResponse, ModelSettingsSaveInput, TaskTemplate, UpdateCheckResponse, WatchAlert, WorkbenchView, WatchlistUpdateInput, LedgerColKey } from './types';
 
 const viewElement = document.getElementById('view')!;
 const pollingJobs = new Set<string>();
@@ -403,20 +403,130 @@ async function loadRealPerformance(force: boolean): Promise<void> {
   }
 }
 
-/** 行业热力（v0.67.0）：概览页卡片用，轻量路由。失败不阻塞概览其它区块。 */
-async function loadSectorHeatmap(force: boolean): Promise<void> {
-  if (state.sectorHeatmapLoading) return;
-  if (!force && state.sectorHeatmap) { render(); return; }
-  state.sectorHeatmapLoading = true;
-  state.sectorHeatmapError = '';
+/**
+ * 盘中盯盘（live-watch）：概览页第一屏的数据源。
+ *
+ * 后端每 intervalSec 自己抓一次价；这里只是「把最近一次结果拿过来」，
+ * 不做任何价格计算（快照里的权重/浮盈/距止损都由后端用实时价重算）。
+ * silent=true 用于 60 秒轮询：失败不弹 toast、不清空旧数据，避免盘中反复打扰。
+ */
+/**
+ * 盘中事件推系统通知：只发「规则层触发的事件」，不发例行播报（30 分钟一条会把人吵死）。
+ * 去重交给 pushAlertsToSystem 的 localStorage 键（key 带 ts），所以 60 秒轮询重复扫同一条日志不会重复弹。
+ */
+function dispatchLiveNotifications(doc: LiveWatchResponse): void {
+  const s = doc.settings;
+  if (!s.enabled) return;
+  const rank: Record<string, number> = { good: 0, info: 0, warn: 1, bad: 2 };
+  const need = rank[String(s.notifyLevel || 'bad')] ?? 2;
+  const notices: SystemNotice[] = (doc.log || [])
+    .filter((e) => e && e.kind === 'event' && (rank[String(e.level || 'info')] ?? 0) >= need)
+    .map((e) => ({
+      key: 'live|' + e.ts + '|' + (e.code || '') + '|' + (e.eventKind || ''),
+      title: '盘中盯盘 · ' + (e.name || e.code || '事件'),
+      body: String(e.message || e.text || ''),
+    }));
+  if (notices.length) void pushAlertsToSystem(notices);
+}
+
+async function loadLiveWatch(silent = false): Promise<void> {
+  if (state.liveWatchLoading) return;
+  state.liveWatchLoading = true;
+  if (!silent) state.liveWatchError = '';
   render();
   try {
-    state.sectorHeatmap = await api.sectorHeatmap();
+    const doc = await api.liveWatch();
+    state.liveWatch = doc;
+    state.liveWatchError = '';
+    dispatchLiveNotifications(doc);
   } catch (error) {
-    state.sectorHeatmapError = errorMessage(error);
-    if (force) state.sectorHeatmap = null;
+    state.liveWatchError = errorMessage(error);
+    if (!silent) state.liveWatch = null;
   } finally {
-    state.sectorHeatmapLoading = false;
+    state.liveWatchLoading = false;
+    render();
+  }
+}
+
+/** 开关盯盘：写盘后后端下一轮 15 秒内就会生效，不用重启 */
+async function toggleLiveWatch(): Promise<void> {
+  const cur = state.liveWatch?.settings;
+  if (!cur || state.liveWatchSaving) return;
+  state.liveWatchSaving = true;
+  render();
+  try {
+    const next = await api.liveWatchPatch({ enabled: !cur.enabled });
+    // 写设置的响应不带 log（只有 GET 带），合并回内存里的旧时间线，避免切开关把播报记录清空
+    state.liveWatch = { ...next, log: next.log ?? state.liveWatch?.log ?? [] };
+    // 刚开启就立刻抓一次：否则要等后端下一轮 tick（最多 15 秒）+ 前端 60 秒轮询才看到价
+    if (next.settings.enabled) {
+      toast('盯盘已开启，正在抓第一帧…', 'info');
+      state.liveWatchSaving = false;
+      render();
+      await tickLiveWatch();
+      return;
+    }
+    toast('盯盘已暂停：不再自动抓价，手动「立即刷新」仍可用。', 'success');
+  } catch (error) {
+    toast(`保存失败：${errorMessage(error)}`, 'error');
+  } finally {
+    state.liveWatchSaving = false;
+    render();
+  }
+}
+
+/** 三档预设：只改节奏，不改开关。切档后立刻反映在下一轮 tick 上。 */
+async function setLivePreset(preset: string): Promise<void> {
+  if (state.liveWatchSaving) return;
+  state.liveWatchSaving = true;
+  render();
+  try {
+    const next = await api.liveWatchPatch({ preset });
+    state.liveWatch = { ...next, log: next.log ?? state.liveWatch?.log ?? [] };
+    const p = next.presets?.[preset];
+    toast(`已切到「${preset}」：${p ? '每 ' + p.intervalSec + ' 秒判定、' + (p.broadcastEveryMin ? '每 ' + p.broadcastEveryMin + ' 分钟播报' : '只在事件时播报') : '节拍已保存'}。`, 'success');
+  } catch (error) {
+    toast(`切换失败：${errorMessage(error)}`, 'error');
+  } finally {
+    state.liveWatchSaving = false;
+    render();
+  }
+}
+
+/** 立即抓一次：不受开关/交易时段限制（用户点了就是要看现在的数） */
+async function tickLiveWatch(): Promise<void> {
+  if (state.liveWatchTicking) return;
+  state.liveWatchTicking = true;
+  render();
+  try {
+    const r = await api.liveWatchTick();
+    if (!r.ok) { toast(`抓取失败：${r.error || r.skipped || '未知原因'}`, 'error'); return; }
+    await loadLiveWatch(true);
+    const fired = (r.fired || []).length;
+    toast(fired ? `已刷新现价，触发 ${fired} 条提醒。` : '已刷新现价，本次无触发。', 'success');
+  } catch (error) {
+    toast(`抓取失败：${errorMessage(error)}`, 'error');
+  } finally {
+    state.liveWatchTicking = false;
+    render();
+  }
+}
+
+/** 盘中快问：只依据后端快照 + 最新结论 + 今日事件，3 句以内 */
+async function askLive(code: string): Promise<void> {
+  if (state.liveAsking) return;
+  state.liveAsking = code;
+  state.liveAnswer = null;
+  render();
+  try {
+    const r = await api.liveAsk({ code, question: code + ' 现在偏离计划多远？如果破线了，下一步该看什么？' });
+    state.liveAnswer = r.ok
+      ? { code, text: r.answer || '（模型没有返回内容）' }
+      : { code, text: '', error: r.error || '解释失败' };
+  } catch (error) {
+    state.liveAnswer = { code, text: '', error: errorMessage(error) };
+  } finally {
+    state.liveAsking = '';
     render();
   }
 }
@@ -1238,7 +1348,7 @@ function navigate(view: WorkbenchView): void {
   if (view === 'ask') void loadAskStocks();
   if (view === 'backtest' && !state.backtest && !state.backtestLoading) void loadBacktest(false);
   if (view === 'strategy-health' && !state.strategyHealth && !state.strategyHealthLoading) void loadStrategyHealth(false);
-  if (view === 'overview' && !state.sectorHeatmap && !state.sectorHeatmapLoading) void loadSectorHeatmap(false);
+  if (view === 'overview' && !state.liveWatch && !state.liveWatchLoading) void loadLiveWatch();
   if (view === 'backtest' && !state.strategyTrials && !state.strategyTrialsLoading) void loadStrategyTrials(false);
   if (view === 'holdings' && !state.realPerformance && !state.realPerformanceLoading) void loadRealPerformance(false);
   if (view === 'holdings') {
@@ -1345,7 +1455,7 @@ async function refreshAll(): Promise<void> {
   if (state.view === 'tasks') { jobs.push(loadTemplates(), loadJobs()); }
   if (state.view === 'model-settings') jobs.push(loadModelSettings());
   if (state.view === 'strategy-health') jobs.push(loadStrategyHealth(true));
-  if (state.view === 'overview') jobs.push(loadSectorHeatmap(true));
+  if (state.view === 'overview') jobs.push(loadLiveWatch());
   if (state.view === 'backtest') jobs.push(loadStrategyTrials(true));
   if (state.view === 'holdings') jobs.push(loadRealPerformance(true));
   // 只重读结论链，不重置选中与编辑表单：刷新期间用户正在填的监控规则不被打断
@@ -2104,12 +2214,35 @@ async function pollJob(id: string): Promise<void> {
           break;
         }
         if (job.status === 'failed') { toast(`任务执行失败：${job.error || '请查看任务详情'}`, 'error'); cacheRecentJobs(state.jobs); void loadJobs(); break; }
+        if (job.status === 'cancelled') { toast('任务已取消。', 'info'); cacheRecentJobs(state.jobs); void loadJobs(); break; }
       } catch (error) {
         failures += 1;
         if (failures >= 3) { toast(`任务进度连接中断：${errorMessage(error)}`, 'error'); break; }
       }
     }
   } finally { pollingJobs.delete(id); }
+}
+
+/** 取消任务：排队中的摘出队列，运行中的立刻中断（当前阶段终止，结果不归档） */
+async function cancelJob(id: string): Promise<void> {
+  const current = state.jobs.find((item) => item.id === id);
+  const running = current?.status === 'running';
+  const ok = window.confirm(
+    running
+      ? `立即中断这个任务？\n\n正在执行的分析阶段会被终止，本次结果不会归档成报告。\n\n确认取消任务 ${id}？`
+      : `把这个排队中的任务从队列取出？\n\n任务尚未开始，取消后不会消耗模型调用。\n\n确认取消任务 ${id}？`,
+  );
+  if (!ok) { toast('已取消操作。', 'info'); return; }
+  try {
+    const response = await api.cancelJob(id);
+    if (!response.ok) throw new Error(response.error || '取消接口未返回成功状态。');
+    toast(running ? '任务已中断。' : '任务已从队列移除。', 'success');
+    mergeJob(await api.job(id));
+    render();
+    void loadJobs();
+  } catch (error) {
+    toast(`取消失败：${errorMessage(error)}`, 'error');
+  }
 }
 
 document.addEventListener('click', (event) => {
@@ -2194,6 +2327,7 @@ document.addEventListener('click', (event) => {
   else if (action === 'start-template' && target.dataset.id) void startTemplate(target.dataset.id);
   else if (action === 'template-move' && target.dataset.id) moveTemplate(target.dataset.id, Number(target.dataset.dir || 0));
   else if (action === 'refresh-jobs') void loadJobs();
+  else if (action === 'cancel-job' && target.dataset.id) void cancelJob(target.dataset.id);
   else if (action === 'clear-run-filters') { state.runQuery = ''; state.runMode = 'all'; state.runStatus = 'all'; state.runHideBackfill = false; render(); }
   else if (action === 'save-model-settings') void saveModelSettings();
   else if (action === 'refresh-holdings') void loadHoldings(true);
@@ -2250,6 +2384,11 @@ document.addEventListener('click', (event) => {
     persistLedgerPrefs();
     render();
   }
+  // ===== 盘中盯盘 =====
+  else if (action === 'live-toggle') { void toggleLiveWatch(); }
+  else if (action === 'live-preset' && target.dataset.preset) { void setLivePreset(target.dataset.preset); }
+  else if (action === 'live-tick') { void tickLiveWatch(); }
+  else if (action === 'live-ask' && target.dataset.code) { void askLive(target.dataset.code); }
   else if (action === 'close-reader') closeReader();
 });
 
@@ -2487,6 +2626,11 @@ window.addEventListener('dsh-invest:system-notify', (event) => {
 });
 // 提醒主动推送轮询：60 秒一次（标签页可见时）
 window.setInterval(() => { void pollWatchAlerts(); }, 60 * 1000);
+// 盘中盯盘：后端自己每 intervalSec 抓价，前端只是 60 秒把快照取回来。
+// 只在概览页且已开启时轮询 —— 不开启就一次请求都不发，静默失败不清旧数据。
+window.setInterval(() => {
+  if (state.view === 'overview' && state.liveWatch?.settings.enabled) void loadLiveWatch(true);
+}, 60 * 1000);
 // 全局「回到顶部」按钮 + 用户滚动感知：手动滚过就作废待恢复的滚动目标
 window.addEventListener('scroll', (event) => {
   if (!programmaticScroll && (event.target === document || event.target === document.scrollingElement)) {
@@ -2502,7 +2646,7 @@ initialiseTheme();
 initialiseReader();
 state.lastRefreshAt = readLastRefreshAt();
 render();
-const bootLoaded = Promise.all([loadIndex(), loadHoldings(), loadJobs(), loadWatchlist(), loadWatchDaily(), loadAskStocks()]);
+const bootLoaded = Promise.all([loadIndex(), loadHoldings(), loadJobs(), loadWatchlist(), loadWatchDaily(), loadAskStocks(), loadLiveWatch(true)]);
 // 更新检测（v0.51.0）：启动时静默查一次，有新版只在左上角挂红点；
 // 首次见到某个新版本会弹一次询问，之后交给用户自己点「检测更新」。
 void bootUpdateCheck();

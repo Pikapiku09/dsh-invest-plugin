@@ -3,6 +3,7 @@ import type {
   ConclusionRecord, HoldingsDraftResponse, HoldingsResponse, IndexResponse, Job,
   ModelSettingsResponse, TaskTemplate, WorkbenchView, WatchlistResponse, LedgerColKey, BacktestResponse, ConclusionAuditResponse, WatchDailyStatus, StrategyHealthResponse, SectorHeatmapResponse, TrialsResponse, RealPerformanceResponse,
   StockNoteMeta, StockNoteDetail, UpdateCheckResponse, FundamentalsResponse,
+  LiveWatchResponse,
 } from './types';
 import type { WatchDistMode } from './watch-metrics';
 
@@ -272,6 +273,16 @@ export interface AppState {
   watchDailyLoading: boolean;
   watchDailySaving: boolean;
   watchDailyRunning: boolean;
+  // ===== 盘中盯盘（live-watch）：概览页看板数据源 =====
+  liveWatch: LiveWatchResponse | null;
+  liveWatchLoading: boolean;
+  liveWatchSaving: boolean;
+  liveWatchTicking: boolean;
+  liveWatchError: string;
+  /** 盘中快问：正在等 LLM 的标的代码；空串 = 空闲 */
+  liveAsking: string;
+  /** 该标的最近一次快问的回答（只留一条，避免面板无限长） */
+  liveAnswer: { code: string; text: string; error?: string } | null;
   // ===== 基本面评级（v0.58.0）：行业横截面分位 + 风险标记（排雷与理解质地，非买卖信号）=====
   /** 当前选中标的的评级；切换标的时立即置空，避免旧卡片冒充新标的 */
   fundamentals: FundamentalsResponse | null;
@@ -311,5 +322,7 @@ export const state: AppState = {
   watchlistSaving: false, watchlistError: '', watchEditOpen: false,
   watchDistMode: 'target', ledgerColumns: readLedgerColumns(), ledgerSort: readLedgerSort(),
   watchDaily: null, watchDailyLoading: false, watchDailySaving: false, watchDailyRunning: false,
+  liveWatch: null, liveWatchLoading: false, liveWatchSaving: false, liveWatchTicking: false,
+  liveWatchError: '', liveAsking: '', liveAnswer: null,
   fundamentals: null, fundamentalsLoading: false, fundamentalsError: '',
 };

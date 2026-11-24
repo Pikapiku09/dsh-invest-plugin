@@ -250,7 +250,7 @@ export interface TaskTemplate {
   hostModel?: string;
 }
 
-export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 export type JobProgress = string | number | {
   stage?: string;
   index?: number;
@@ -986,8 +986,121 @@ export interface WatchDailyStatus {
   updated_at?: string;
 }
 
-/** 直接刷新账本现价（无需确认）：只改 current_price 并重算派生列 */
-export interface HoldingsRefreshQuotesResponse {
+// ===== 盘中盯盘（live-watch）：规则层高频跑，播报层按预设节奏出事实对照，解释层按需 LLM =====
+export interface LiveWatchSettings {
+  version: number;
+  /** 总开关（默认关）：开着才会在交易时段自动抓价 */
+  enabled: boolean;
+  /** 极简 / 标准 / 盯盘 / 自定义 */
+  preset: string;
+  intervalSec: number;
+  /** 0 = 不例行播报，只在事件发生时播 */
+  broadcastEveryMin: number;
+  /** 防插针：连续 N 次成立才落提醒 */
+  confirmTicks: number;
+  /** 或破线幅度 ≥ N% 直接成立 */
+  confirmBandPct: number;
+  llmExplain: boolean;
+  llmMinLevel: string;
+  llmDailyCap: number;
+  notifyLevel: string;
+  sessionOnly: boolean;
+  ymd: string;
+  tickCount: number;
+  eventCount: number;
+  llmCount: number;
+  lastTickAt: string;
+  lastTickStatus: string;
+  lastError: string;
+  lastBroadcastAt: string;
+  lastBroadcastNote: string;
+  backoffUntil: string;
+  updated_at?: string;
+}
+
+export interface LiveSessionInfo {
+  inSession: boolean;
+  /** 盘中 / 集合竞价 / 午休 / 已收盘 / 未开盘 / 非交易日 */
+  label: string;
+  hm: string;
+  weekday: boolean;
+  minute: number;
+}
+
+export interface LiveSignalRef { kind: string; at: string | null }
+
+export interface LiveHoldingRow {
+  code: string; name: string; state: string;
+  price: number | null; prev_close: number | null; change_pct: number | null;
+  cost: number | null; shares: number; pnl: number | null; pnl_pct: number | null;
+  market_value: number | null; weight_pct: number | null;
+  /** 生效止损 = 档案 position.stop ?? watch.stop（执行口径，提醒实际比对的就是它） */
+  eff_stop: number | null;
+  eff_stop_src: string;
+  dist_stop_pct: number | null;
+  /** 未设止损 / 缓冲 x% / 已破 x% */
+  stop_state: string;
+  /** 最新结论给出的止损（分析口径，常与档案不一致，只展示不自动改写） */
+  concl_stop: number | null;
+  concl_ts: string | null;
+  concl_stance: string | null;
+  stop_conflict: boolean;
+  signal: LiveSignalRef | null;
+}
+
+export interface LiveWatchRow {
+  code: string; name: string; state: string;
+  price: number | null; prev_close: number | null; change_pct: number | null;
+  buy_low: number | null; buy_high: number | null; ideal_buy: number | null; buy_qty: number | null;
+  dist_buy_pct: number | null;
+  in_buy_zone: boolean;
+  signal: LiveSignalRef | null;
+}
+
+export interface LiveAccount {
+  cash: number; market_value: number; total_asset: number;
+  position_pct: number | null; float_pnl: number | null; float_pnl_pct: number | null;
+}
+
+export interface LiveSnapshot {
+  asof: string;
+  session: LiveSessionInfo;
+  account: LiveAccount;
+  holdings: LiveHoldingRow[];
+  watch: LiveWatchRow[];
+  /** 止损口径冲突（档案 vs 最新结论），只报事实不自动合并 */
+  conflicts: string[];
+  events: WatchAlert[];
+  missing_prices: number;
+}
+
+export interface LiveLogEntry {
+  ts: string; ymd: string; kind: string; level: string;
+  text?: string; message?: string; code?: string; name?: string;
+  eventKind?: string; qty?: number | null; reason?: string;
+  question?: string; answer?: string;
+}
+
+export interface LiveWatchResponse {
+  ok: boolean;
+  settings: LiveWatchSettings;
+  session: LiveSessionInfo;
+  snapshot: LiveSnapshot;
+  presets?: Record<string, { intervalSec: number; broadcastEveryMin: number }>;
+  log?: LiveLogEntry[];
+}
+
+export interface LiveTickResponse {
+  ok: boolean;
+  skipped?: string | null;
+  error?: string;
+  fired?: WatchAlert[];
+  snapshot?: LiveSnapshot;
+  broadcast?: string | null;
+  session?: LiveSessionInfo;
+}
+
+/** 直接刷新账本现价（无需确认）：只改 current_price 并重算派生列 */export interface HoldingsRefreshQuotesResponse {
   ok: true;
   updated_at: string;
   updated: number;

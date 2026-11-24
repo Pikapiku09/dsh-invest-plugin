@@ -1,10 +1,10 @@
-import { emptyState, errorState, loadingBlock, pageHeader, runStatusBadge, sectionHeading, skeletonPage, stanceBadge } from './components';
+import { emptyState, errorState, pageHeader, runStatusBadge, sectionHeading, skeletonPage, stanceBadge } from './components';
 import { escapeHtml, formatDateTime, formatDuration, truncate } from './format';
 import { icon } from './icons';
 import { allRunRows } from './run-history';
 import { reportForRun, sortConclusions } from './selectors';
 import type { AppState } from './state';
-import type { ConclusionRecord, IndexResponse, RunRecord, WatchAlert, WatchlistItem } from './types';
+import type { ConclusionRecord, IndexResponse, LiveHoldingRow, LiveLogEntry, LiveSignalRef, LiveWatchRow, RunRecord, WatchAlert, WatchlistItem } from './types';
 import { alertMessageWithQty, alertQty, positionTargetSane, watchDistance, watchDistSwitch, type WatchDistMode } from './watch-metrics';
 
 function stockName(index: IndexResponse, code?: string): string {
@@ -135,81 +135,144 @@ function watchPanel(state: AppState): string {
 
 
 /**
- * 行业暴露（v0.67.0）：把实盘持仓放进市场行业温度里。
+ * 盘中盯盘（live-watch）：把「现价 vs 账本计划」的事实差距放在概览第一屏。
  *
- * 这是热力图唯一有决策价值的用法 —— 单看「今天哪里热」是资讯，
- * 而「我的钱在下跌的行业里」才是可行动的信息。
- *
- * 三种情况都如实显示：
- * - 持仓标的没有行业归类（ETF 等）→ 单列「未归类」，不隐藏
- * - 热力快照不可用 → 一句可操作的提示，不让卡片消失
- * - 行业整体涨跌与个股涨跌并列，避免只看个股误判板块
+ * 设计取舍：
+ * - 只做事实对照，不给新买卖建议；判断权留给人。
+ * - 生效止损取「执行口径」= 档案 position.stop ?? watch.stop，因为提醒比对的就是它；
+ *   最新结论给的止损并列展示，相差 >3% 打 ⚠ —— 不自动合并（合并规则属于纪律，不属于代码）。
+ * - 盘中价只算偏离度，不据此算技术指标（MA/量能一律用日线收盘）。
  */
-function sectorExposurePanel(state: AppState): string {
-  const hm = state.sectorHeatmap;
-  const holdings = state.holdings?.positions || [];
-  const head = sectionHeading('行业暴露', '实盘持仓 × 市场行业温度');
-  if (state.sectorHeatmapLoading && !hm) {
-    return '<section class="panel">' + head + loadingBlock('正在读取行业热力') + '</section>';
-  }
-  if (!hm || !hm.ok) {
-    const reason = hm?.reason === 'missing'
-      ? '还没有热力快照。在 LihuQuantify 跑：python scripts/refresh_heatmap_snapshot.py'
-      : (hm?.hint || state.sectorHeatmapError || '热力数据暂不可用');
-    return '<section class="panel">' + head + '<p class="muted">' + escapeHtml(reason) + '</p></section>';
-  }
-  if (!holdings.length) {
-    return '<section class="panel">' + head + '<p class="muted">当前没有持仓，无法计算行业暴露。</p></section>';
-  }
+const liveNumText = (v: number | null, digits = 2): string =>
+  (v === null || !Number.isFinite(v)) ? '—' : v.toFixed(digits);
 
-  // 持仓字段可能是 number|string|null（来自 OCR/手工录入），统一用 num() 收口，
-  // 否则 TS 会在算术运算处直接报错 —— 也避免 "12.5" 这种字符串被拼成 NaN。
-  const num = (v: unknown): number => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  };
-  const priceOf = (p: { current_price?: unknown; cost?: unknown }): number =>
-    num(p.current_price) || num(p.cost);
-  const totalMv = holdings.reduce((sum, p) => sum + priceOf(p) * num(p.shares), 0);
-  const rows = holdings.map((p) => {
-    const info = hm.by_code[p.code];
-    const mv = priceOf(p) * num(p.shares);
-    const weight = totalMv > 0 ? mv / totalMv : 0;
-    return { p, info, weight };
-  }).sort((a, b) => b.weight - a.weight);
+/** 万元口径：看板头要一眼看懂钱，不要 104,731.28 这种数字 */
+const liveMoney = (v: number | null): string => {
+  if (v === null || !Number.isFinite(v)) return '—';
+  const abs = Math.abs(v);
+  if (abs >= 10000) return (v / 10000).toFixed(2) + ' 万';
+  return v.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+};
 
-  const matched = rows.filter((r) => r.info);
-  const unmatched = rows.filter((r) => !r.info);
-  const indByName = new Map((hm.industries || []).map((i) => [i.name, i]));
+/** A 股口径：涨红跌绿 */
+const liveTone = (v: number | null): string =>
+  (v === null || !Number.isFinite(v) || v === 0) ? 'live-flat' : (v > 0 ? 'live-up' : 'live-down');
 
-  const tableRows = matched.map((r) => {
-    const ind = indByName.get(r.info!.industry);
-    const pct = r.info!.pct_chg;
-    const cls = (pct ?? 0) > 0 ? 'num pos' : (pct ?? 0) < 0 ? 'num neg' : 'num';
-    const indCls = (ind?.pct_avg ?? 0) > 0 ? 'num pos' : (ind?.pct_avg ?? 0) < 0 ? 'num neg' : 'num';
-    return '<tr><td><code>' + escapeHtml(r.p.code) + '</code></td><td>' + escapeHtml(r.p.name || '') + '</td>'
-      + '<td>' + escapeHtml(r.info!.industry) + '</td>'
-      + '<td class="' + cls + '">' + (pct === null ? '—' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%') + '</td>'
-      + '<td class="' + indCls + '">' + (ind?.pct_avg === null || ind?.pct_avg === undefined ? '—' : (ind.pct_avg > 0 ? '+' : '') + ind.pct_avg.toFixed(2) + '%') + '</td>'
-      + '<td class="num">' + (r.weight * 100).toFixed(1) + '%</td></tr>';
-  }).join('');
+const livePctText = (v: number | null, digits = 2): string =>
+  (v === null || !Number.isFinite(v)) ? '—' : (v > 0 ? '+' : '') + v.toFixed(digits) + '%';
 
-  const table = '<div class="swing-table-wrap"><table class="swing-table"><thead><tr>'
-    + '<th>代码</th><th>名称</th><th>所属行业</th><th class="num">个股今日</th>'
-    + '<th class="num">行业今日均值</th><th class="num">权重</th></tr></thead><tbody>'
-    + tableRows + '</tbody></table></div>';
+function liveSignalChip(sig: LiveSignalRef | null): string {
+  if (!sig) return '<span class="muted">—</span>';
+  // 复用档案页已有的信号配色（watch-sig-*），保证同一个 kind 在两个页面颜色一致
+  const tone = sig.kind === 'stop' || sig.kind === 'trim' ? 'watch-sig-bad' : sig.kind === 'buy' || sig.kind === 'target' ? 'watch-sig-good' : 'watch-sig-info';
+  return '<span class="watch-signal ' + tone + '" title="' + escapeHtml(sig.at || '') + '">' + escapeHtml(SIGNAL_LABEL[sig.kind] || sig.kind) + '</span>';
+}
 
-  const unmatchedNote = unmatched.length
-    ? '<p class="muted">未归类的 ' + unmatched.length + ' 只（ETF 等无行业分类）：'
-      + unmatched.map((r) => escapeHtml(r.p.code + ' ' + (r.p.name || ''))).join('、') + '</p>'
+function liveHoldingRow(h: LiveHoldingRow, asking: string): string {
+  const stopTone = h.dist_stop_pct === null ? '' : (h.dist_stop_pct <= 0 ? 'live-bad' : h.dist_stop_pct <= 5 ? 'live-warn' : 'live-flat');
+  const conflict = h.stop_conflict
+    ? '<span class="live-flag" title="' + escapeHtml('档案/执行止损 ' + val(h.eff_stop) + '（' + h.eff_stop_src + '）与最新结论止损 ' + val(h.concl_stop) + ' 相差超过 3%，请决定以哪个为准') + '">⚠</span>'
     : '';
+  return '<tr class="clickable-row" data-action="select-code" data-code="' + escapeHtml(h.code) + '">'
+    + '<td><div class="stock-cell"><strong>' + escapeHtml(h.name) + '</strong><small>' + escapeHtml(h.code) + '</small></div></td>'
+    + '<td><div class="watch-price"><b>' + escapeHtml(liveNumText(h.price, 3)) + '</b><small class="' + liveTone(h.change_pct) + '">' + escapeHtml(livePctText(h.change_pct)) + '</small></div></td>'
+    + '<td><div class="watch-price"><b>' + escapeHtml(liveNumText(h.cost, 3)) + '</b><small>' + escapeHtml(liveNumText(h.shares, 0)) + '股</small></div></td>'
+    + '<td class="' + liveTone(h.pnl_pct) + '">' + escapeHtml(livePctText(h.pnl_pct))
+    + '<small class="live-sub ' + liveTone(h.pnl) + '">' + escapeHtml(liveMoney(h.pnl)) + '</small></td>'
+    + '<td class="num">' + escapeHtml(liveNumText(h.weight_pct, 1)) + '%</td>'
+    + '<td><div class="watch-price"><b>' + escapeHtml(liveNumText(h.eff_stop, 3)) + conflict + '</b><small>' + escapeHtml(h.eff_stop_src) + (h.concl_stop !== null && h.stop_conflict ? ' / 结论 ' + escapeHtml(val(h.concl_stop)) : '') + '</small></div></td>'
+    + '<td class="' + stopTone + '">' + escapeHtml(h.dist_stop_pct === null ? '—' : livePctText(h.dist_stop_pct))
+    + '<small class="live-sub">' + escapeHtml(h.stop_state) + '</small></td>'
+    + '<td>' + liveSignalChip(h.signal) + '</td>'
+    + '<td class="table-action"><button class="text-button live-why" data-action="live-ask" data-code="' + escapeHtml(h.code) + '"' + (asking === h.code ? ' disabled' : '') + '>' + escapeHtml(asking === h.code ? '思考中…' : '为什么') + '</button></td></tr>';
+}
 
-  const ups = (hm.industries || []).filter((i) => (i.pct_avg ?? 0) > 0).length;
-  const downs = (hm.industries || []).filter((i) => (i.pct_avg ?? 0) < 0).length;
-  const temp = '<p class="muted">市场温度：' + ups + ' 个行业上涨 / ' + downs + ' 个下跌'
-    + '（覆盖 ' + hm.universe + ' 只 · ' + (hm.as_of || '—') + '：不是全市场，只看系统已知标的）</p>';
+function liveWatchRow(w: LiveWatchRow): string {
+  const zone = (w.buy_low !== null && w.buy_high !== null) ? liveNumText(w.buy_low, 3) + ' ~ ' + liveNumText(w.buy_high, 3) : '未设买区';
+  const distTone = w.in_buy_zone ? 'live-good' : (w.dist_buy_pct !== null && w.dist_buy_pct > -3 ? 'live-warn' : 'live-flat');
+  return '<tr class="clickable-row" data-action="select-code" data-code="' + escapeHtml(w.code) + '">'
+    + '<td><div class="stock-cell"><strong>' + escapeHtml(w.name) + '</strong><small>' + escapeHtml(w.code) + '</small></div></td>'
+    + '<td><div class="watch-price"><b>' + escapeHtml(liveNumText(w.price, 3)) + '</b><small class="' + liveTone(w.change_pct) + '">' + escapeHtml(livePctText(w.change_pct)) + '</small></div></td>'
+    + '<td class="' + (w.in_buy_zone ? 'live-good' : '') + '">' + escapeHtml(zone) + (w.in_buy_zone ? ' <span class="watch-signal watch-sig-good">已到价</span>' : '') + '</td>'
+    + '<td class="' + distTone + '">' + escapeHtml(livePctText(w.dist_buy_pct)) + '</td>'
+    + '<td>' + liveSignalChip(w.signal) + '</td></tr>';
+}
 
-  return '<section class="panel">' + head + temp + table + unmatchedNote + '</section>';
+const LIVE_LOG_TAG: Record<string, string> = { broadcast: '播报', event: '事件', 'tick-error': '异常', ask: '快问', explain: '解释' };
+
+function liveLogItem(e: LiveLogEntry): string {
+  const tone = e.level === 'bad' ? 'live-bad' : e.level === 'warn' ? 'live-warn' : e.level === 'good' ? 'live-good' : 'live-flat';
+  const body = e.kind === 'broadcast' ? (e.text || '')
+    : e.kind === 'ask' || e.kind === 'explain' ? '问：' + (e.question || '') + '｜答：' + (e.answer || '')
+      : (e.message || e.text || '');
+  return '<li class="live-log-item"><span class="live-log-time">' + escapeHtml(formatDateTime(e.ts, true)) + '</span>'
+    + '<span class="live-log-tag ' + tone + '">' + escapeHtml(LIVE_LOG_TAG[e.kind] || e.kind) + '</span>'
+    + '<span class="live-log-text">' + escapeHtml(truncate(body, 220)) + '</span></li>';
+}
+
+function livePanel(state: AppState): string {
+  const doc = state.liveWatch;
+  if (!doc) {
+    // 接口未就绪时退回旧档案面板：页面不会空，也不会因为一次失败就看不到监控状态
+    const hint = state.liveWatchLoading ? '正在读取盘中盯盘状态…'
+      : (state.liveWatchError || '盘中盯盘接口尚未就绪') + (state.liveWatchError ? '（改动 index.js 后需重启 DSH GUI 才生效）' : '');
+    return '<section class="panel live-panel"><div class="live-head"><div class="live-head-main"><span class="live-indicator"><i></i>盘中盯盘未就绪</span></div></div>'
+      + '<p class="muted compact">' + escapeHtml(hint) + '</p></section>' + watchPanel(state);
+  }
+  const s = doc.settings;
+  const snap = doc.snapshot;
+  const sess = doc.session;
+  const running = s.enabled && sess.inSession;
+  const a = snap.account;
+  const head = '<div class="live-head">'
+    + '<div class="live-head-main">'
+    + '<span class="' + (running ? 'live-indicator active' : 'live-indicator') + '"><i></i>' + escapeHtml(sess.label) + ' ' + escapeHtml(sess.hm) + (s.enabled ? '' : ' · 已暂停') + '</span>'
+    + '<div class="live-account">'
+    + '<span>总资产 <b>' + escapeHtml(liveMoney(a.total_asset)) + '</b></span>'
+    + '<span>现金 <b>' + escapeHtml(liveMoney(a.cash)) + '</b></span>'
+    + '<span>仓位 <b>' + escapeHtml(liveNumText(a.position_pct, 1)) + '%</b></span>'
+    + '<span>浮动 <b class="' + liveTone(a.float_pnl) + '">' + escapeHtml((a.float_pnl !== null && a.float_pnl > 0 ? '+' : '') + liveMoney(a.float_pnl)) + '</b></span>'
+    + '</div></div>'
+    + '<div class="live-actions">'
+    + ['极简', '标准', '盯盘'].map((p) => '<button class="live-preset' + (s.preset === p ? ' active' : '') + '" data-action="live-preset" data-preset="' + p + '"' + (state.liveWatchSaving ? ' disabled' : '') + '>' + p + '</button>').join('')
+    + '<button class="button ' + (s.enabled ? 'button-secondary' : 'button-primary') + '" data-action="live-toggle"' + (state.liveWatchSaving ? ' disabled' : '') + '>'
+    + icon(s.enabled ? 'close' : 'play', 14) + (s.enabled ? ' 暂停盯盘' : ' 开启盯盘') + '</button>'
+    + '<button class="button button-secondary" data-action="live-tick"' + (state.liveWatchTicking ? ' disabled' : '') + '>'
+    + icon('refresh', 14) + (state.liveWatchTicking ? ' 抓取中…' : ' 立即刷新') + '</button>'
+    + '</div></div>';
+  const meta = '<p class="live-meta">每 ' + s.intervalSec + ' 秒判定 · 播报节奏 ' + (s.broadcastEveryMin > 0 ? s.broadcastEveryMin + ' 分钟' : '仅事件')
+    + ' · 最近 tick ' + escapeHtml(s.lastTickAt ? formatDateTime(s.lastTickAt, true) : '—')
+    + ' · 今日 ' + s.tickCount + ' 次判定 / ' + s.eventCount + ' 条事件 / 快问 ' + s.llmCount + '/' + s.llmDailyCap
+    + (s.lastError ? ' · <span class="live-bad">上次失败：' + escapeHtml(truncate(s.lastError, 80)) + '</span>' : '')
+    + '</p>';
+  const conflictBar = snap.conflicts.length
+    ? '<div class="inline-warning">' + icon('alert', 15) + '<span><b>' + snap.conflicts.length + ' 项止损口径冲突</b>（档案执行口径 vs 最新结论，未自动合并）：'
+      + snap.conflicts.slice(0, 3).map((c) => escapeHtml(c)).join('；') + '。点标的进档案决定以哪个为准。</span></div>'
+    : '';
+  const holdingsTable = snap.holdings.length
+    ? '<div class="table-scroll"><table class="data-table live-table"><thead><tr><th>标的</th><th>现价 / 今日</th><th>成本 / 股数</th>'
+      + '<th title="浮动盈亏（元）与收益率">浮盈</th><th>权重</th><th>生效止损</th><th>距止损</th><th>今日信号</th><th></th></tr></thead><tbody>'
+      + snap.holdings.map((h) => liveHoldingRow(h, state.liveAsking)).join('') + '</tbody></table></div>'
+    : emptyState('账本里没有在持标的', '先在持仓工作区确认账本，盯盘会按账本逐只比对。', 'layers');
+  const watchTable = snap.watch.length
+    ? '<details class="live-watch-details"><summary>观察池 ' + snap.watch.length + ' 只 · ' + snap.watch.filter((w) => w.in_buy_zone).length + ' 只已到价</summary>'
+      + '<div class="table-scroll"><table class="data-table live-table"><thead><tr><th>标的</th><th>现价 / 今日</th><th>买入区</th><th>距买区</th><th>今日信号</th></tr></thead><tbody>'
+      + snap.watch.map(liveWatchRow).join('') + '</tbody></table></div></details>'
+    : '';
+  const log = (doc.log || []).slice(0, 12);
+  const timeline = log.length
+    ? '<ul class="live-log">' + log.map(liveLogItem).join('') + '</ul>'
+    : '<p class="muted compact">还没有播报记录。开启盯盘后，每 ' + s.broadcastEveryMin + ' 分钟会在这里留一条事实对照，触发规则时立即记一条事件。</p>';
+  const answer = state.liveAnswer
+    ? '<div class="live-answer"><div class="live-answer-head">' + icon('chat', 14) + '<b>' + escapeHtml(state.liveAnswer.code) + '</b><span>盘中快问</span></div>'
+      + '<p>' + escapeHtml(state.liveAnswer.text || state.liveAnswer.error || '') + '</p></div>'
+    : '';
+  return '<section class="panel live-panel" id="overview-live">'
+    + sectionHeading('盘中盯盘', '规则层每 ' + s.intervalSec + ' 秒抓一次现价 · 只做事实对照，不给新建议', '')
+    + head + meta + conflictBar + holdingsTable + watchTable
+    + '<div class="live-log-wrap">' + '<h3 class="live-sub-head">盘中时间线</h3>' + timeline + '</div>'
+    + answer
+    + '</section>';
 }
 
 export function renderOverview(state: AppState): string {
@@ -238,7 +301,7 @@ export function renderOverview(state: AppState): string {
   const askLast = lastReport ? '<button class="button button-secondary" data-action="ask-report" data-path="' + escapeHtml(lastReport.path) + '">' + icon('chat', 15) + '追问这份报告</button>' : '';
   const lastAnalysis = lastRun ? '<section class="panel last-analysis"><div class="last-analysis-label"><span>' + icon('sparkles', 15) + '上次分析</span><time>' + formatDateTime(lastRun.ts_local || lastRun.created_at) + (lastBackfilled ? ' · 报告回填' : '') + '</time></div><div class="last-analysis-main"><div class="last-analysis-copy"><div class="last-stock"><strong>' + escapeHtml(stockName(index, lastCode)) + '</strong><span class="mono">' + escapeHtml(lastCode || '—') + '</span>' + (lastRecord ? stanceBadge(lastRecord.stance) : '<span class="stance-badge stance-neutral">未形成结构化结论</span>') + '</div><h2 title="' + escapeHtml(lastRun.question || '未命名研究任务') + '">' + escapeHtml(truncate(lastRun.question || '未命名研究任务', 64)) + '</h2><p>' + escapeHtml(truncate(lastRecord?.thesis || '本次运行没有提取到结论摘要，可直接打开报告查看完整分析。', 180)) + '</p><div class="last-levels"><span>目标 <b>' + escapeHtml(lastRecord?.target ?? '—') + '</b></span><span>止损 <b>' + escapeHtml(lastRecord?.stop ?? '—') + '</b></span><span>耗时 <b>' + formatDuration(lastRun.elapsed_ms) + '</b></span></div></div><div class="last-analysis-actions">' + openLast + askLast + (lastCode ? '<button class="button button-secondary" data-action="select-code" data-code="' + escapeHtml(lastCode) + '">' + icon('archive', 15) + '查看档案</button>' : '') + '</div></div></section>' : '';
 
-  const runItems = rows.slice(0, 5).map((run) => {
+  const runItems = rows.slice(0, 3).map((run) => {
     const code = runCode(run, records);
     const record = runConclusion(run, records) || (code ? latestRecords.find((item) => item.code === code) : undefined);
     const hasReport = Boolean(reportForRun(index, run));
@@ -246,7 +309,10 @@ export function renderOverview(state: AppState): string {
     const actionId = run.backfilled ? String(run.report_id ?? '') : String(run.id);
     return '<button class="recent-run" data-action="' + action + '" data-id="' + escapeHtml(actionId) + '"><span class="recent-run-top"><span class="mode-tag">' + escapeHtml(run.mode || '未标模式') + '</span>' + (record ? stanceBadge(record.stance) : runStatusBadge(run)) + '</span><strong>' + escapeHtml(stockName(index, code)) + '</strong><span class="recent-run-code">' + escapeHtml(code || '组合/市场') + '</span><span class="recent-run-question">' + escapeHtml(truncate(run.question || '未命名研究任务', 48)) + '</span><span class="recent-run-meta"><span>' + formatDateTime(run.ts_local || run.created_at, true) + '</span><span>' + (hasReport ? '可读报告' : '无归档') + ' · ' + formatDuration(run.elapsed_ms) + '</span></span></button>';
   }).join('');
-  const recentRuns = '<section class="panel overview-runs">' + sectionHeading('最近运行', '最近 5 次流水线：标的、结论与报告入口', '<button class="text-button" data-action="goto-runs">全部记录' + icon('arrow', 14) + '</button>') + '<div class="recent-run-strip">' + (runItems || emptyState('暂无运行记录', '从一键任务开始第一次分析。', 'runs')) + '</div></section>';
+  const recentRuns = '<section class="panel overview-runs">' + sectionHeading('最近运行', '最近 3 次流水线：标的、结论与报告入口', '<button class="text-button" data-action="goto-runs">全部记录' + icon('arrow', 14) + '</button>') + '<div class="recent-run-strip">' + (runItems || emptyState('暂无运行记录', '从一键任务开始第一次分析。', 'runs')) + '</div></section>';
 
-  return header + warning + lastAnalysis + sectorExposurePanel(state) + recentRuns + watchPanel(state);
+  // 概览第一屏给「现在怎么样了」（盘中盯盘），其次才是「上次分析」。
+  // 行业暴露面板已移除：热力快照从未生成过，且 4 只持仓里 2 只是 ETF 无行业分类，
+  // 面板长期停在一句「跑脚本生成快照」的提示上，占位置不产生信息。API 与生成脚本保留备用。
+  return header + warning + livePanel(state) + lastAnalysis + recentRuns;
 }

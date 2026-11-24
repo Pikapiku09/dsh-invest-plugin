@@ -1,106 +1,90 @@
 {
-  "latest": "0.75.4",
-  "generatedAt": "2026-11-23T02:40:00.000Z",
+  "latest": "0.76.1",
+  "generatedAt": "2026-11-24T03:28:30.088Z",
   "releases": [
+    {
+      "version": "0.76.1",
+      "date": "2026-11-24",
+      "title": "修复：重启后验收发现的两个真 bug；把预留的两个开关接上",
+      "items": [
+        "0.76.0 交付后用户重启 DSH 加载新后端，验收时发现两处逻辑错，且当时 notifyLevel / llmExplain 只是写进了设置结构、没有消费方。本版把它们补完。",
+        "**点三档预设无效**：POST /api/live-watch 里「手改间隔 → 降级为自定义」的判断在选了预设时也会执行，刚写进去的 preset 立刻被覆盖成「自定义」，于是三档按钮永远选不中、看板永远不高亮当前档。改为仅在请求未显式带 preset 时才做降级判断。",
+        "**盘中快问配额可能被覆盖**：解释层调用会让 llmCount +1，但同一 tick 末尾的 patch 用的是 tick 开始时的旧值，会把 +1 覆盖回去（表现为配额永远用不完）。改为末尾重读设置后取较大值。",
+        "notifyLevel：概览页轮询到 **规则层触发的事件**（不含 30 分钟例行播报）时，按 bad / warn / all 门槛推系统通知，去重键含时间戳，重复轮询不会重复弹。",
+        "llmExplain：开关打开且事件达到 llmMinLevel 时，自动生成一句解释写入时间线（kind=explain），仍受 llmDailyCap 约束；解释失败不影响规则层产出。",
+        "新增 test/live-watch-api.test.js（11 项）：快照口径（实时价重算、非实盘过滤、生效止损优先级、结论冲突、今日信号、观察池排序）、三档预设与自定义降级、越界拒绝、环回守卫。仓库测试 260 → 271。",
+        "规则层实跑：4 只持仓全部取到实时价（000823 19.59 −1.51%、600118 49.44 +4.19%、 159813 0.537 +2.68%、510500 6.203 +0.70%），市值/权重/浮动按实时价重算（市值 92,534、浮动 −35），播报正文正常渲染（含「接近买区」三条与「止损口径冲突 2 项」）。",
+        "闸门与去重：清掉 last_signal_key 后首 tick 触发两条止损并播报；第二 tick 不重复触发、 30 分钟内不重复播报（ticks=2 events=2）。"
+      ]
+    },
+    {
+      "version": "0.76.0",
+      "date": "2026-11-24",
+      "title": "新增：盘中盯盘（live-watch）+ 概览页改造成「现在怎么样了」",
+      "items": [
+        "原有流水线是批处理：跑一次 → 出一份报告 → 下一个交易时段再跑。行情变化快的时候，真正要回答的是「现在距我设的线还有多远、有没有已经破了、观察池有没有到价」，而这部分以前只能靠人盯盘或手动点「刷新现价」。",
+        "同时盘中最怕两件事：① 为了几十秒的判断去烧一整个多角色流水线（几分钟 + 大量 token）； ② 高频抓价把 watchlist.json 反复全量重写（60 秒一次 ≈ 11.5MB/日）。",
+        "另外 observed 现价只落 current_price，没有当日涨跌，看板无法一眼判断「今天是不是在动」。",
+        "**三层解耦**：规则层（抓价 + 算偏离 + 比对规则，0 token）／播报层（模板渲染事实对照，0 token）／解释层（仅手动点「为什么」才调 LLM，每日上限 llmDailyCap 20 次）。",
+        "**三档预设**：极简（120 秒判定 / 不例行播报）、**标准（60 秒 / 30 分钟播报，默认）**、盯盘（30 秒 / 15 分钟播报）。手改间隔即退化为「自定义」。",
+        "**防插针**：stop/invalidate/target 需连续 confirmTicks（默认 2）次成立，或破线幅度 ≥ confirmBandPct（默认 0.3%）直接成立；buy/add/trim 机会类信号不设门槛（错过买点的成本高于误报）。价格回到线内即清零待确认计数，不允许「隔一小时凑够两次」。",
+        "**时段闸**：仅工作日 09:30–11:30 / 13:00–15:00 自动跑；手动「立即刷新」不受限制。",
+        "**节流与退避**：按预设间隔节流；连续 3 次抓取失败退避 5 分钟并写一条 tick-error 时间线。"
+      ]
+    },
+    {
+      "version": "0.75.7",
+      "date": "2026-11-23",
+      "title": "修复：跑分析时桌面自己弹出 PowerShell 窗口，关掉就中断任务",
+      "items": [
+        "用户在「个股体检」运行中（约 2 分 37 秒）发现桌面突然出现一个 Windows PowerShell 5.1 窗口，里面已经敲好 echo UIA_TEST_OK; node \".../scripts/fetch_pack.js\" 600118；用户以为是系统异常关掉窗口，任务随即中断。",
+        "一键任务的阶段子代理继承了完整工具目录（97 个），其中包含 mcp__wincu__windows_computer_use_* 桌面自动化全家桶。",
+        "深度分析师想执行 fetch_pack.js 时没有用后台的 pwsh，而是 launch_app(powershell.exe) → type_text → keypress(enter)，把窗口弹到用户桌面上；用户关闭窗口即杀掉该进程，阶段中断、任务失败。",
+        "会话取证：本次阶段会话 tool/call 序列为 acp_status → wincu_health → list_windows → launch_app → type_text → keypress → ocr；同款 launch_app 调用在 11-20 就已出现过，只是当时没有被注意到。",
+        "src/prompts.js 的公共数据段 DATA_BASE 顶部新增「工具红线」：",
+        "该段随 4 个角色提示词与波段周检共用，改一处覆盖全部阶段。",
+        "只改提示词文本，不动工具挂载与流水线逻辑；重建 dist/ 与 packages/dsh-invest/lib/prompts.js 后生效（需重启 DSH）。"
+      ]
+    },
+    {
+      "version": "0.75.6",
+      "date": "2026-11-23",
+      "title": "新增：最近任务「取消任务」——排队中直接摘出队列，运行中立即中断",
+      "items": [
+        "后端新增 POST /dsh-invest/api/job/cancel（body { id }）与 cancelJob()：",
+        "executeJob 增加取消闸门：取消发生在「创建执行 Agent」期间时直接结束、不进入 LLM 流水线；工具返回后也不再把状态覆盖成 done；finally 里的重建索引与知识库整理对已取消任务跳过。",
+        "前端：JobStatus 新增 cancelled（「已取消」灰徽标）；最近任务卡片在「排队中 / 运行中」时显示「取消任务」按钮，二次确认文案按状态区分；1.2 秒轮询遇到 cancelled 即收尾并提示。",
+        "测试：新增 test/job-cancel.test.js（排队取消 / 运行中中断 / 重复取消 409 / 未知任务 404）。",
+        "取消不归档本次结果（不写报告、不进结论库），已产生的中间内容不保留；",
+        "取消后专用执行 Agent 仍会正常 dispose()，不会泄漏。"
+      ]
+    },
+    {
+      "version": "0.75.5",
+      "date": "2026-11-23",
+      "title": "修复：一键任务「任务进度中断：TypeError: Cannot read properties of undefined (reading 'id')」——子代理激活 spec 形状不合 0.2.x 契约",
+      "items": [
+        "标的档案点「个股体检」，几秒内中断，toast 报上面那句 TypeError；",
+        "runs.jsonl 里三个角色阶段（市场消息 / 深度分析 / 总判断）在 15ms 内全部同句失败、ms: 0，模型和行情接口根本没走到——说明炸在「创建子代理」这一步，不是分析逻辑。",
+        "新增模块级 activationSpecFor(spec, text, delivery)，按 0.2.x 契约产出 { provider, label, prompt:[{type:\"text\",text}], parent, agentOptions?, cwd?, signal?, delivery }，**parent 在顶层**；…",
+        "startStage（一键任务阶段）与 runPromptSubagent（辅助子代理）统一走它，保留 caller → parent 的 delivery 回退；",
+        "src/host.js（dist 生成源，code.host 形态）同步同一处改动，node tools/build.js 产物与源码一致；",
+        "新增 test/subagent-activation-contract.test.js：假宿主**只有** startActivation 且照抄 spec.parent.id 语义，含「旧形状必须复现那句 TypeError」的回归锚点，以及一条真跑 tool.execute({mode:'个股'}) 的端到端用例。"
+      ]
+    },
     {
       "version": "0.75.4",
       "date": "2026-11-23",
-      "title": "修复：账本/标的档案全线写不进去",
+      "title": "修复：账本/标的档案/审计全线写不进去 —— 病根是 `agents.roots()` 在 DSH 0.2.x 已不存在",
       "items": [
-        "病根：DSH 0.2.x 的 ctx.agents 没有 roots()（0.1.x 老方法），插件 5 处调用恒得空数组",
-        "空候选 → fs.writeText 不带沙箱策略 → 宿主用「无会话」的部署默认根判定 → 工作区内也报 file access denied",
-        "新增 liveAgents()：list() 优先、roots() 兜底；子代理 parent、会话宿主模型、沙箱策略候选统一改过去",
-        "策略候选改为按目标路径过滤：只用 workspaceRoot 真覆盖目标的会话，不再盲试到别的会话",
-        "完全没有可覆盖会话时给能照着查的中文错误，而不是一句 file access denied",
-        "新增 test/host-agents-contract.test.js（假宿主只有 list()，照抄真实沙箱门槛）守住这条契约"
-      ]
-    },
-    {
-      "version": "0.75.3",
-      "date": "2026-11-20",
-      "title": "修复：持仓确认「账本成功、审计失败」",
-      "items": [
-        "v0.75.2 只给 writeJsonFile 加了候选重试，审计 holdings_audit.jsonl 与账本备份仍是单策略（candidates[0]），照样被错配的会话拒绝",
-        "后果：账本已落盘却提示「确认写入失败」；草稿不清理、标的档案不同步；响应里的备份路径其实没写成",
-        "所有落盘写入改走 writeTextWithPolicyRetry()，命中过的候选记住（fsPolicyHint），后续写入不再每次先失败一次",
-        "审计追加收敛为 appendHoldingsAudit()，confirm / 刷新现价 / 档案同步三处共用",
-        "审计与档案同步改为只回告警（响应新增 auditWarning），不再阻断已落盘的账本",
-        "新增回归测试 test/holdings-audit-policy.test.js：首个候选被拒时，账本、备份、审计仍必须全部写成功"
-      ]
-    },
-    {
-      "version": "0.75.2",
-      "date": "2026-11-20",
-      "title": "修复：持仓确认写入失败（沙箱策略取错了会话）",
-      "items": [
-        "插件每次写文件都现算沙箱策略，原实现固定取 agents.roots() 的最后一个会话根；",
-        "最后一个根不一定是发起写入的会话：机器上同时存在多个工作区（E:\\Dsh_WorkSapce\\Dify_Agents 与同级的 E:\\Dsh_WorkSapce\\0815-1120、以及重启后新建的 no-cwd 会话）；",
-        "按别的工作区解析策略时，账本目录被判为越界，于是 workspace-write 模式拒绝写入。",
-        "新增 fsPolicyCandidates()：候选顺序为「工作区覆盖 BASE_DIR 的会话根优先，其余按新到旧兜底」；",
-        "writeJsonFile 逐个候选策略重试（最多 4 个），不再赌某一个；",
-        "候选取不到时退回宿主默认策略。"
-      ]
-    },
-    {
-      "version": "0.75.1",
-      "date": "2026-11-20",
-      "title": "修复：判断质量的赔率统计把「观察」算进了方向收益",
-      "items": [
-        "命中率的判定用 bullish || bearish，观察天然被排除；",
-        "但聚合方向收益时只对 bearish 取反、「其余一律当看多」，观察因此混了进去；",
-        "源码注释写的是「观察不计」，代码没有做到——**注释与实现不一致，且没有测试守住**。",
-        "把两张立场表提成模块级常量 BULLISH_STANCES / BEARISH_STANCES，命中率与赔率共用同一套口径；",
-        "方向收益只累加这两类立场，其余（观察、以及 减仓/回避 这类非标准取值）一律不计方向。",
-        "分母 68 → 33，与命中率同源；",
-        "盈亏比 0.87 → 1.01；",
-        "单笔期望 −1.08% → +1.64%。"
-      ]
-    },
-    {
-      "version": "0.75.0",
-      "date": "2026-11-20",
-      "title": "宿主服务取值收敛到单点访问器",
-      "items": [
-        "**保留「用的时候现取」**。宿主可能先挂插件、后注册服务；若在 apply 时取一次存起来，会永远拿到空值——那才是真会改坏。访问器只转发，不缓存",
-        "**放在模块级并显式接收 ctx**，不写成 apply 内的闭包。这样调用点无论在 apply 内部还是外部函数里都不会因作用域拿不到 ctx",
-        "访问器**原样透传多余参数**。插件里有 ctx.get(n, true) / ctx.get(n, false) 这种候选探测写法，第二个参数是查询标志，吞掉它会让这段静默改变含义"
-      ]
-    },
-    {
-      "version": "0.74.0",
-      "date": "2026-11-20",
-      "title": "新增 DSH 升级兼容性防线",
-      "items": [
-        "**声明式拦截**：package.json 增加 engines.dsh（>=0.2.0 <0.3.0）。DSH 支持该字段，不满足时拒绝激活并回报 incompatible-version，指出具体缺哪条要求",
-        "**离线自检**：新增 tools/compat-check.mjs，用假 ctx 跑一遍 apply()，断言模块可加载、apply 不抛、effect 无异常、路由/工具/提示段都注册（7 条关键路由点名检查），并打印插件依赖的宿主接口清单。跑 npm run compat",
-        "**运行期守卫**：apply() 开头先检查 webServer/tools/systemPrompt/effect/get，缺任何一个就打印中文排查清单并干净 return，不再抛异常连累 profile",
-        "**文档**：新增 COMPATIBILITY.md，写明依赖面、三种失效模式、升级五步法、回滚命令，以及四条目前无法自动检测的不可控项"
-      ]
-    },
-    {
-      "version": "0.73.0",
-      "date": "2026-11-18",
-      "title": "修 8 处交互问题",
-      "items": [
-        "**图表可放大**：点报告与知识库里的图开浮层看大图，点空白或 Esc 关闭",
-        "**知识库记住上次的标的**：进来回到上次追问的那只，不再跳到字母序第一只",
-        "**输入框不再丢焦点**：中文输入法打完一段字后光标不会消失",
-        "**标的档案调整顺序**：监控规则移到基本面评级之上",
-        "**实盘绩效可折叠**：默认折叠，摘要行常驻当前总资产与最大回撤",
-        "**提问可复制、可改写重发**：用户消息悬停出现「复制」「修改」",
-        "**响应超时放宽**：知识库追问是模型调用，原 30 秒上限太短，改为 180 秒",
-        "**回车即发送**：Enter 发送，Shift + Enter 换行"
-      ]
-    },
-    {
-      "version": "0.72.1",
-      "date": "2026-11-18",
-      "title": "使用说明改分段排版，正文去除脚本名",
-      "items": [
-        "export_strategy_health → 策略快照导出任务",
-        "run_strategy_trials → 结论验证任务",
-        "refresh_heatmap_snapshot → 行业热力刷新任务",
-        "模型强度 default → 「不下发」，由模型自行决定"
+        "标的档案点「已清仓」报 状态更新失败：cannot write \"...\\.dsh-invest\\store\\watchlist.json\": file access denied under workspace-write mode；",
+        "持仓工作区确认/上传账本报同一类错；",
+        "磁盘可写、目录里别的文件宿主也能写，只有插件自己的写入被拒。",
+        "新增模块级 liveAgents(ctx)：agents.list() 优先、roots() 兜底，两个版本都能跑；5 处调用点统一改过去；",
+        "fsPolicyCandidates(targetPath) 改为**按目标路径过滤**：只保留 workspaceRoot（含 additionalWritableRoots）确实覆盖目标的策略，不再盲试到别的会话；一个都不覆盖时保留部署默认策略作为最后候选；",
+        "writeTextWithPolicyRetry 用 target.displayPath 判定；完全没有候选且宿主拒绝时，抛出能照着查的中文错误（含目标路径与活跃会话数），不再是一句 file access denied；",
+        "runPromptSubagent 的 parent 优先选「工作区覆盖 BASE_DIR」的会话；",
+        "新增 test/host-agents-contract.test.js：假宿主只暴露 list() 且 fs.writeText 照抄真实沙箱门槛，锁定「确认持仓」与「档案置已清仓」两条路径必须写成功；"
       ]
     }
   ]

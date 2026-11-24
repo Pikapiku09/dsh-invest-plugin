@@ -173,6 +173,7 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
 .status-running { border-color: rgba(111, 159, 248, .2); background: rgba(111, 159, 248, .07); color: #8eacf0; }
 .status-running i { animation: pulse 1.5s ease-in-out infinite; }
 .status-queued { border-color: rgba(217, 174, 100, .18); background: rgba(217, 174, 100, .05); color: #c8a874; }
+.status-cancelled { border-color: rgba(150, 162, 178, .18); background: rgba(150, 162, 178, .05); color: #9aa7b8; }
 .stance-badge { padding: 3px 8px; font-size: 10px; }
 .stance-bullish { border-color: rgba(84, 200, 147, .22); background: rgba(84, 200, 147, .07); color: #65ca98; }
 .stance-bearish { border-color: rgba(238, 123, 132, .22); background: rgba(238, 123, 132, .07); color: #eb858d; }
@@ -299,6 +300,9 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
 .job-status-icon.done { background: rgba(84, 200, 147, .07); color: var(--green); }
 .job-status-icon.failed { background: rgba(238, 123, 132, .07); color: var(--red); }
 .job-status-icon.queued { background: rgba(217, 174, 100, .07); color: var(--amber); }
+.job-status-icon.cancelled { background: rgba(150, 162, 178, .07); color: #98a4b3; }
+.job-cancel-button { color: #d7a1a5; }
+.job-cancel-button:hover { border-color: rgba(238, 123, 132, .35); color: #f2a9ae; }
 .job-title { min-width: 0; flex: 1; }
 .job-title > div { display: flex; align-items: center; gap: 9px; }
 .job-title strong { overflow: hidden; color: #bfcbd8; font-size: 11px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
@@ -710,6 +714,9 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
 .theme-light .status-failed { color: #c4454c; }
 .theme-light .status-running { color: #3d6fce; }
 .theme-light .status-queued { color: #96701f; }
+.theme-light .status-cancelled { color: #66778c; }
+.theme-light .job-cancel-button { color: #a85058; }
+.theme-light .job-cancel-button:hover { color: #c4454c; }
 .theme-light .stance-bullish { color: #1e8a58; }
 .theme-light .stance-bearish { color: #c4454c; }
 .theme-light .stance-watch { color: #96701f; }
@@ -1136,3 +1143,48 @@ button.code-tag:hover { border-color: #5274a7; color: #b4cef6; }
   border: none; background: rgba(255, 255, 255, .16); color: #fff; font-size: 20px; line-height: 1; cursor: pointer; }
 .chart-lightbox-x:hover { background: rgba(255, 255, 255, .3); }
 img.report-chart { cursor: zoom-in; }
+
+/* ===== 盘中盯盘（live-watch，2026-11-24）=====
+   放在概览第一屏：先回答「现在怎么样了」，再回答「上次分析了什么」。
+   颜色一律走 token，涨跌沿用 A 股口径（红涨绿跌）。 */
+.live-panel { display: flex; flex-direction: column; }
+.live-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+.live-head-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.live-account { display: flex; flex-wrap: wrap; gap: 3px 18px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.live-account b { margin-left: 4px; color: var(--text); font-weight: 650; }
+.live-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.live-preset { padding: 5px 11px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font-size: 12px; transition: color .12s ease, border-color .12s ease, background .12s ease; }
+.live-preset:hover:not(:disabled) { color: var(--text-2); background: var(--surface-2); }
+.live-preset.active { color: var(--accent); border-color: rgba(111, 159, 248, .42); background: var(--accent-soft); }
+.live-meta { margin: 0 0 12px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.live-table { min-width: 760px; }
+.live-table th { font-size: 10px; }
+.live-table td { padding: 9px 10px; }
+.live-sub { display: block; color: var(--muted); font-size: 10px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.live-sub.live-up { color: var(--red); }
+.live-sub.live-down { color: var(--green); }
+.live-up { color: var(--red); }
+.live-down { color: var(--green); }
+.live-flat { color: var(--text-2); }
+.live-good { color: var(--green); }
+.live-warn { color: var(--amber); }
+.live-bad { color: var(--red); }
+.live-flag { margin-left: 3px; color: var(--amber); font-size: 10px; cursor: help; }
+.live-why { font-size: 11px; }
+.live-watch-details { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.live-watch-details > summary { padding: 4px 0; color: var(--text-2); font-size: 12px; cursor: pointer; }
+.live-watch-details > summary:hover { color: var(--text); }
+.live-sub-head { margin: 18px 0 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .03em; }
+.live-log { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.live-log-item { display: grid; grid-template-columns: 72px 42px minmax(0, 1fr); align-items: baseline; gap: 9px; padding: 7px 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface-2); font-size: 12px; }
+.live-log-time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.live-log-tag { font-size: 11px; font-weight: 600; }
+.live-log-text { color: var(--text-2); line-height: 1.55; word-break: break-word; }
+.live-answer { margin-top: 14px; padding: 12px 14px; border: 1px solid rgba(111, 159, 248, .3); border-radius: 10px; background: var(--accent-soft); }
+.live-answer-head { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; color: var(--accent); font-size: 12px; }
+.live-answer-head span { color: var(--muted); }
+.live-answer p { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
+@media (max-width: 860px) {
+  .live-head { flex-direction: column; }
+  .live-log-item { grid-template-columns: 64px 38px minmax(0, 1fr); }
+}

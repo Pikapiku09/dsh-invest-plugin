@@ -4,6 +4,7 @@ import type {
   HoldingPosition, HoldingsAccount, StockResolveResponse, TaskTemplate,
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
   StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, FundamentalsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse, StrategyHealthResponse, SectorHeatmapResponse, TrialsResponse, RealPerformanceResponse,
+  LiveWatchResponse, LiveTickResponse,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -91,6 +92,8 @@ export const api = {
     post<{ ok: true; settings?: ModelSettingsResponse } & ModelSettingsSaveInput>(`${BASE}/model-settings`, input),
   templates: () => request<{ templates: TaskTemplate[] }>(`${BASE}/templates`),
   jobs: () => request<{ jobs: Job[]; recent?: Job[]; concurrency?: number; running?: number; queued?: number }>(`${BASE}/jobs`),
+  /** 取消任务：排队中的直接摘出队列，运行中的立刻中断（结果不归档） */
+  cancelJob: (id: string) => post<{ ok: boolean; status?: string; id?: string; error?: string }>(`${BASE}/job/cancel`, { id }),
   conclusions: (code: string) => request<{ records: ConclusionRecord[] }>(
     `${BASE}/conclusions?code=${encodeURIComponent(code)}`,
   ),
@@ -180,4 +183,13 @@ export const api = {
     ok: boolean; status?: string; skipped?: string; message?: string;
     jobId?: string; triggered?: string[]; watchCount?: number;
   }>(`${BASE}/watch-daily/run`, {}),
+  // ===== 盘中盯盘（live-watch）=====
+  liveWatch: () => request<LiveWatchResponse>(`${BASE}/live-watch`),
+  liveWatchPatch: (input: { enabled?: boolean; preset?: string; sessionOnly?: boolean; llmExplain?: boolean; notifyLevel?: string; intervalSec?: number; broadcastEveryMin?: number; confirmTicks?: number; confirmBandPct?: number; llmDailyCap?: number }) =>
+    post<LiveWatchResponse>(`${BASE}/live-watch`, input),
+  /** 手动立即抓一次：不受开关/交易时段限制 */
+  liveWatchTick: () => post<LiveTickResponse>(`${BASE}/live-watch/tick`, {}),
+  /** 盘中快问：只依据快照 + 最新结论 + 今日事件，3 句以内 */
+  liveAsk: (input: { code?: string; question?: string }) =>
+    postSlow<{ ok: boolean; answer?: string; error?: string; used?: number; cap?: number }>(`${BASE}/live-ask`, input, 120_000),
 };
