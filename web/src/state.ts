@@ -3,13 +3,14 @@ import type {
   ConclusionRecord, HoldingsDraftResponse, HoldingsResponse, IndexResponse, Job,
   ModelSettingsResponse, TaskTemplate, WorkbenchView, WatchlistResponse, LedgerColKey, BacktestResponse, ConclusionAuditResponse, WatchDailyStatus, StrategyHealthResponse, SectorHeatmapResponse, TrialsResponse, RealPerformanceResponse,
   StockNoteMeta, StockNoteDetail, UpdateCheckResponse, FundamentalsResponse,
-  LiveWatchResponse,
+  LiveWatchResponse, CompareResponse,
 } from './types';
 import type { WatchDistMode } from './watch-metrics';
 
 const LEDGER_COL_STORE = 'dsh-invest.ledgerColumns';
 const LEDGER_SORT_STORE = 'dsh-invest.ledgerSort';
 export const TEMPLATE_ORDER_STORE = 'dsh-invest.templateOrder';
+export const COMPARE_PAIR_STORE = 'dsh-invest.comparePair';
 const ASK_THREADS_STORE = 'dsh-invest.askThreads';
 const ASK_SUGGESTIONS_STORE = 'dsh-invest.askSuggestions';
 
@@ -125,6 +126,14 @@ function readLedgerSort(): { key: LedgerColKey; dir: 'asc' | 'desc' } | null {
 
 export interface AskTurn { role: 'user' | 'assistant'; text: string; ts: number }
 export interface TaskDraft { code: string; question: string; name?: string; resolvedCode?: string; }
+
+/** 对比配对存本地：刷新页面不丢，切回知识库也不清（v0.77.0） */
+function readComparePair(): { a: string; b: string } {
+  try {
+    const o = JSON.parse(window.localStorage.getItem(COMPARE_PAIR_STORE) || '{}');
+    return { a: String(o.a || '').toUpperCase(), b: String(o.b || '').toUpperCase() };
+  } catch { return { a: '', b: '' }; }
+}
 export interface ManualPositionDraft {
   code: string;
   name: string;
@@ -192,6 +201,21 @@ export interface AppState {
   askCharts: string[];
   /** 折叠的首字母分组（默认全展开） */
   askLetterCollapsed: Record<string, boolean>;
+  // ===== 同口径对比（v0.77.0）：挂在个股知识库页里的第二模式，不新开导航 =====
+  askMode: 'kb' | 'compare';
+  /** 对比的两个槽位（完整代码）；同一时间只允许 2 只，左栏点行填 A 再填 B */
+  compareA: string;
+  compareB: string;
+  /** 对比问题草稿（默认值由服务端兜底，这里只存用户改过的） */
+  compareQuestion: string;
+  /** 最近一次对比结果（事实表 + 解释） */
+  compareResult: CompareResponse | null;
+  compareLoading: boolean;
+  compareError: string;
+  /** 追问线程（同一对标的，带历史再问） */
+  compareThread: AskTurn[];
+  compareFollowDraft: string;
+  compareSending: boolean;
   /** 运行记录页：隐藏「报告归档」回填条目，只看真实运行日志 */
   runHideBackfill: boolean;
   /** 判断质量回测（v0.44.0） */
@@ -312,6 +336,9 @@ export const state: AppState = {
   askSuggestions: readAskSuggestions(), askSuggestionsEditing: false,
   askStocks: [], askStocksBuiltAt: '', askStocksLoading: false, askStocksError: '',
   askStock: '', askNote: null, askNoteLoading: false, askNoteError: '', askLetterCollapsed: {}, askCharts: [],
+  askMode: 'kb', compareA: readComparePair().a, compareB: readComparePair().b,
+  compareQuestion: '', compareResult: null, compareLoading: false, compareError: '',
+  compareThread: [], compareFollowDraft: '', compareSending: false,
   taskDrafts: {}, templateOrder: readTemplateOrder(), startingTemplates: {}, sidebarOpen: false,
   modelSettings: null, modelSettingsLoading: false, modelSettingsSaving: false,
   modelSettingsError: '', modelRoleRoutes: {}, modelTemplatePresets: {}, modelHostDraft: '', modelStockKbDraft: '', modelStockKbAutoDraft: null, modelStockKbConcurrencyDraft: null,

@@ -2,6 +2,72 @@
 
 本文件记录 dsh-invest-plugin 的版本演进（与 DSH 会话内动态插件 invt-11 的包版本对应）。
 
+## v0.77.0（2026-11-24）
+
+**两只票能不能比、该买哪只——现在有一张同口径的事实表**
+
+<!-- whats-new -->
+- **解决了「崇达和超声哪个更好」没法回答**：以前只能各跑一次深度分析、再自己对着两份不同日期的报告比；现在把两只票放进同一个页面，一次算清。
+- **所有数字来自同一天、同一个口径**：先取两只票各自的最新交易日，再拉齐到较早的那天，用不复权日线重算价格位置、动量、资金、估值、质量；某只票数据落后会明确标注，不会出现「昨天和今天并排比」。
+- **胜负由规则判，模型只负责讲人话**：六个维度谁赢写死在代码里，模型不允许改数、也不允许自己加权凑一个综合分；解释挂了事实表照样能看。
+- **先审硬约束再谈好坏**：单票 20% 上限、赔率不到 3:1、止损缺失、结论与档案止损打架，都会在表格前先列出来。
+- **口子开在原有页面里**：个股知识库页新增「对比」模式，左侧列表照旧选票；持仓工作区和标的档案都加了「加入对比」。真要下单前还能一键升级为深度对比任务。
+<!-- /whats-new -->
+
+### 为什么做
+
+用户的原话是「我现在想要对比一下崇达技术和超声电子，哪个更好，那我现在是没办法对比的啊」。
+已有能力只有两条：`个股` 模式一次一只、`深度分析` 模式虽能带多码但产出是两份独立报告；前者无从对比，
+后者口径与日期都不保证一致，人眼拼两张表恰恰最容易被不同 as-of 的数字误导。
+
+另一条约束来自用户对入口的判断：**不新增 nav**（「加了新的nav会有点冗余，新开不如在原来已有的nav上进行」）。
+因此对比没有做成新页面，而是成为【个股知识库】页的第二个模式——左侧的全体标的索引本来就是现成的选股器。
+
+### 三层分工
+
+1. **事实层**（`scripts/compare_pack.js`，0 token）：Tushare 取数 → 统一 as-of → 重算六维 → 输出机器可读 JSON。
+2. **规则层**（`packages/dsh-invest/lib/index.js` 的 `compareFacts`）：六维胜负、赔率、权重余量、硬约束、止损口径冲突。
+3. **解释层**（`compareAsk` → `runPromptSubagent`，label「对比分析」，120s）：只读事实层，禁用新数；失败时返回纯事实表。
+
+### 事实层：统一 as-of 与口径
+
+- `asof = min(各票 daily 最新交易日)`，先按 `trade_date <= asof` 截断再算 MA/涨跌/超额；某票最新 < asof → `stale:true` 并进 `stale_codes`，前端在页脚提示。
+- 价格一律用不复权 `daily`（`price_basis:"unadj"`），避免与盘中现价、技术指标混口径。
+- 六维：价格位置（距 250 日高回撤）、趋势动量（20 日相对上证超额）、资金（近 20 日主力净流入）、估值（PE_TTM 取小）、质量（ROE）、计划与赔率。
+- 缓存独立于个股档案：`cache/compare/compare_<codes>.json`（6 小时内复用）、`cache/compare/daily_<code>_<ymd>.json`。
+
+### 规则层：胜负与硬约束
+
+- 每维一个 `winner`（并列则空），`score` 是胜场数，`tied` 标记全平——**不做加权综合分**，避免用拍脑袋的权重制造伪精确。
+- 硬约束 `gates`：H1 权重已超 20% / 空仓可建仓提示；H2 失效条件原文；H3 赔率 < 3:1 或无止损；H4 无目标价；STOP 生效止损与最新结论相差 > 3%。
+- `eff_stop = position.stop ?? watch.stop`，`odds = (target − close) / (close − eff_stop)`，`room_pct`：持有 = `max(0, 20 − 权重)`、空仓 = `min(20, 现金/总资产)`。
+
+### 前端：对比模式
+
+- 入口：个股知识库页头 segmented「知识库 | 对比」；左侧行在对比模式下点击即填入 A/B 槽（A 优先，两槽满则替换 A），并显示 A/B 角标。
+- 结果：结论卡（胜者、胜场、`summary_hint`）→ 两张计划卡（持仓/止损/目标/赔率/余量）→ 六维表（胜者格高亮）→ 硬约束 → 模型解释 → 追问 → 页脚（as-of、口径、财务截止、`stale` 警告）。
+- 交互细节：换槽即清空旧结果与追问线程（防止「槽位是新的、表是旧的」）；配对存 `localStorage['dsh-invest.comparePair']`；「只看数据」`withAnswer:false` 跳过模型、0 token；「升级为深度对比」走 `compare-deep` 模板（消息 → 深度 → 总判断）并跳到一键任务页。
+- 容错：缺数据显示 `—`（不补 0）；解释缺失时渲染 `compare-answer-missing`，事实表与规则判定仍然完整。
+
+### 新增接口
+
+- `POST /dsh-invest/api/compare`：`{codes:[2..3], question?, history?, withAnswer?}` → `{ok, asof, price_basis, stocks, verdict, warnings, question, answer, answerError}`；非环回 403、非 GET/POST 405、代码非法或脚本失败 400。
+- `GET /dsh-invest/api/compare`：最近 120 条对比日志（`store/compare-log.jsonl`）。
+
+### 新增任务模板
+
+- `compare-deep`「深度对比」：`mode:"个股"`、`roles:["消息","深度","总判断"]`、`sequence` 同名、`needsCode:false`（两码写进 question），要求统一 as-of、用 20% 上限与赔率 <3:1 判可执行性、逐只给目标/止损/失效条件、明确「只能选一只选谁、先做什么」、都不满足就说都不选、末尾两行【结论结构化】JSON、≤1200 字。
+
+### 验收
+
+- 真实数据（asof 20261124，两票均非 stale、无 warning）：崇达 002815 close 14.38、回撤 −45.24%、PE_TTM 26.94、主力 20 日净流入 94,818.71 万、ROE 7.17、20 日超额 −10.06；超声 000823 close 19.10、回撤 −35.84%、PE_TTM 28.68、主力 20 日净流入 64,212.9 万、ROE 6.57、20 日超额 +10.04。
+- `test/compare-api.test.js` 8 项全绿；`node --check` 0；`tsc --noEmit` 0；`vite build` 36 modules（`workbench.js 271.74 kB`、`workbench.css 121.64 kB`）；`node --test` **279 tests / 279 pass / 0 fail**。
+
+### 过程中修掉的两个坑
+
+- **共享日线缓存被污染**：最初复用 `cache/pack/daily_<code>_<ymd>.json`，其中 000823 那份是 stockchart.js 写的精简行（只有 `trade_date`+`close`），导致 open/high/low 全 null、回撤算成 −100%。改为独立 `cache/compare/daily_*`，且读缓存前校验最近 5 行 `close` 与 `high` 非空。
+- **空数组的 `-Infinity`**：`Math.max.apply(null, [])` 得 `-Infinity`（真值），`close / -Infinity` 让回撤变成 −100。改为先 filter 再判空，`hi250 > 0` 守卫。
+
 ## v0.76.1（2026-11-24）
 
 **修复：重启后验收发现的两个真 bug；把预留的两个开关接上**

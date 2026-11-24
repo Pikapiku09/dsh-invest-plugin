@@ -1294,3 +1294,109 @@ export const LEDGER_DEFAULT_COLUMNS: LedgerColKey[] = [
   'code', 'name', 'pool', 'shares', 'available_shares', 'cost', 'current_price',
   'market_value', 'pnl', 'pnl_pct', 'weight_pct', 'status', 'note',
 ];
+
+// ===== 同口径对比（v0.77.0）=====
+// 数字全部来自 compare_pack.js（同一 as-of 交易日、不复权 daily），前端只负责排版；
+// 胜负由服务端规则判定（六维按规则、不做加权综合分），前端不做二次计算。
+export interface ComparePlan {
+  held: boolean;
+  shares: number | null;
+  cost: number | null;
+  mv: number | null;
+  pnl_pct: number | null;
+  /** 已持仓：市值/总资产；空仓为 null */
+  weight_pct: number | null;
+  /** 距 20% 上限还能加多少（已超限为 0）；空仓为 min(20%, 现金/总资产) */
+  room_pct: number | null;
+  buy_low: number | null;
+  buy_high: number | null;
+  ideal_buy: number | null;
+  eff_stop: number | null;
+  /** 生效止损来源：档案 / 失效价 / — */
+  eff_stop_src: string;
+  target: number | null;
+  /** 赔率 =(目标−现价)/(现价−生效止损)，缺任一项为 null */
+  odds: number | null;
+  stance: string;
+  thesis: string;
+  invalidate_if: string;
+  concl_ts: string;
+  stop_conflict: boolean;
+  stop_conflict_note: string;
+  kb_excerpt: string;
+}
+
+export interface CompareStock {
+  code: string;
+  name: string;
+  industry: string;
+  market: string;
+  list_date: string;
+  asof: string;
+  /** 该票最新交易日早于统一 as-of 时为 true（停牌/数据滞后） */
+  stale: boolean;
+  close: number | null;
+  chg_pct: number | null;
+  ma5: number | null; ma10: number | null; ma20: number | null; ma60: number | null;
+  dist_ma20_pct: number | null;
+  pct5: number | null; pct20: number | null; pct60: number | null;
+  hi250: number | null; lo250: number | null; drawdown_pct: number | null;
+  pe: number | null; pe_ttm: number | null; pb: number | null;
+  total_mv_yi: number | null; circ_mv_yi: number | null;
+  turnover_rate: number | null; volume_ratio: number | null;
+  mf5_wan: number | null; mf20_wan: number | null; mf_latest_date: string | null;
+  fina_end_date: string | null; roe: number | null; netprofit_yoy: number | null;
+  or_yoy: number | null; gpm: number | null; debt_ratio: number | null;
+  excess20: number | null; excess60: number | null;
+  plan: ComparePlan;
+}
+
+export interface CompareDim {
+  key: string;
+  label: string;
+  /** 该维胜者代码；无数据/打平为 null */
+  winner: string | null;
+  values: Record<string, number>;
+  note: string;
+}
+
+export interface CompareGate {
+  code: string;
+  name: string;
+  /** H1 权重上限 / H2 失效条件 / H3 赔率或止损 / H4 目标价 / STOP 口径冲突 */
+  rule: string;
+  level: 'bad' | 'warn' | 'info';
+  text: string;
+}
+
+export interface CompareVerdict {
+  dims: CompareDim[];
+  /** 各票胜场数（不是综合分） */
+  score: Record<string, number>;
+  tied: boolean;
+  gates: CompareGate[];
+  summary_hint: string;
+}
+
+export interface CompareResponse {
+  ok: boolean;
+  asof: string;
+  /** 价格口径：unadj = 不复权 */
+  price_basis: string;
+  stocks: CompareStock[];
+  verdict: CompareVerdict;
+  warnings: string[];
+  question: string;
+  answer: string | null;
+  answerError: string | null;
+  error?: string;
+}
+
+export interface CompareLogItem {
+  ts: string;
+  codes: string[];
+  asof: string;
+  question: string;
+  answer: string | null;
+  answer_error: string | null;
+}

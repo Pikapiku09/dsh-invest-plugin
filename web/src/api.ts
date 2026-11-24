@@ -4,7 +4,7 @@ import type {
   HoldingPosition, HoldingsAccount, StockResolveResponse, TaskTemplate,
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
   StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, FundamentalsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse, StrategyHealthResponse, SectorHeatmapResponse, TrialsResponse, RealPerformanceResponse,
-  LiveWatchResponse, LiveTickResponse,
+  LiveWatchResponse, LiveTickResponse, CompareResponse, CompareLogItem,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -192,4 +192,9 @@ export const api = {
   /** 盘中快问：只依据快照 + 最新结论 + 今日事件，3 句以内 */
   liveAsk: (input: { code?: string; question?: string }) =>
     postSlow<{ ok: boolean; answer?: string; error?: string; used?: number; cap?: number }>(`${BASE}/live-ask`, input, 120_000),
+  // ===== 同口径对比（v0.77.0）=====
+  /** 取两组同口径事实；withAnswer=false 只出事实表（0 token），带 history 可继续追问 */
+  compare: (input: { codes: string[]; question?: string; history?: Array<{ role: 'user' | 'assistant'; text: string }>; withAnswer?: boolean }) =>
+    postSlow<CompareResponse>(`${BASE}/compare`, input, 180_000),
+  compareLog: () => request<{ ok: boolean; log: CompareLogItem[] }>(`${BASE}/compare`),
 };

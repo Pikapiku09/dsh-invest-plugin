@@ -1,7 +1,19 @@
 {
-  "latest": "0.76.1",
-  "generatedAt": "2026-11-24T03:28:30.088Z",
+  "latest": "0.77.0",
+  "generatedAt": "2026-11-24T09:17:33.482Z",
   "releases": [
+    {
+      "version": "0.77.0",
+      "date": "2026-11-24",
+      "title": "两只票能不能比、该买哪只——现在有一张同口径的事实表",
+      "items": [
+        "**解决了「崇达和超声哪个更好」没法回答**：以前只能各跑一次深度分析、再自己对着两份不同日期的报告比；现在把两只票放进同一个页面，一次算清。",
+        "**所有数字来自同一天、同一个口径**：先取两只票各自的最新交易日，再拉齐到较早的那天，用不复权日线重算价格位置、动量、资金、估值、质量；某只票数据落后会明确标注，不会出现「昨天和今天并排比」。",
+        "**胜负由规则判，模型只负责讲人话**：六个维度谁赢写死在代码里，模型不允许改数、也不允许自己加权凑一个综合分；解释挂了事实表照样能看。",
+        "**先审硬约束再谈好坏**：单票 20% 上限、赔率不到 3:1、止损缺失、结论与档案止损打架，都会在表格前先列出来。",
+        "**口子开在原有页面里**：个股知识库页新增「对比」模式，左侧列表照旧选票；持仓工作区和标的档案都加了「加入对比」。真要下单前还能一键升级为深度对比任务。"
+      ]
+    },
     {
       "version": "0.76.1",
       "date": "2026-11-24",
@@ -70,21 +82,6 @@
         "startStage（一键任务阶段）与 runPromptSubagent（辅助子代理）统一走它，保留 caller → parent 的 delivery 回退；",
         "src/host.js（dist 生成源，code.host 形态）同步同一处改动，node tools/build.js 产物与源码一致；",
         "新增 test/subagent-activation-contract.test.js：假宿主**只有** startActivation 且照抄 spec.parent.id 语义，含「旧形状必须复现那句 TypeError」的回归锚点，以及一条真跑 tool.execute({mode:'个股'}) 的端到端用例。"
-      ]
-    },
-    {
-      "version": "0.75.4",
-      "date": "2026-11-23",
-      "title": "修复：账本/标的档案/审计全线写不进去 —— 病根是 `agents.roots()` 在 DSH 0.2.x 已不存在",
-      "items": [
-        "标的档案点「已清仓」报 状态更新失败：cannot write \"...\\.dsh-invest\\store\\watchlist.json\": file access denied under workspace-write mode；",
-        "持仓工作区确认/上传账本报同一类错；",
-        "磁盘可写、目录里别的文件宿主也能写，只有插件自己的写入被拒。",
-        "新增模块级 liveAgents(ctx)：agents.list() 优先、roots() 兜底，两个版本都能跑；5 处调用点统一改过去；",
-        "fsPolicyCandidates(targetPath) 改为**按目标路径过滤**：只保留 workspaceRoot（含 additionalWritableRoots）确实覆盖目标的策略，不再盲试到别的会话；一个都不覆盖时保留部署默认策略作为最后候选；",
-        "writeTextWithPolicyRetry 用 target.displayPath 判定；完全没有候选且宿主拒绝时，抛出能照着查的中文错误（含目标路径与活跃会话数），不再是一句 file access denied；",
-        "runPromptSubagent 的 parent 优先选「工作区覆盖 BASE_DIR」的会话；",
-        "新增 test/host-agents-contract.test.js：假宿主只暴露 list() 且 fs.writeText 照抄真实沙箱门槛，锁定「确认持仓」与「档案置已清仓」两条路径必须写成功；"
       ]
     }
   ]

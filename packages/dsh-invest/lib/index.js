@@ -2129,6 +2129,8 @@ function apply(ctx, config) {
   const TASK_TEMPLATES = [
     { id: "stock-review", name: "个股体检", description: "消息面 → 技术估值财务 → 综合决策", mode: "个股", roles: ["消息", "深度", "总判断"], preset: "inherit", needsCode: true, placeholder: "600519 或 600519.SH", question: "对 {code} 做深度体检：先取最新消息面，再做技术/估值/财务六维诊断，最后综合给出目标价、止损与失效条件。{input}" },
     { id: "stock-quick", name: "个股快诊", description: "快速技术估值判断 + 一句话结论", mode: "个股", roles: ["深度", "总判断"], preset: "fast", needsCode: true, placeholder: "600519 或 600519.SH", question: "对 {code} 做快速诊断：用必要行情与关键指标给出300字内结论、支撑/压力位、风险回报比与失效条件；结论文字限制300字不包含图表，图表照常生成。{input}" },
+    // v0.77.0：对比页的「升级为深度对比」落到这里——快速对比（同口径事实表）之外，需要完整报告时的重型路径
+    { id: "compare-deep", name: "深度对比", description: "两只票同口径深研 + 结论落档（从对比页升级）", mode: "个股", roles: ["消息", "深度", "总判断"], sequence: ["消息", "深度", "总判断"], preset: "inherit", needsCode: false, placeholder: "如 000823.SZ 002815.SZ", question: "对 {input} 中指定的两只标的做同口径深度对比（代码以用户输入为准，未给则先按账本与观察池里最接近的一对，并明确说明你选的是哪两只）：\n① 用 Tushare 取两票共同的最新交易日数据，统一同一 as-of、同一价格口径（不复权 daily）后再算：价格位置（距 250 日高回撤）、趋势动量（20/60 日相对上证超额）、资金（近 20 日主力净流入）、估值（PE_TTM/PB）、质量（ROE/净利同比/营收同比/毛利率/负债率）；两票数据日期不一致时要显式标注，禁止把不同日期的数字并排比较。\n② 结合持仓账本与现行纪律判断可执行性：单票权重上限 20%；赔率=(目标−现价)/(现价−生效止损)，<3:1 只观察；生效止损以标的档案 position.stop 为准、与最新结论不一致时要同时列出两个值。\n③ 逐只给目标价、止损、失效条件与赔率；再给「如果只能选一只买，选谁、先做什么、仓位多少」。\n④ 若两只都不满足条件，直接说「都不选」，不要为了给答案而凑。\n⑤ 末尾输出两行【结论结构化】JSON（code/stance/target/stop/thesis/invalidate_if），便于落档。\n输出 ≤1200 字，先结论后理由。{input}" },
     { id: "portfolio-review", name: "组合体检", description: "持仓消息风险 + 逐只诊断 + 调仓建议", mode: "总判断", roles: ["消息", "深度", "总判断"], preset: "inherit", needsCode: false, placeholder: "", question: "复盘当前持仓账本：先排查持仓相关风险消息，再逐只核对成本、趋势、估值与止损，最后给出持有/加仓/减仓/离场及调仓优先级，并明确与上次结论的差异。{input}" },
     { id: "morning-news", name: "早盘异动", description: "隔夜消息与大盘 → 影响标的行情", mode: "消息", roles: ["消息", "选股"], preset: "fast", needsCode: false, placeholder: "", question: "扫描隔夜消息、政策、大盘情绪及持仓/近期关注标的异动，随后补充受影响标的的最新行情与相对强弱，按可信度和影响排序。{input}" },
     { id: "swing-weekly", name: "波段周检", description: "双池准入复核 → 纸面决策（v3.0）", mode: "波段池", roles: ["波段", "总判断"], sequence: ["波段", "总判断"], preset: "inherit", needsCode: false, placeholder: "", question: "执行本周波段池周检（纪律 v3.0，状态 S1 纸面前向验证：只记纸面虚拟买卖点，不投入任何资金，输出一律标【纸面】）：\n① 读取 .dsh-invest/波段池_持仓.md 台账；\n② 按**所属池**逐一复核准入——反转池 R：R1 估值分位（近 3 年日历窗 PE/PB ≤30%）/ R2 周线止跌 / R3 基本面不恶化；动量池 M：M1 周收盘站上 30 周线且 20 周线斜率≥0 / M2 突破周量≥前 4 周均量 1.5 倍 / M3 收盘距 30 周线≤+35%；\n③ 逐只给纸面指令（继续持有/加仓≤1次/减仓/清仓/移出观察/换池），并校验高价股硬闸 P_max=单票上限%×总资产÷100（反转池 20%、动量池 15%），股价超限即不可建仓，禁止用\"只买一手\"绕过；\n④ 对拟持有标的给出三行模板（买入理由/失效条件/时间盒）与赔率=(目标−成本)/(成本−止损)，赔率<3:1 一律挂观察；\n⑤ 更新台账，并把本次周检写入「周检记录」；\n⑥ 最后尝试推送 NAS：powershell -File E:\\Dsh_WorkSapce\\Dify_Agents\\scripts\\swing-weekly.ps1（NAS 离线时脚本自动降级为本地镜像，失败不得阻断周检）。\n纪律：出场取「或」——−15% 硬止损 / 动量池周收盘破 30 周线 / 自峰值回撤 20% / 满 126 交易日收割；反转池用逻辑止损+估值止损替代趋势止损；严禁固定百分比移动止盈；持仓合计≤4 只；每月最多 1 次调仓。{input}" },
@@ -3530,6 +3532,347 @@ function apply(ctx, config) {
     return { ok: true, answer: text, code: code || null, used: used + 1, cap }
   }
 
+  // ===== 双票/多票同口径对比（v0.77.0）=====
+  // 三层分工：① scripts/compare_pack.js 产数字（同一 as-of 交易日，机器可读）；
+  // ② 这里的规则负责判胜负、筛硬约束；③ 模型只负责解释，且禁止新增数字。
+  // 模型不可用/超时仍返回纯事实表——看不到数字比听不到解释严重得多。
+  const COMPARE_SCRIPT = process.env.DSH_INVEST_COMPARE_SCRIPT || (BASE_DIR + "/scripts/compare_pack.js")
+  const COMPARE_LOG_FILE = BASE_DIR + "/.dsh-invest/store/compare-log.jsonl"
+  const COMPARE_LOG_MAX_LINES = 120
+  const COMPARE_MAX_CODES = 3
+  const COMPARE_WEIGHT_CAP = 20   // 用户纪律：单票权重上限
+  const COMPARE_MIN_ODDS = 3      // 用户纪律：赔率下限
+
+  let nodeCmdCache = ""
+  const resolveNode = async () => {
+    const env = String(process.env.DSH_INVEST_NODE || "").trim()
+    if (env) return env
+    if (nodeCmdCache) return nodeCmdCache
+    try {
+      const { spawnSync } = await import("node:child_process")
+      for (const cmd of ["node", "node.exe"]) {
+        try {
+          const probe = spawnSync(cmd, ["-v"], { stdio: "ignore", windowsHide: true })
+          if (probe && probe.status === 0) { nodeCmdCache = cmd; return cmd }
+        } catch (e) { /* 试下一个 */ }
+      }
+    } catch (e) { /* 探测失败走默认 */ }
+    nodeCmdCache = "node"
+    return nodeCmdCache
+  }
+  const normalizeCompareCode = (raw) => {
+    const c = String(raw || "").trim().toUpperCase()
+    if (!c) return ""
+    if (/^\d{6}\.(SH|SZ|BJ)$/.test(c)) return c
+    const d = c.replace(/\D/g, "")
+    if (d.length !== 6) return ""
+    if (/^[569]/.test(d)) return d + ".SH"
+    if (/^[48]/.test(d)) return d + ".BJ"
+    return d + ".SZ"
+  }
+  const compareCodes = (raw) => {
+    const src = Array.isArray(raw) ? raw : String(raw || "").split(/[,\s，]+/)
+    const list = []
+    for (const x of src) {
+      const code = normalizeCompareCode(x)
+      if (code && !list.includes(code)) list.push(code)
+    }
+    if (list.length < 2) throw new Error("至少需要 2 只标的（有效代码 " + list.length + " 个）")
+    if (list.length > COMPARE_MAX_CODES) throw new Error("最多对比 " + COMPARE_MAX_CODES + " 只（收到 " + list.length + " 只）")
+    return list
+  }
+  const runComparePack = async (codes) => {
+    const node = await resolveNode()
+    const { spawn } = await import("node:child_process")
+    const child = spawn(node, [COMPARE_SCRIPT, ...codes], {
+      cwd: BASE_DIR,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: Object.assign({}, process.env, { DSH_INVEST_BASE_DIR: BASE_DIR }),
+    })
+    const out = []
+    const err = []
+    collectChunks(child.stdout, out)
+    collectChunks(child.stderr, err)
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const timer = setTimeout(() => {
+        try { child.kill() } catch (e) { /* ignore */ }
+        finish(reject, new Error("对比取数超时（45 秒）"))
+      }, 45000)
+      const finish = (fn, value) => { if (settled) return; settled = true; clearTimeout(timer); fn(value) }
+      child.on("error", (e) => finish(reject, e))
+      child.on("close", () => {
+        const text = decodeChildStdout(Buffer.concat(out)).trim()
+        const errText = decodeChildStdout(Buffer.concat(err)).trim()
+        const line = text.split(/\r?\n/).filter((l) => l.trim()).pop() || ""
+        if (!line) { finish(reject, new Error("取数脚本无输出" + (errText ? "：" + errText.slice(0, 200) : ""))); return }
+        let data = null
+        try { data = JSON.parse(line) } catch (e) {
+          finish(reject, new Error("取数脚本输出不是 JSON：" + line.slice(0, 200)))
+          return
+        }
+        if (!data || data.ok !== true) { finish(reject, new Error(String((data && data.error) || "取数失败").slice(0, 300))); return }
+        finish(resolve, data)
+      })
+    })
+  }
+  // 知识库摘录：只作模型背景，不进表格数字
+  const compareKbExcerpt = async (code) => {
+    let md = ""
+    try { md = await readCurated(code) } catch (e) { return "" }
+    return plainSnippet(md, 1400)
+  }
+  const compareFacts = async (rawCodes) => {
+    const codes = compareCodes(rawCodes)
+    const pack = await runComparePack(codes)
+    const wl = await readWatchlist()
+    const items = Array.isArray(wl.items) ? wl.items : []
+    const byCode = new Map()
+    for (const it of items) byCode.set(String(it.code || "").toUpperCase(), it)
+    const ledger = await readHoldingsDoc()
+    const account = (ledger && ledger.account) || {}
+    const totalAsset = liveNum(account.total_asset)
+    const cash = liveNum(account.cash) ?? liveNum(account.available_cash)
+    const heldMap = new Map()
+    for (const p of (Array.isArray(ledger && ledger.positions) ? ledger.positions : [])) {
+      const code = String(p.code || "").toUpperCase()
+      if (!code) continue
+      if (p.pool && String(p.pool) !== "实盘") continue
+      const sh = liveNum(p.shares)
+      if (sh === null || sh <= 0) continue
+      heldMap.set(code, p)
+    }
+    const concl = await liveLatestConclusions(codes)
+    const stocks = []
+    for (const s of (pack.stocks || [])) {
+      const code = String(s.code || "").toUpperCase()
+      const it = byCode.get(code) || null
+      const pos = (it && it.position) || {}
+      const watch = (it && it.watch) || {}
+      const led = heldMap.get(code) || null
+      const c = concl[code] || null
+      const close = liveNum(s.close)
+      const shares = liveNum(led && led.shares)
+      const cost = liveNum(led && led.cost)
+      const mv = (shares !== null && close !== null) ? shares * close : null
+      const weight = (mv !== null && totalAsset) ? liveRound(mv / totalAsset * 100, 2) : null
+      const pnlPct = (cost && close !== null) ? liveRound((close / cost - 1) * 100, 2) : null
+      const posStop = liveNum(pos.stop)
+      const watchStop = liveNum(watch.stop)
+      const effStop = posStop !== null ? posStop : watchStop
+      const effStopSrc = posStop !== null ? "档案" : (watchStop !== null ? "失效价" : "—")
+      const target = liveNum(pos.target) ?? liveNum(watch.target) ?? liveNum(c && c.target)
+      const odds = (target !== null && close !== null && effStop !== null && close > effStop)
+        ? liveRound((target - close) / (close - effStop), 2) : null
+      const conclStop = liveNum(c && c.stop)
+      let stopConflict = false
+      let stopConflictNote = ""
+      if (effStop !== null && conclStop !== null) {
+        const diff = Math.abs(effStop - conclStop) / Math.max(effStop, conclStop) * 100
+        if (diff > 3) {
+          stopConflict = true
+          stopConflictNote = "档案/失效价 " + liveFmt(effStop, 3) + " 与最新结论 " + liveFmt(conclStop, 3) + " 相差 " + liveFmt(diff, 1) + "%"
+        }
+      }
+      const roomPct = shares !== null && shares > 0
+        ? (weight === null ? null : liveRound(Math.max(0, COMPARE_WEIGHT_CAP - weight), 2))
+        : (totalAsset && cash !== null ? liveRound(Math.min(COMPARE_WEIGHT_CAP, cash / totalAsset * 100), 2) : null)
+      stocks.push({
+        code, name: s.name || (it && it.name) || code,
+        industry: s.industry || "", market: s.market || "", list_date: s.list_date || "",
+        asof: s.asof || pack.asof, stale: !!s.stale,
+        close, chg_pct: s.chg_pct, ma5: s.ma5, ma10: s.ma10, ma20: s.ma20, ma60: s.ma60,
+        dist_ma20_pct: s.dist_ma20_pct, pct5: s.pct5, pct20: s.pct20, pct60: s.pct60,
+        hi250: s.hi250, lo250: s.lo250, drawdown_pct: s.drawdown_pct,
+        pe: s.pe, pe_ttm: s.pe_ttm, pb: s.pb, total_mv_yi: s.total_mv_yi, circ_mv_yi: s.circ_mv_yi,
+        turnover_rate: s.turnover_rate, volume_ratio: s.volume_ratio,
+        mf5_wan: s.mf5_wan, mf20_wan: s.mf20_wan, mf_latest_date: s.mf_latest_date,
+        fina_end_date: s.fina_end_date, roe: s.roe, netprofit_yoy: s.netprofit_yoy,
+        or_yoy: s.or_yoy, gpm: s.gpm, debt_ratio: s.debt_ratio,
+        excess20: s.excess20, excess60: s.excess60,
+        plan: {
+          held: shares !== null && shares > 0,
+          shares, cost, mv: mv === null ? null : liveRound(mv, 0), pnl_pct: pnlPct,
+          weight_pct: weight, room_pct: roomPct,
+          buy_low: liveNum(watch.buy_low), buy_high: liveNum(watch.buy_high), ideal_buy: liveNum(watch.ideal_buy),
+          eff_stop: effStop, eff_stop_src: effStopSrc,
+          target, odds,
+          stance: String((c && c.stance) || watch.stance || "").slice(0, 40),
+          thesis: String((c && c.thesis) || watch.thesis || "").slice(0, 300),
+          invalidate_if: String((c && c.invalidate_if) || watch.invalidate_if || "").slice(0, 300),
+          concl_ts: c ? String(c.ts || "") : "",
+          stop_conflict: stopConflict,
+          stop_conflict_note: stopConflictNote,
+          kb_excerpt: await compareKbExcerpt(code),
+        },
+      })
+    }
+    // —— 规则判定：六维谁赢 + 硬约束（严禁综合加权分）——
+    const dims = []
+    const addDim = (key, label, pick, lowerIsBetter) => {
+      const vals = stocks
+        .map((s) => ({ code: s.code, v: pick(s) }))
+        .filter((x) => x.v !== null && Number.isFinite(x.v) && !(lowerIsBetter && x.v <= 0))
+      if (vals.length < 2) {
+        dims.push({ key, label, winner: null, values: {}, note: vals.length ? "只有一只可算，不判胜" : "缺少数据" })
+        return
+      }
+      const best = vals.reduce((a, b) => (lowerIsBetter ? (b.v < a.v ? b : a) : (b.v > a.v ? b : a)))
+      const tie = vals.filter((x) => x.v === best.v)
+      const values = {}
+      for (const x of vals) values[x.code] = x.v
+      dims.push({ key, label, winner: tie.length === 1 ? best.code : null, values, note: tie.length === 1 ? "" : "两者持平" })
+    }
+    addDim("position", "价格位置（距 250 日高回撤）", (s) => s.drawdown_pct, false)
+    addDim("momentum", "趋势动量（20 日超额 vs 上证）", (s) => s.excess20, false)
+    addDim("flow", "资金（近 20 日主力净流入/万元）", (s) => s.mf20_wan, false)
+    addDim("valuation", "估值（PE_TTM）", (s) => s.pe_ttm, true)
+    addDim("quality", "质量（ROE）", (s) => s.roe, false)
+    addDim("plan", "计划与赔率（赔率）", (s) => (s.plan && s.plan.odds !== null) ? s.plan.odds : null, false)
+    const score = {}
+    for (const s of stocks) score[s.code] = 0
+    for (const d of dims) if (d.winner && score[d.winner] !== void 0) score[d.winner] += 1
+    const counts = stocks.map((s) => score[s.code] || 0)
+    const tied = new Set(counts).size === 1 && counts.length > 1
+    // 硬约束：只报能由事实判定的；失效条件只提示原文（是否触发由用户认定）
+    const gates = []
+    for (const s of stocks) {
+      const p = s.plan || {}
+      if (p.held && p.weight_pct !== null && p.weight_pct > COMPARE_WEIGHT_CAP) {
+        gates.push({ code: s.code, name: s.name, rule: "H1", level: "bad", text: "权重 " + liveFmt(p.weight_pct, 1) + "% 超 " + COMPARE_WEIGHT_CAP + "% 上限，不宜加仓；换股要先减" })
+      }
+      if (!p.held && totalAsset && cash !== null) {
+        const maxPct = liveRound(Math.min(COMPARE_WEIGHT_CAP, cash / totalAsset * 100), 1)
+        gates.push({ code: s.code, name: s.name, rule: "H1", level: "info", text: "空仓标的，按现金口径最多可建仓约 " + liveFmt(maxPct, 1) + "% 权重" })
+      }
+      if (p.odds !== null && p.odds < COMPARE_MIN_ODDS) {
+        gates.push({ code: s.code, name: s.name, rule: "H3", level: "warn", text: "赔率 " + liveFmt(p.odds, 2) + ":1 < " + COMPARE_MIN_ODDS + ":1，按纪律只能观察" })
+      }
+      if (p.target === null) {
+        gates.push({ code: s.code, name: s.name, rule: "H4", level: "warn", text: "没有目标价，赔率无法计算，只能谈观察" })
+      }
+      if (p.eff_stop === null) {
+        gates.push({ code: s.code, name: s.name, rule: "H3", level: "warn", text: "没有生效止损，无法计算赔率" })
+      }
+      if (p.invalidate_if) {
+        gates.push({ code: s.code, name: s.name, rule: "H2", level: "info", text: "失效条件（需人工核对是否已触发）：" + p.invalidate_if })
+      }
+      if (p.stop_conflict) {
+        gates.push({ code: s.code, name: s.name, rule: "STOP", level: "warn", text: "止损口径冲突：" + p.stop_conflict_note })
+      }
+    }
+    const sorted = stocks.slice().sort((a, b) => (score[b.code] || 0) - (score[a.code] || 0))
+    const leader = sorted[0]
+    const dimSummary = stocks.map((s) => s.name + " " + (score[s.code] || 0) + " 胜").join(" / ")
+    return {
+      ok: true,
+      asof: pack.asof,
+      price_basis: "unadj",
+      stocks,
+      verdict: {
+        dims, score, tied, gates,
+        summary_hint: (tied ? "六维打平（" : "维度胜场：") + dimSummary + (tied ? "）" : "") +
+          (leader && !tied ? "，" + leader.name + " 领先" : "") +
+          (gates.filter((g) => g.level !== "info").length ? "；" + gates.filter((g) => g.level !== "info").length + " 条硬约束需先处理" : ""),
+      },
+      warnings: pack.warnings || [],
+    }
+  }
+  const appendCompareLog = async (rec) => {
+    try {
+      const fs = hostService(ctx, "fs")
+      if (fs === void 0) return null
+      const target = await fs.resolve(COMPARE_LOG_FILE)
+      let old = ""
+      try { old = await fs.readText(target) } catch (e) { /* 首次 */ }
+      const lines = String(old || "").split(/\r?\n/).filter((l) => l.trim())
+      const kept = lines.length >= COMPARE_LOG_MAX_LINES ? lines.slice(-(COMPARE_LOG_MAX_LINES - 1)) : lines
+      await writeTextWithPolicyRetry(target, (kept.length ? kept.join("\n") + "\n" : "") + JSON.stringify(rec) + "\n")
+      return rec
+    } catch (e) { return null }
+  }
+  const readCompareLog = async (limit) => {
+    const fs = hostService(ctx, "fs")
+    if (fs === void 0) return []
+    let text = ""
+    try { text = await fs.readText(await fs.resolve(COMPARE_LOG_FILE)) } catch (e) { return [] }
+    const lines = String(text || "").split(/\r?\n/).filter((l) => l.trim())
+    const out = []
+    for (const line of lines.slice(-Math.max(1, Number(limit) || 10))) {
+      try { out.push(JSON.parse(line)) } catch (e) { /* 跳过坏行 */ }
+    }
+    return out.reverse()
+  }
+  const compareBrief = (s) => ({
+    code: s.code, name: s.name, industry: s.industry,
+    close: s.close, chg_pct: s.chg_pct,
+    ma5: s.ma5, ma10: s.ma10, ma20: s.ma20, ma60: s.ma60, dist_ma20_pct: s.dist_ma20_pct,
+    pct5: s.pct5, pct20: s.pct20, pct60: s.pct60, drawdown_250d_pct: s.drawdown_pct,
+    pe_ttm: s.pe_ttm, pb: s.pb, total_mv_yi: s.total_mv_yi, turnover_rate: s.turnover_rate, volume_ratio: s.volume_ratio,
+    mf5_wan: s.mf5_wan, mf20_wan: s.mf20_wan,
+    roe: s.roe, netprofit_yoy: s.netprofit_yoy, or_yoy: s.or_yoy, gpm: s.gpm, debt_ratio: s.debt_ratio,
+    excess20: s.excess20, excess60: s.excess60,
+    plan: {
+      held: s.plan.held, shares: s.plan.shares, cost: s.plan.cost, weight_pct: s.plan.weight_pct, room_pct: s.plan.room_pct,
+      buy_low: s.plan.buy_low, buy_high: s.plan.buy_high, eff_stop: s.plan.eff_stop, eff_stop_src: s.plan.eff_stop_src,
+      target: s.plan.target, odds: s.plan.odds, stance: s.plan.stance, invalidate_if: s.plan.invalidate_if,
+    },
+  })
+  const compareAsk = async (body) => {
+    const facts = await compareFacts(body && body.codes)
+    const question = String((body && body.question) || "").trim().slice(0, 600) ||
+      "结合我当前的持仓、现金与纪律，如果只能选一只买，选谁？先做什么？"
+    let answer = null
+    let answerError = null
+    if (!(body && body.withAnswer === false)) {
+      const lines = []
+      lines.push("你是 A 股同口径对比助手。只依据下方【同口径事实】作答：禁止新增、换算、推测任何未给出的数字；缺失一律写「—（待核实）」。")
+      lines.push("硬性纪律（用户的）：① 单票权重上限 " + COMPARE_WEIGHT_CAP + "%；② 赔率=(目标−现价)/(现价−生效止损)，< " + COMPARE_MIN_ODDS + ":1 不建仓；③ 失效条件只有用户能最终认定，你只能引用原文提示。")
+      lines.push("输出五段，总长 ≤600 字，不要复述整张表：")
+      lines.push("① 结论卡：一句话（选谁／都不选／先解决持仓超限），点明触发几条硬约束。")
+      lines.push("② 维度解读：价格位置、趋势动量、资金、估值、质量、计划与赔率，各一句并带数字。")
+      lines.push("③ 关键差异：3 条，必须带数字。")
+      lines.push("④ 执行建议：结合现有持仓与现金，给加/减/观察/换股的具体动作，并说明先做哪一步。")
+      lines.push("⑤ 各自失效条件：两只票各一句，引用原文。")
+      // 追问：把上一两轮的问与答带上（只带文字，不带数字来源不明的补充）；
+      // 模型仍受同口径事实约束，不能拿"用户上一轮没说过的数"当依据。
+      const history = Array.isArray(body && body.history) ? body.history.slice(-4) : []
+      const historyLines = history
+        .map((h) => {
+          const role = h && h.role === "assistant" ? "你" : "用户"
+          const text = String((h && h.text) || "").trim().slice(0, 1200)
+          return text ? role + "：" + text : ""
+        })
+        .filter(Boolean)
+      if (historyLines.length) lines.push("", "【此前的问答】", ...historyLines.slice(-4))
+      lines.push("")
+      lines.push("【问题】" + question)
+      lines.push("【同口径事实 as-of " + facts.asof + "｜价格口径：不复权（TuShare daily）】")
+      for (const s of facts.stocks) {
+        lines.push(JSON.stringify(compareBrief(s)))
+        if (s.plan.kb_excerpt) lines.push("【知识库摘录·" + s.name + "】" + s.plan.kb_excerpt)
+      }
+      lines.push("【规则判定】" + facts.verdict.dims.map((d) => d.label + "→" + (d.winner ? ((facts.stocks.find((x) => x.code === d.winner) || {}).name || d.winner) : "不判")).join("；") + "；胜场 " + JSON.stringify(facts.verdict.score))
+      if (facts.verdict.gates.length) lines.push("【硬约束】" + facts.verdict.gates.map((g) => "[" + g.rule + "]" + g.name + "：" + g.text).join(" / "))
+      try {
+        const r = await runPromptSubagent(lines.join("\n"), { label: "对比分析", timeoutMs: 120000 })
+        answer = String(typeof r === "string" ? r : (r && r.text) || "").trim() || null
+      } catch (e) {
+        answerError = String(e && e.message ? e.message : e).slice(0, 240)
+      }
+    }
+    await appendCompareLog({
+      ts: new Date().toISOString(),
+      codes: facts.stocks.map((s) => s.code),
+      asof: facts.asof,
+      question,
+      answer: answer ? answer.slice(0, 400) : null,
+      answer_error: answerError,
+    })
+    return Object.assign({}, facts, { question, answer, answerError })
+  }
+
   // 口径：行业横截面分位（同 Tushare industry 分类），不联网算分——分位算在纯函数 fundamentals.js 里，
   // 这里只负责「把全市场三张表拉下来缓存好」。一次刷新 = 3 次 API 调用覆盖全市场，
   // 单只股票查询是纯查表，毫秒级、0 token。
@@ -3936,6 +4279,32 @@ function apply(ctx, config) {
           writeJson(res, r.ok ? 200 : 429, r)
         } catch (e) {
           writeJson(res, 500, { ok: false, error: String(e && e.message ? e.message : e).slice(0, 200) })
+        }
+      },
+    },
+    {
+      // 同口径对比：POST 出事实表 + 解释；GET 回最近几次对比记录
+      kind: "exact",
+      path: "/dsh-invest/api/compare",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method === "GET") {
+          try {
+            const log = await readCompareLog(10)
+            writeJson(res, 200, { ok: true, log })
+          } catch (e) {
+            writeJson(res, 500, { ok: false, error: String(e && e.message ? e.message : e).slice(0, 200) })
+          }
+          return
+        }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const r = await compareAsk(body || {})
+          writeJson(res, 200, r)
+        } catch (e) {
+          // 取数/校验失败：400 让前端直接展示原因（不动用 LLM 配额）
+          writeJson(res, 400, { ok: false, error: String(e && e.message ? e.message : e).slice(0, 300) })
         }
       },
     },

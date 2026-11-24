@@ -2,7 +2,7 @@ import './style.css';
 import './page-updates.css';
 import { api } from './api';
 import { renderArchive } from './archive';
-import { renderAsk, stockThreadKey } from './ask';
+import { renderAsk, saveComparePair, stockThreadKey } from './ask';
 import { escapeHtml, formatBytes, formatDateTime } from './format';
 import { hydrateStaticIcons, icon } from './icons';
 import { renderOverview } from './overview';
@@ -1784,6 +1784,147 @@ function jumpToAskLetter(letter: string): void {
   });
 }
 
+// ===== 同口径对比（v0.77.0）=====
+// 交互约定（与用户确认过）：不新增导航页，对比是个股知识库页的第二模式；
+// 左栏点行填 A→B，两槽满时再点替换 A（B 保留，换整对要点叉）；配对存 localStorage。
+function setAskMode(mode: 'kb' | 'compare'): void {
+  if (state.askMode === mode) return;
+  state.askMode = mode;
+  render();
+}
+
+function pickCompareStock(code: string): void {
+  const target = String(code || '').toUpperCase();
+  if (!target) return;
+  if (state.compareA === target) state.compareA = '';
+  else if (state.compareB === target) state.compareB = '';
+  else if (!state.compareA) state.compareA = target;
+  else if (!state.compareB) state.compareB = target;
+  else state.compareA = target;
+  // 事实表是按上一对算的，换了人就作废——否则会出现"A 槽是新的、表里是旧的"
+  state.compareResult = null;
+  state.compareThread = [];
+  state.compareError = '';
+  saveComparePair(state.compareA, state.compareB);
+  render();
+}
+
+function clearCompareSlot(slot: 'a' | 'b'): void {
+  if (slot === 'a') state.compareA = '';
+  else state.compareB = '';
+  state.compareResult = null;
+  state.compareThread = [];
+  state.compareError = '';
+  saveComparePair(state.compareA, state.compareB);
+  render();
+}
+
+function swapCompare(): void {
+  if (!state.compareA || !state.compareB) return;
+  const a = state.compareA;
+  state.compareA = state.compareB;
+  state.compareB = a;
+  state.compareResult = null;
+  state.compareThread = [];
+  saveComparePair(state.compareA, state.compareB);
+  render();
+}
+
+/** 从别的页「加入对比」进来：A 空则填 A，否则填 B（同票不重复占两个槽） */
+function addToCompare(code: string): void {
+  const target = String(code || '').toUpperCase();
+  if (!target) return;
+  if (state.compareA !== target && state.compareB !== target) {
+    if (!state.compareA) state.compareA = target;
+    else if (!state.compareB) state.compareB = target;
+    else state.compareB = target;
+  }
+  state.askMode = 'compare';
+  state.compareResult = null;
+  state.compareThread = [];
+  state.compareError = '';
+  saveComparePair(state.compareA, state.compareB);
+  if (state.view !== 'ask') navigate('ask');
+  else render();
+  if (!state.askStocks.length) void loadAskStocks();
+  toast('已加入对比槽', 'info');
+}
+
+async function runCompare(withAnswer: boolean): Promise<void> {
+  const codes = [state.compareA, state.compareB].filter(Boolean);
+  if (codes.length < 2) { toast('先选两只标的再对比', 'error'); return; }
+  if (codes[0] === codes[1]) { toast('两侧是同一只标的，换一只再比', 'error'); return; }
+  if (state.compareLoading) return;
+  state.compareLoading = true;
+  state.compareError = '';
+  if (withAnswer) state.compareThread = [];
+  render();
+  try {
+    const result = await api.compare({
+      codes,
+      question: state.compareQuestion.trim() || undefined,
+      withAnswer,
+    });
+    state.compareResult = result;
+  } catch (error) {
+    state.compareError = errorMessage(error);
+  } finally {
+    state.compareLoading = false;
+    render();
+  }
+}
+
+async function sendCompareFollow(): Promise<void> {
+  const text = state.compareFollowDraft.trim();
+  const codes = [state.compareA, state.compareB].filter(Boolean);
+  if (!text) return;
+  if (codes.length < 2) { toast('两只票都选上才能追问', 'error'); return; }
+  if (state.compareSending) return;
+  const history = state.compareThread.map((turn) => ({ role: turn.role, text: turn.text }));
+  state.compareThread = [...state.compareThread, { role: 'user', text, ts: Date.now() }];
+  state.compareFollowDraft = '';
+  state.compareSending = true;
+  render();
+  try {
+    const result = await api.compare({ codes, question: text, history, withAnswer: true });
+    const answer = result.answer || '（解释没出来：' + (result.answerError || '模型不可用') + '）';
+    state.compareThread = [...state.compareThread, { role: 'assistant', text: answer, ts: Date.now() }];
+  } catch (error) {
+    state.compareThread = [...state.compareThread, { role: 'assistant', text: '追问失败：' + errorMessage(error), ts: Date.now() }];
+  } finally {
+    state.compareSending = false;
+    render();
+    window.requestAnimationFrame(() => {
+      const thread = document.querySelector<HTMLElement>('.compare-follow');
+      if (thread) thread.scrollIntoView({ block: 'nearest' });
+    });
+  }
+}
+
+/** 升级为深度对比：走 compare-deep 模板（消息 → 深度 → 总判断），出正式报告并落档 */
+async function startCompareDeep(): Promise<void> {
+  const codes = [state.compareA, state.compareB].filter(Boolean);
+  if (codes.length < 2) { toast('先选两只标的再升级', 'error'); return; }
+  if (codes[0] === codes[1]) { toast('两侧是同一只标的，换一只再比', 'error'); return; }
+  if (state.compareLoading) return;
+  const templateId = 'compare-deep';
+  const templateName = '深度对比';
+  const names = codes.map((code) => state.askStocks.find((item) => item.code === code)?.name || code);
+  const question = `${names[0]}（${codes[0]}）对 ${names[1]}（${codes[1]}）：${state.compareQuestion.trim() || '结合我当前的持仓、现金与纪律，如果只能选一只买，选谁？先做什么？'}`;
+  state.compareLoading = true;
+  render();
+  try {
+    const response = await api.run({ templateId, question });
+    if (!response.jobId) throw new Error('任务接口未返回 jobId');
+    localJobMetadata.set(response.jobId, { name: `${templateName} · ${codes.join(' vs ')}`, templateId, templateName, question });
+    mergeJob({ id: response.jobId, status: 'queued', createdAt: new Date().toISOString(), elapsedMs: 0, templateId, templateName, question });
+    toast('已提交深度对比，可在「一键任务」查看进度；跑完会把结论写进标的档案。', 'success');
+    void pollJob(response.jobId);
+    navigate('tasks');
+  } catch (error) { toast(`深度对比提交失败：${errorMessage(error)}`, 'error'); }
+  finally { state.compareLoading = false; render(); }
+}
+
 /** 一键任务页内跳转：先保证在任务页，再滚动到锚点 */
 function gotoTaskSection(targetId: string): void {
   if (state.view !== 'tasks') navigate('tasks');
@@ -2291,6 +2432,15 @@ document.addEventListener('click', (event) => {
   else if (action === 'ask-kb-expand') openAskKb();
   else if (action === 'ask-ask' && target.dataset.question) void askAboutStock(state.askStock, target.dataset.question);
   else if (action === 'ask-send') void askAboutStock(state.askStock);
+  else if (action === 'ask-mode' && (target.dataset.mode === 'kb' || target.dataset.mode === 'compare')) setAskMode(target.dataset.mode);
+  else if (action === 'compare-pick' && target.dataset.code) pickCompareStock(target.dataset.code);
+  else if (action === 'compare-clear' && (target.dataset.slot === 'a' || target.dataset.slot === 'b')) clearCompareSlot(target.dataset.slot);
+  else if (action === 'compare-swap') swapCompare();
+  else if (action === 'compare-run') void runCompare(true);
+  else if (action === 'compare-facts') void runCompare(false);
+  else if (action === 'compare-send') void sendCompareFollow();
+  else if (action === 'compare-add' && target.dataset.code) addToCompare(target.dataset.code);
+  else if (action === 'compare-deep') void startCompareDeep();
   else if (action === 'ask-suggest-edit') {
     if (state.askSuggestionsEditing) finishAskSuggestionEdit();
     else { state.askSuggestionsEditing = true; render(); }
@@ -2430,6 +2580,8 @@ document.addEventListener('input', (event) => {
   else if (target.dataset.field === 'run-query') { state.runQuery = target.value; render(); }
   else if (target.dataset.field === 'ask-query') { state.askQuery = target.value; render(); }
   else if (target.dataset.field === 'ask-input') { state.askDraft = target.value; }
+  else if (target.dataset.field === 'compare-question') { state.compareQuestion = target.value; }
+  else if (target.dataset.field === 'compare-follow') { state.compareFollowDraft = target.value; }
   if (target.dataset.templateId && target.dataset.draft) {
     const id = target.dataset.templateId;
     const draft = state.taskDrafts[id] || { code: '', question: '' };
@@ -2602,6 +2754,21 @@ document.addEventListener('keydown', (event) => {
       event.preventDefault();
       state.askDraft = askInput.value;
       void askAboutStock(state.askStock);
+      return;
+    }
+    const followInput = event.target instanceof HTMLElement ? event.target.closest<HTMLTextAreaElement>('[data-field="compare-follow"]') : null;
+    if (followInput) {
+      event.preventDefault();
+      state.compareFollowDraft = followInput.value;
+      void sendCompareFollow();
+      return;
+    }
+    const compareQuestion = event.target instanceof HTMLElement ? event.target.closest<HTMLTextAreaElement>('[data-field="compare-question"]') : null;
+    if (compareQuestion) {
+      // 问题框回车 = 直接开始对比（与追问框保持一致的键位习惯）
+      event.preventDefault();
+      state.compareQuestion = compareQuestion.value;
+      void runCompare(true);
       return;
     }
   }
