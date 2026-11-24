@@ -145,9 +145,10 @@ function dock(state: AppState): string {
 // ── 中间：对话 ────────────────────────────────────────────────
 
 function threadHtml(state: AppState): string {
-  return state.daoThread.map((turn) => `<div class="dao-turn dao-turn-${turn.role}">
+  const turns = state.daoThread.map((turn) => `<div class="dao-turn dao-turn-${turn.role}">
       <div class="dao-bubble${turn.role === 'assistant' ? ' dao-markdown' : ''}">${turn.role === 'assistant' ? renderMarkdown(turn.text) : escapeHtml(turn.text).replace(/\n/g, '<br/>')}</div>
     </div>`).join('');
+  return `<div class="dao-thread-inner">${turns}</div>`;
 }
 
 /** 从对话里提炼出来的草稿：在对话框上方以「可打标签的卡片」出现，确认才入库 */
@@ -210,14 +211,14 @@ export function renderDao(state: AppState): string {
   return `<div class="dao-stage${empty ? ' is-empty' : ''}${state.daoDockOpen ? ' dock-open' : ''}">
     <div class="dao-stage-bg" style="background-image:url(${spaceBg})" aria-hidden="true"></div>
     <div class="dao-stage-veil" aria-hidden="true"></div>
-    <header class="dao-stage-head">
-      <h1>悟道</h1>
-      <p>把判断、纪律和复盘留下来，按角色自动注进流水线。只存本机，不上传。</p>
-    </header>
     <main class="dao-stage-main">
       ${state.daoThread.length ? `<div class="dao-thread" role="log" aria-live="polite">${threadHtml(state)}</div>` : ''}
       ${composer(state)}
     </main>
+    <footer class="dao-stage-foot">
+      <h1>悟道</h1>
+      <p>把判断、纪律和复盘留下来，按角色自动注进流水线。只存本机，不上传。</p>
+    </footer>
     ${dock(state)}
   </div>`;
 }

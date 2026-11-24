@@ -2,13 +2,30 @@
    页面整体固定走深色，不跟随浅色主题：背景是实拍星环，浅色化只会脏。
    条目库全部收进底部抽屉，默认收起，让"说话"这件事占据唯一的视觉焦点。 */
 
+/* 悟道占满「topbar 以下」的全部空间。
+   高度来自 flex 填充链，不写死 vh —— 写死 vh 就会把 70px 的 topbar 重复算一遍，
+   多出来的高度把底部抽屉顶出视口，还会常驻一条没必要的页面滚动条。 */
+.app-shell:has(.dao-stage) {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-shell:has(.dao-stage) .app-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
 .dao-stage {
   position: relative;
   display: flex;
   flex-direction: column;
-  /* 与 .content:has(.dao-stage) 的上下内边距（18+12）配平，正好铺满一屏 */
-  height: calc(100vh - 30px);
-  min-height: 560px;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
   border: 1px solid rgba(255, 255, 255, .08);
   border-radius: 20px;
   overflow: hidden;
@@ -17,10 +34,15 @@
   isolation: isolate;
 }
 
-/* 悟道是一屏，不要外面的 30px 留白把「一屏」撑出滚动条 */
+/* 悟道是一屏，不要外面的留白把「一屏」撑出滚动条 */
 .content:has(.dao-stage) {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
   max-width: none;
   padding: 18px 22px 12px;
+  overflow: hidden;
 }
 
 /* 背景：星环实拍图，cover 居中；不用 filter:blur，糊掉噪点反而假 */
@@ -47,29 +69,31 @@
     linear-gradient(180deg, rgba(0, 0, 0, .62) 0%, rgba(0, 0, 0, .12) 26%, rgba(0, 0, 0, .34) 66%, rgba(0, 0, 0, .9) 100%);
 }
 
-.dao-stage-head {
+/* 标题与说明沉到页面底部，和抽屉把手挨在一起：
+   上方留给星环和对话，不抢视线。 */
+.dao-stage-foot {
   position: relative;
   z-index: 2;
   flex: none;
-  padding: 26px 30px 0;
+  padding: 4px 26px 14px;
   text-align: center;
 }
 
-.dao-stage-head h1 {
-  margin: 0 0 8px;
-  font-size: 15px;
+.dao-stage-foot h1 {
+  margin: 0 0 6px;
+  font-size: 13px;
   font-weight: 500;
   letter-spacing: .42em;
   text-indent: .42em;
-  color: rgba(255, 255, 255, .9);
+  color: rgba(255, 255, 255, .92);
   text-transform: none;
 }
 
-.dao-stage-head p {
+.dao-stage-foot p {
   margin: 0;
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.6;
-  color: rgba(255, 255, 255, .44);
+  color: rgba(255, 255, 255, .58);
 }
 
 .dao-stage-main {
@@ -136,15 +160,26 @@
 
 .dao-thread {
   width: min(720px, 100%);
-  max-height: min(44vh, 420px);
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 4px 2px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, .18) transparent;
   mask-image: linear-gradient(180deg, transparent 0, #000 18px);
+}
+
+/* 内容不满一屏时贴着输入条往上长，满了才滚。直接给 .dao-thread 加
+   justify-content:flex-end 会在内容溢出时把顶部钉死、滚不到最早的消息，
+   所以改用内层 min-height:100% 做「底部对齐」。 */
+.dao-thread-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+  justify-content: flex-end;
+  padding: 4px 2px;
 }
 
 .dao-turn { display: flex; }
@@ -312,15 +347,17 @@
   padding: 2px 4px;
   border: 0;
   background: transparent;
-  color: rgba(255, 255, 255, .58);
+  color: rgba(255, 255, 255, .95);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
   transition: color .15s ease;
+  /* 这行字压在星环上，纯白也要一道暗影才稳 */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .75);
 }
 
 .dao-under .text-button:hover:not(:disabled) { color: #fff; }
-.dao-under .text-button:disabled { opacity: .3; cursor: default; }
+.dao-under .text-button:disabled { opacity: .38; cursor: default; }
 
 .dao-stage .dao-error { color: #ff8f8f; font-size: 12px; margin: 0 8px; }
 .dao-stage .dao-notice { color: #8fe0c0; font-size: 12px; margin: 0; }
@@ -410,7 +447,13 @@
 .dao-dock {
   position: relative;
   z-index: 3;
-  flex: none;
+  /* 抽屉是「页脚」：不抢高度，展开时最多吃掉五成半，超出的部分自己滚。
+     这个上限是按 1080p 反推的——再高一点，上面的对话区就只剩一条缝。 */
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 56%;
   border-top: 1px solid rgba(255, 255, 255, .1);
   background: linear-gradient(180deg, rgba(6, 6, 9, .42), rgba(4, 4, 6, .96) 42%);
   backdrop-filter: blur(20px) saturate(120%);
@@ -418,6 +461,7 @@
 
 .dao-dock-handle {
   width: 100%;
+  flex: none;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -449,6 +493,7 @@
 .dao-dock.is-open .dao-dock-grip { background: rgba(255, 255, 255, .52); }
 
 .dao-dock .dao-stats {
+  flex: none;
   margin: 0;
   padding: 0 20px 10px;
   border-top: 0;
@@ -468,8 +513,10 @@
   align-items: stretch;
   gap: 18px;
   padding: 0 20px 18px;
-  max-height: 44vh;
-  /* 两列各自滚：外框不滚，避免「滚一下列表、编辑区跟着跑」 */
+  /* 高度交给抽屉的 max-height 决定；两列各自滚，外框不滚 */
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow: hidden;
 }
 
@@ -603,15 +650,20 @@
 /* ── 响应式 ─────────────────────────────────────────── */
 
 @media (max-width: 900px) {
-  .dao-stage { height: calc(100vh - 84px); border-radius: 14px; }
-  .dao-stage-head { padding: 20px 20px 0; }
+  .dao-stage { border-radius: 14px; }
+  .dao-stage-foot { padding: 4px 18px 12px; }
   .dao-stage-main { padding: 12px 14px 16px; }
-  .dao-dock-body { grid-template-columns: minmax(0, 1fr); max-height: 62vh; padding: 0 14px 14px; }
-  .dao-thread { max-height: 40vh; }
+  .dao-dock-body { grid-template-columns: minmax(0, 1fr); padding: 0 14px 14px; }
 }
 
 @media (max-width: 560px) {
-  .dao-stage-head h1 { font-size: 13px; letter-spacing: .3em; }
+  .dao-stage-foot h1 { font-size: 12px; letter-spacing: .3em; }
   .dao-under { flex-wrap: wrap; }
   .dao-bubble { max-width: 100%; }
+}
+
+/* 窗口矮的时候抽屉再让一点，别把对话区压成一条缝 */
+@media (max-height: 820px) {
+  .dao-dock { max-height: 50%; }
+  .dao-stage-foot { padding-bottom: 10px; }
 }
