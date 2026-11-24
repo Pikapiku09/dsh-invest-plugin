@@ -8,6 +8,10 @@ import { extractBoth, collectCharts, buildGroups, isLoopbackRequest, isSafeServe
 import { DEFAULT_PRESET, PRESETS, ROLE_CODES, mergeRoutes, formatRoute, formatRouteChain, parseRoute, parseRouteList, parseRoutesJson } from "./routes.js"
 import { buildStockNotes, normalizeCode, stockFileName } from "./stock-notes.js"
 import { buildCuratePrompt, sanitizeCurated, validateCurated, rawTimelineMarkdown } from "./stock-curator.js"
+import {
+  DAO_COACH_LABEL, normalizeDaoStore, upsertDaoItem, deleteDaoItem, selectDaoEntries,
+  buildDaoBlock, buildDaoBlocks, daoStats, buildCoachPrompt, buildDistillPrompt, parseDistillJson, draftFromText,
+} from "./dao.js"
 import { num, dedupeByCode, latestDisclosedPeriod, buildFundamentals, CAVEAT, MIN_PEERS } from "./fundamentals.js"
 
 // 插件配置：路由预置档 + 按角色覆盖（写在 profile 的 cordis.patch.yml 的 - id: invest → config）
@@ -287,6 +291,9 @@ function apply(ctx, config) {
   const WEB_DIST_INDEX = WEB_DIST_DIR + "/index.html"
   const WEB_DIST_JS = WEB_DIST_DIR + "/workbench.js"
   const WEB_DIST_CSS = WEB_DIST_DIR + "/workbench.css"
+  // 「悟道」条目库：交易心得 / 复盘沉淀，跑流水线时按角色注入（写前留一份 .bak 供手救）
+  const DAO_FILE = BASE_DIR + "/.dsh-invest/store/dao.json"
+  const DAO_BAK_FILE = BASE_DIR + "/.dsh-invest/store/dao.bak.json"
 
   // 读取账本 → 紧凑 Markdown 摘要（不存在/损坏时返回空串，绝不阻断流水线）
   const readHoldingsBlock = async () => {
@@ -1891,6 +1898,67 @@ function apply(ctx, config) {
       answer: String(answer || "").trim(), elapsedMs: Date.now() - started,
       kbUpdatedAt: item.at || "", kbStatus: item.status || "none", newEntries: fresh.length,
     }
+  }
+
+  // —— 「悟道」条目库（本地单用户）——
+  // 读写都走 readJsonFile / writeJsonFile：前者把「文件不存在、被手工改坏」统一降级成空库，
+  // 后者带沙箱策略重试（见 v0.75.3 注释），多工作区并行时不会写一半失败。
+  const readDaoStore = async () => normalizeDaoStore(await readJsonFile(DAO_FILE, null))
+
+  const daoPayload = (store) => ({ items: store.items, stats: daoStats(store), updated_at: store.updated_at })
+
+  // 读-改-写必须串行：两个标签页同时保存会互相覆盖（沿用 withLock）
+  const mutateDao = (fn) => withLock("dao", async () => {
+    const current = await readDaoStore()
+    const result = fn(current)
+    await writeJsonFile(DAO_BAK_FILE, current)
+    await writeJsonFile(DAO_FILE, result.store)
+    return result
+  })
+
+  // 参数问题（400）与模型问题（503）必须分开：前者改输入就能过，后者重试/换模型才有用
+  const daoInputError = (message) => Object.assign(new Error(message), { code: "DAO_INPUT" })
+
+  // 对话人格只认「教练」或五个角色简码，避免前端塞进任意 persona 文本
+  const daoPersona = (raw) => {
+    const value = String(raw || "").trim()
+    if (!value || value === "教练" || value === DAO_COACH_LABEL) return { name: DAO_COACH_LABEL, role: "" }
+    const role = ROLE_MAP[value]
+    if (!role) throw daoInputError("未知的对话人格：" + value.slice(0, 20))
+    return { name: role.name, role: role.code }
+  }
+
+  const daoMessages = (raw) => (Array.isArray(raw) ? raw : [])
+    .filter((turn) => turn && typeof turn.text === "string" && turn.text.trim())
+    .slice(-12)
+    .map((turn) => ({ role: turn.role === "assistant" ? "assistant" : "user", text: String(turn.text) }))
+
+  const daoChat = async (personaRaw, messagesRaw) => {
+    const list = daoMessages(messagesRaw)
+    const last = list[list.length - 1]
+    if (!last || last.role !== "user") throw daoInputError("请先输入要聊的内容")
+    const persona = daoPersona(personaRaw)
+    // 教练要能指出「这条纪律是你自己写的」，所以给它看全部条目（按置顶/最近取前 12 条，字数在 prompt 层再收）
+    const entries = (await readDaoStore()).items.slice(0, 12)
+    const prompt = buildCoachPrompt({
+      personaName: persona.name, personaRole: persona.role,
+      entries, messages: list.slice(0, -1), question: last.text,
+    })
+    const started = Date.now()
+    const answer = await runPromptSubagent(prompt, { label: "悟道对话", timeoutMs: 180000 })
+    return { answer: String(answer || "").trim(), elapsedMs: Date.now() - started, persona: persona.name }
+  }
+
+  const daoDistill = async (personaRaw, messagesRaw) => {
+    const list = daoMessages(messagesRaw)
+    if (!list.length) throw daoInputError("对话为空，没有可沉淀的内容")
+    const persona = daoPersona(personaRaw)
+    const prompt = buildDistillPrompt({ personaName: persona.name, messages: list.slice(-6) })
+    const text = await runPromptSubagent(prompt, { label: "悟道沉淀", timeoutMs: 120000 })
+    // 模型偶尔不按 JSON 交付：降级成「首行标题 + 全文正文」的草稿，用户还能改
+    const draft = parseDistillJson(text) || draftFromText(text)
+    if (!draft) throw daoInputError("模型没有返回可用的条目草稿，请重试或手动填写")
+    return { draft }
   }
 
   const stockNotesListPayload = async (data) => {
@@ -4792,6 +4860,79 @@ function apply(ctx, config) {
       },
     },
     {
+      // 悟道条目列表（页面首屏；坏文件也返回空库，页面不至于打不开）
+      kind: "exact",
+      path: "/dsh-invest/api/dao",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "GET") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          writeJson(res, 200, Object.assign({ ok: true }, daoPayload(await readDaoStore())))
+        } catch (e) { writeJson(res, 500, { error: String(e && e.message ? e.message : e).slice(0, 300) }) }
+      },
+    },
+    {
+      // 新建 / 更新条目：带 id 即更新（id 不存在会报错，避免把已删条目写回来）
+      kind: "exact",
+      path: "/dsh-invest/api/dao/entry",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const result = await mutateDao((store) => upsertDaoItem(store, body, new Date().toISOString()))
+          writeJson(res, 200, Object.assign({ ok: true, item: result.item }, daoPayload(result.store)))
+        } catch (e) { writeJson(res, 400, { error: String(e && e.message ? e.message : e).slice(0, 400) }) }
+      },
+    },
+    {
+      kind: "exact",
+      path: "/dsh-invest/api/dao/delete",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          const result = await mutateDao((store) => deleteDaoItem(store, body.id))
+          writeJson(res, 200, Object.assign({ ok: true, removed: result.removed }, daoPayload(result.store)))
+        } catch (e) { writeJson(res, 400, { error: String(e && e.message ? e.message : e).slice(0, 400) }) }
+      },
+    },
+    {
+      // 悟道对话：教练或某个分析师人格；不传工具，只带用户自己的条目
+      kind: "exact",
+      path: "/dsh-invest/api/dao/chat",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          writeJson(res, 200, Object.assign({ ok: true }, await daoChat(body.persona, body.messages)))
+        } catch (e) {
+          const message = String(e && e.message ? e.message : e).slice(0, 400)
+          if (e && e.code === "DAO_INPUT") writeJson(res, 400, { error: message })
+          else writeJson(res, 503, { error: "模型暂不可用：" + message.slice(0, 160) })
+        }
+      },
+    },
+    {
+      // 把一段对话沉淀成条目草稿（返回草稿，用户确认后走 /dao/entry 入库）
+      kind: "exact",
+      path: "/dsh-invest/api/dao/distill",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
+        try {
+          const body = await readRequestJson(req)
+          writeJson(res, 200, Object.assign({ ok: true }, await daoDistill(body.persona, body.messages)))
+        } catch (e) {
+          const message = String(e && e.message ? e.message : e).slice(0, 400)
+          if (e && e.code === "DAO_INPUT") writeJson(res, 400, { error: message })
+          else writeJson(res, 503, { error: "模型暂不可用：" + message.slice(0, 160) })
+        }
+      },
+    },
+    {
       // 强制重建个股知识库（改了报告或标记格式后手动触发）
       kind: "exact",
       path: "/dsh-invest/api/stock-notes/rebuild",
@@ -5817,11 +5958,20 @@ function apply(ctx, config) {
       // 深度/总判断/波段仍注入完整账本（需要成本、仓位、止损来做仓位与加减仓判断）。
       const screeningExclusion = heldExclusionLine(await readHeldPositions())
       const historyBlock = await readHistoryBlock(question, context, mode)
+      // 「悟道」预计算：读一次条目库，按本次角色各挑一份（置顶优先、字数封顶）；
+      // 空库时块为空串，下面按需注入，不影响任何既有运行。
+      const daoStore = await readDaoStore()
+      const daoPicked = buildDaoBlocks(daoStore, roleCodes)
+      const daoBlocks = daoPicked.blocks
+      const daoCounts = daoPicked.counts
+      const daoSummaryEntries = selectDaoEntries(daoStore, "总判断", { maxChars: 800 })
       const runStage = async (s) => {
         const t0 = Date.now()
         const parts = ["用户问题：" + question]
         if (context) parts.push("【对话上下文（记忆）】" + context + "\n请结合上述上下文继续分析，保持口径一致。")
         parts.push(anchorLine)
+        // 「悟道」纪律放在账本/历史之前：后面这些块又长又多，纪律排在后段容易被模型忽略
+        if (daoBlocks[s.code]) parts.push(daoBlocks[s.code])
         if (s.code === "选股" && screeningExclusion) parts.push(screeningExclusion)
         else if (holdingsBlock) parts.push(holdingsBlock)
         if (historyBlock) parts.push(historyBlock)
@@ -5920,6 +6070,8 @@ function apply(ctx, config) {
           const summaryPrompt = [
             "用户问题：" + question,
             context ? "对话上下文：" + String(context).slice(0, 500) : "",
+            // 总结模型看不到各阶段的 prompt，纪律要在这里再带一次，否则「总结」最容易把纪律丢掉
+            buildDaoBlock(daoSummaryEntries, "总判断"),
             "【各阶段输出（唯一依据）】",
             rawForSummary,
             "请按你的角色设定做二次总结，直接输出最终报告 Markdown 正文。",
@@ -5992,6 +6144,10 @@ function apply(ctx, config) {
           lines.push("- 问题：" + question)
           if (context) { lines.push("- 上下文：" + context.slice(0, 200).replace(/\n/g, " ")) }
           lines.push("- 模型路由：" + roleCodes.map((c) => c + "=" + formatRoute(chosenRoutes[c])).join(" ｜ "))
+          // 留痕：报告要能回答「这次分析受哪些纪律约束」，否则事后无法复盘注入是否生效
+          const daoInjected = roleCodes.filter((c) => daoCounts[c] > 0).map((c) => c + "=" + daoCounts[c] + " 条")
+          if (daoSummaryEntries.length) daoInjected.push("二次总结=" + daoSummaryEntries.length + " 条")
+          if (daoInjected.length) lines.push("- 悟道注入：" + daoInjected.join(" ｜ "))
           for (const n of routeNotes) lines.push("- 路由提示：" + n)
           if (summaryNote) lines.push("- 报告处理：" + summaryNote)
           lines.push("")

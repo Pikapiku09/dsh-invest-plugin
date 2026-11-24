@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件。把「选股 → 消息 → 深度诊断 → 综合决策」做成一条可复用的多角色子代理流水线，
 > 并配一个本机网页工作台：一键任务、模型配置、持仓管理、结论记忆、标的档案、明暗主题。
 
-**当前版本：v0.77.0**
+**当前版本：v0.78.0**
 
 ---
 
@@ -313,6 +313,20 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 - 前端页签是**渐进增强**：只有两段同时存在才出页签，存量旧稿照旧整篇渲染，不会白屏。
 - 页签支持 ←/→ 键切换；图表画廊归在技术面页签内。
 
+### 4.13 悟道（心得库 → 自动注入分析师）
+
+「悟道」页是一条**会自己长大、还会自己进分析师脑子**的记忆：把纪律、反思、复盘、心得写成条目，
+打上角色标签，下一次跑流水线时对应阶段的子代理就会带着它上场。
+
+- **四类 × 五角色**：`kind` 取纪律/反思/复盘/心得；`tags` 可取选股/消息/深度/总判断/波段，**留空即通用**（对所有角色生效）。
+- **注入规则**：每个角色最多 8 条、合计 1200 字，单条只取 160 字摘要；置顶优先、其次最近更新，第一条无条件收，
+  防止「预算把最重要的那条挤掉」。二次总结另带总判断口径的条目（≤800 字）。
+- **冲突有出路**：注入块尾行要求「与行情数据或事实冲突时以数据为准，但必须在结论里点出这处冲突」。
+- **留痕可复盘**：报告头写 `- 悟道注入：选股=2 条 ｜ 深度=2 条 ｜ 二次总结=2 条`，空库不写这一行。
+- **对话沉淀**：默认「悟道教练」人格（也可切任一分析师），先复述你的判断、再挑矛盾、最后给一条今天能执行的动作；
+  「提炼成条目」只生成草稿填进编辑区，**改完确认才入库**。
+- **边界**：上限 200 条、单条正文 4000 字；写盘前备份 `dao.bak.json`，`dao.json` 损坏按空库处理。
+
 ---
 
 ## 五、数据层
@@ -328,6 +342,7 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | 图表 | `.dsh-invest/charts/` | 由 `scripts/stockchart.js` 生成的 SVG 与数据 JSON |
 | 取数包 | `.dsh-invest/cache/pack/` | `scripts/fetch_pack.js` 落盘的完整原始数据（按标的+日期） |
 | 报告归档 | `.dsh-invest/reports/` + `invest-outputs/<时间戳>_<问题>/` | 报告.md + 图表副本 |
+| 悟道条目 | `.dsh-invest/store/dao.json`（备份 `dao.bak.json`） | 纪律/反思/复盘/心得，按角色注入流水线 |
 
 索引重建：`python tools/index_store.py`（SQLite + index.json 一次生成）。
 
@@ -361,6 +376,11 @@ http://127.0.0.1:<DSH端口>/dsh-invest/app
 | POST | `/dsh-invest/api/stock-note/curate` | 触发二次整理（异步，`full` 可全量重写） |
 | POST | `/dsh-invest/api/stock-ask` | 就个股知识库追问（线程按股票保存） |
 | POST | `/dsh-invest/api/stock-notes/rebuild` | 重建知识库（`?full=1` 全量重解析） |
+| GET | `/dsh-invest/api/dao` | 悟道条目列表 + 统计（v0.78.0） |
+| POST | `/dsh-invest/api/dao/entry` | 新建/更新一条悟道条目（带 id 即更新） |
+| POST | `/dsh-invest/api/dao/delete` | 删除条目（硬删，写前已备份） |
+| POST | `/dsh-invest/api/dao/chat` | 与悟道教练/指定分析师对话（继承宿主模型，180s） |
+| POST | `/dsh-invest/api/dao/distill` | 把对话提炼成条目草稿（只回草稿，不落库） |
 | GET | `/dsh-invest/api/backtest` | 判断质量回测：结构化结论 × 日线 → 5/20 日命中率与超额；收益按**前复权**（close × adj_factor）计算（v0.44.0 上线，v0.46.0 修口径） |
 | GET | `/dsh-invest/api/conclusions-export` | 导出结论单文件 jsonl（首行 `_manifest`，v0.48.0） |
 | POST | `/dsh-invest/api/conclusions-import` | 导入他机结论：按 `(callId+code)` 去重、只追加（v0.48.0） |
@@ -585,7 +605,7 @@ CHANGELOG 写给维护者：根因、改了哪个函数、跑了多少用例。�
 
 ## 十二、版本与变更
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.77.0**（0.77.0 新增「同口径对比」：个股知识库页多一个对比模式，两只票拉到同一交易日、同一价格口径算事实表，胜负由规则判定、模型只解释；配套 `scripts/compare_pack.js`、`POST /dsh-invest/api/compare`、深度对比任务模板与 8 项接口测试，仓库测试 279 项）。
+见 [CHANGELOG.md](CHANGELOG.md)。当前 **v0.78.0**（0.78.0 新增「悟道」：交易心得/复盘条目库 + 教练/分析师对话沉底，条目按角色标签自动注入投研流水线对应阶段，二次总结另带总判断条目，报告头留注入痕迹；配套 `lib/dao.js`、5 个接口与 27 项测试）。
 
 > **维护约定（勿跳过）**：版本号只有一个事实来源 —— `packages/dsh-invest/package.json`。
 > 每次发版必须同步：① 根 `package.json` 与 `package-lock.json`；② 本文件顶部「当前版本」与本节摘要；

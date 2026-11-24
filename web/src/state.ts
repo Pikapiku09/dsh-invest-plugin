@@ -4,6 +4,7 @@ import type {
   ModelSettingsResponse, TaskTemplate, WorkbenchView, WatchlistResponse, LedgerColKey, BacktestResponse, ConclusionAuditResponse, WatchDailyStatus, StrategyHealthResponse, SectorHeatmapResponse, TrialsResponse, RealPerformanceResponse,
   StockNoteMeta, StockNoteDetail, UpdateCheckResponse, FundamentalsResponse,
   LiveWatchResponse, CompareResponse,
+  DaoEntry, DaoStats, DaoDraft, DaoTurn, DaoKind, DaoRole,
 } from './types';
 import type { WatchDistMode } from './watch-metrics';
 
@@ -13,6 +14,52 @@ export const TEMPLATE_ORDER_STORE = 'dsh-invest.templateOrder';
 export const COMPARE_PAIR_STORE = 'dsh-invest.comparePair';
 const ASK_THREADS_STORE = 'dsh-invest.askThreads';
 const ASK_SUGGESTIONS_STORE = 'dsh-invest.askSuggestions';
+const DAO_THREAD_STORE = 'dsh-invest.daoThread';
+
+/** 悟道条目类型（与后端 DAO_KINDS 一致；改这里必须同步 packages/dsh-invest/lib/dao.js） */
+export const DAO_KINDS: DaoKind[] = ['纪律', '反思', '复盘', '心得'];
+/** 悟道角色标签（不含「通用」：不选标签即通用，所有角色都会带上） */
+export const DAO_ROLES: DaoRole[] = ['选股', '消息', '深度', '总判断', '波段'];
+/** 悟道对话人格：教练负责追问与拆解，分析师人格负责按本角色视角给反馈 */
+export const DAO_PERSONAS: Array<{ value: string; label: string }> = [
+  { value: '教练', label: '悟道教练' },
+  { value: '选股', label: '选股分析师' },
+  { value: '消息', label: '消息分析师' },
+  { value: '深度', label: '深度分析师' },
+  { value: '总判断', label: '总判断师' },
+  { value: '波段', label: '波段池管理师' },
+];
+
+export function emptyDaoDraft(): DaoDraft {
+  return { id: '', kind: '纪律', title: '', body: '', tags: [], pinned: false };
+}
+
+export function daoDraftFromEntry(item: DaoEntry): DaoDraft {
+  return { id: item.id, kind: item.kind, title: item.title, body: item.body, tags: [...item.tags], pinned: item.pinned };
+}
+
+/** 悟道对话持久化：只留最近 40 轮，单条截断，写失败静默（与追问线程同一套路） */
+export function readDaoThread(): { persona: string; turns: DaoTurn[] } {
+  try {
+    const raw = window.localStorage.getItem(DAO_THREAD_STORE);
+    if (!raw) return { persona: '教练', turns: [] };
+    const parsed = JSON.parse(raw) as { persona?: unknown; turns?: unknown };
+    const persona = typeof parsed?.persona === 'string' ? parsed.persona : '教练';
+    const turns = Array.isArray(parsed?.turns)
+      ? (parsed.turns as DaoTurn[])
+        .filter((turn) => turn && typeof turn.text === 'string')
+        .map((turn) => ({ role: turn.role === 'assistant' ? 'assistant' as const : 'user' as const, text: String(turn.text).slice(0, 20000), ts: Number(turn.ts) || Date.now() }))
+        .slice(-40)
+      : [];
+    return { persona, turns };
+  } catch { return { persona: '教练', turns: [] }; }
+}
+
+export function persistDaoThread(persona: string, turns: DaoTurn[]): void {
+  try {
+    window.localStorage.setItem(DAO_THREAD_STORE, JSON.stringify({ persona, turns: (turns || []).slice(-40) }));
+  } catch { /* 配额或隐私模式：忽略 */ }
+}
 
 /** 追问默认预设（用户可在页面上直接改增删，存 localStorage） */
 export const DEFAULT_ASK_SUGGESTIONS = [
@@ -315,7 +362,32 @@ export interface AppState {
   // ===== 持仓工作区「当前账本」表格偏好（localStorage 持久化）=====
   ledgerColumns: LedgerColKey[];
   ledgerSort: { key: LedgerColKey; dir: 'asc' | 'desc' } | null;
+  // ===== 悟道（v0.78.0）：自己的纪律与复盘，按角色标签注入流水线 =====
+  daoEntries: DaoEntry[];
+  daoStats: DaoStats | null;
+  daoUpdatedAt: string;
+  daoLoading: boolean;
+  daoError: string;
+  /** 条目列表搜索词（标题/正文/标签） */
+  daoQuery: string;
+  daoKindFilter: '全部' | DaoKind;
+  daoRoleFilter: '全部' | DaoRole;
+  /** 编辑中的草稿；id 为空表示新建 */
+  daoDraft: DaoDraft;
+  daoSaving: boolean;
+  /** 保存/删除后的轻提示（页面内展示，不弹 toast 也能看见） */
+  daoNotice: string;
+  /** 对话人格：'教练' 或角色简码 */
+  daoPersona: string;
+  daoThread: DaoTurn[];
+  daoChatDraft: string;
+  daoChatLoading: boolean;
+  daoChatError: string;
+  /** 正在把对话沉淀成条目草稿 */
+  daoDistilling: boolean;
 }
+
+const DAO_PERSISTED = readDaoThread();
 
 export const state: AppState = {
   view: 'overview', index: null, holdings: null, templates: [], jobs: [],
@@ -352,4 +424,9 @@ export const state: AppState = {
   liveWatch: null, liveWatchLoading: false, liveWatchSaving: false, liveWatchTicking: false,
   liveWatchError: '', liveAsking: '', liveAnswer: null,
   fundamentals: null, fundamentalsLoading: false, fundamentalsError: '',
+  daoEntries: [], daoStats: null, daoUpdatedAt: '', daoLoading: false, daoError: '',
+  daoQuery: '', daoKindFilter: '全部', daoRoleFilter: '全部', daoDraft: emptyDaoDraft(),
+  daoSaving: false, daoNotice: '',
+  daoPersona: DAO_PERSISTED.persona, daoThread: DAO_PERSISTED.turns,
+  daoChatDraft: '', daoChatLoading: false, daoChatError: '', daoDistilling: false,
 };

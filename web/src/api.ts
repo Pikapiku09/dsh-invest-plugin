@@ -5,6 +5,7 @@ import type {
   WatchlistResponse, WatchlistUpdateInput, WatchlistRefreshResponse, WatchDailyStatus, WatchlistUpdateResponse,
   StockNotesResponse, StockNoteDetail, StockAskResponse, StockChartsResponse, FundamentalsResponse, BacktestResponse, ConclusionAuditResponse, BackfillResponse, ImportResponse, UpdateCheckResponse, WhatsNewResponse, StrategyHealthResponse, SectorHeatmapResponse, TrialsResponse, RealPerformanceResponse,
   LiveWatchResponse, LiveTickResponse, CompareResponse, CompareLogItem,
+  DaoPayload, DaoEntry, DaoChatResponse, DaoDistillResponse, DaoKind, DaoRole,
 } from './types';
 
 const BASE = '/dsh-invest/api';
@@ -197,4 +198,18 @@ export const api = {
   compare: (input: { codes: string[]; question?: string; history?: Array<{ role: 'user' | 'assistant'; text: string }>; withAnswer?: boolean }) =>
     postSlow<CompareResponse>(`${BASE}/compare`, input, 180_000),
   compareLog: () => request<{ ok: boolean; log: CompareLogItem[] }>(`${BASE}/compare`),
+  // ===== 悟道（v0.78.0）=====
+  /** 条目库：返回全部条目 + 统计（坏文件后端会降级成空库） */
+  dao: () => request<DaoPayload>(`${BASE}/dao`),
+  /** 新建或更新条目：带 id 即更新（id 已删会报错，避免把旧条目写回来） */
+  daoEntry: (input: { id?: string; kind: DaoKind; title: string; body: string; tags: DaoRole[]; pinned: boolean }) =>
+    post<DaoPayload & { item: DaoEntry }>(`${BASE}/dao/entry`, input),
+  /** 删除条目：removed 为 0 表示本来就不在（幂等） */
+  daoDelete: (id: string) => post<DaoPayload & { removed: number }>(`${BASE}/dao/delete`, { id }),
+  /** 悟道对话：教练或某个分析师人格，继承宿主模型 */
+  daoChat: (input: { persona: string; messages: Array<{ role: 'user' | 'assistant'; text: string }> }) =>
+    postSlow<DaoChatResponse>(`${BASE}/dao/chat`, input, 180_000),
+  /** 把一段对话沉淀成条目草稿（用户确认后再走 daoEntry 入库） */
+  daoDistill: (input: { persona: string; messages: Array<{ role: 'user' | 'assistant'; text: string }> }) =>
+    postSlow<DaoDistillResponse>(`${BASE}/dao/distill`, input, 120_000),
 };

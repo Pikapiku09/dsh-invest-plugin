@@ -1,8 +1,10 @@
 import './style.css';
 import './page-updates.css';
+import './dao.css';
 import { api } from './api';
 import { renderArchive } from './archive';
 import { renderAsk, saveComparePair, stockThreadKey } from './ask';
+import { renderDao } from './dao';
 import { escapeHtml, formatBytes, formatDateTime } from './format';
 import { hydrateStaticIcons, icon } from './icons';
 import { renderOverview } from './overview';
@@ -10,7 +12,7 @@ import { closeReader, initialiseReader, openMarkdown, openReport } from './reade
 import { hydrateCharts } from './markdown';
 import { recordsForCode, reportForRun } from './selectors';
 import { allRunRows } from './run-history';
-import { emptyManualPosition, DEFAULT_ASK_SUGGESTIONS, persistAskSuggestions, persistAskThreads, state, TEMPLATE_ORDER_STORE } from './state';
+import { emptyManualPosition, daoDraftFromEntry, emptyDaoDraft, DEFAULT_ASK_SUGGESTIONS, persistAskSuggestions, persistAskThreads, persistDaoThread, state, TEMPLATE_ORDER_STORE } from './state';
 import type { TaskDraft } from './state';
 import { NAME_INPUT_TEMPLATES, orderedTemplates, primaryJobReport, renderTasks } from './tasks';
 import { renderRuns } from './runs';
@@ -37,7 +39,7 @@ let holdingsSerial = 0;
 /** 基本面评级的请求序号（v0.58.0）：切换标的时旧响应不得覆盖新结果 */
 let fundamentalsSerial = 0;
 /** 全量重绘时需要保持滚动位置的滚动容器（标的档案左侧栏、标的索引列表、账本列设置、追问会话与报告列表） */
-const SCROLL_KEEP_SELECTOR = '.archive-browser, .code-list, .ledger-col-list, .ask-thread, .ask-report-list';
+const SCROLL_KEEP_SELECTOR = '.archive-browser, .code-list, .ledger-col-list, .ask-thread, .ask-report-list, .dao-list-body';
 /** 上一次渲染的视图：同视图重绘保持滚动位置，切换视图回到顶部 */
 let lastRenderedView: WorkbenchView | null = null;
 /** 页面暂时变矮（如档案详情先显示加载态）没恢复成功的窗口滚动位置，留到下一次渲染再试 */
@@ -182,13 +184,14 @@ function render(): void {
           : state.view === 'model-settings' ? renderModelSettings(state)
           : state.view === 'backtest' ? renderBacktest(state)
 : state.view === 'strategy-health' ? renderStrategyHealth(state)
+: state.view === 'dao' ? renderDao(state)
 : renderHoldings(state);
   // 追问回答以 Markdown 渲染，若回答里引用了 .svg 图表路径，需要按需加载成 data URL
   if (state.view === 'ask') void hydrateCharts(viewElement);
   const labels: Record<WorkbenchView, string> = {
     overview: '投研概览', archive: '标的档案', runs: '运行记录', tasks: '一键任务',
     ask: '个股知识库', 'model-settings': '模型设置', holdings: '持仓工作区', backtest: '判断质量',
-    'strategy-health': '量化策略（模拟盘）',
+    'strategy-health': '量化策略（模拟盘）', dao: '悟道',
   };
   document.getElementById('topbarContext')!.textContent = labels[state.view];
   // 左上角品牌区：版本号 + 「检测更新」（v0.51.0）
@@ -1337,8 +1340,145 @@ function openJobReport(id: string): void {
   else toast('该任务尚未返回可阅读的报告。', 'info');
 }
 
+// ===== 悟道（v0.78.0）：条目库 + 对话 + 沉淀 =====
+
+/** 首屏读取条目库；后端坏文件会降级成空库，这里只处理网络错误 */
+async function loadDao(): Promise<void> {
+  if (state.daoLoading) return;
+  state.daoLoading = true; state.daoError = '';
+  render();
+  try {
+    applyDaoPayload(await api.dao());
+  } catch (error) {
+    state.daoError = errorMessage(error);
+  } finally {
+    state.daoLoading = false;
+    render();
+  }
+}
+
+function applyDaoPayload(payload: { items: typeof state.daoEntries; stats: typeof state.daoStats; updated_at: string }): void {
+  state.daoEntries = payload.items || [];
+  state.daoStats = payload.stats || null;
+  state.daoUpdatedAt = payload.updated_at || '';
+}
+
+function startNewDaoEntry(): void {
+  state.daoDraft = emptyDaoDraft();
+  state.daoNotice = '';
+  render();
+  const input = viewElement.querySelector<HTMLInputElement>('[data-field="dao-title"]');
+  input?.focus();
+}
+
+function editDaoEntry(id: string): void {
+  const item = state.daoEntries.find((entry) => entry.id === id);
+  if (!item) { toast('条目已不存在，列表将刷新。', 'info'); void loadDao(); return; }
+  state.daoDraft = daoDraftFromEntry(item);
+  state.daoNotice = '';
+  render();
+}
+
+function toggleDaoTag(tag: string): void {
+  const tags = state.daoDraft.tags;
+  state.daoDraft.tags = tags.includes(tag) ? tags.filter((item) => item !== tag) : [...tags, tag];
+  render();
+}
+
+async function saveDaoEntry(): Promise<void> {
+  if (state.daoSaving) return;
+  const draft = state.daoDraft;
+  if (!draft.body.trim()) { state.daoNotice = '正文不能为空。'; render(); return; }
+  state.daoSaving = true; state.daoNotice = '';
+  render();
+  try {
+    const payload = await api.daoEntry({ id: draft.id || undefined, kind: draft.kind, title: draft.title, body: draft.body, tags: draft.tags, pinned: draft.pinned });
+    applyDaoPayload(payload);
+    state.daoDraft = emptyDaoDraft();
+    state.daoNotice = payload.item ? `已保存「${payload.item.title}」，下一次跑流水线会按新内容注入。` : '已保存。';
+    toast('已入库，下一次跑流水线会带上。', 'success');
+  } catch (error) {
+    state.daoNotice = `保存失败：${errorMessage(error)}`;
+  } finally {
+    state.daoSaving = false;
+    render();
+  }
+}
+
+async function removeDaoEntry(id: string): Promise<void> {
+  const item = state.daoEntries.find((entry) => entry.id === id);
+  if (!confirm(`删除「${item ? item.title : '这条条目'}」？删除后不会再有备份，除非手动恢复 dao.bak.json。`)) return;
+  try {
+    const payload = await api.daoDelete(id);
+    applyDaoPayload(payload);
+    if (state.daoDraft.id === id) state.daoDraft = emptyDaoDraft();
+    state.daoNotice = payload.removed ? '已删除。' : '这条本来就不在了。';
+    toast(payload.removed ? '条目已删除。' : '条目不存在。', payload.removed ? 'success' : 'info');
+  } catch (error) {
+    state.daoNotice = `删除失败：${errorMessage(error)}`;
+    toast(`删除失败：${errorMessage(error)}`, 'error');
+  }
+  render();
+}
+
+/** 发给后端的对话：只带角色与文本，不带本地时间戳 */
+function daoMessagesForApi(): Array<{ role: 'user' | 'assistant'; text: string }> {
+  return state.daoThread.map((turn) => ({ role: turn.role, text: turn.text }));
+}
+
+function appendDaoTurn(role: 'user' | 'assistant', text: string): void {
+  state.daoThread = [...state.daoThread, { role, text, ts: Date.now() }].slice(-40);
+  persistDaoThread(state.daoPersona, state.daoThread);
+}
+
+async function sendDaoMessage(): Promise<void> {
+  if (state.daoChatLoading) return;
+  const question = String(state.daoChatDraft || '').trim();
+  if (!question) { state.daoChatError = '先输入要聊的内容。'; render(); return; }
+  appendDaoTurn('user', question);
+  state.daoChatDraft = ''; state.daoChatError = ''; state.daoChatLoading = true;
+  render();
+  try {
+    const result = await api.daoChat({ persona: state.daoPersona, messages: daoMessagesForApi() });
+    appendDaoTurn('assistant', result.answer);
+  } catch (error) {
+    state.daoChatError = errorMessage(error);
+  } finally {
+    state.daoChatLoading = false;
+    render();
+  }
+}
+
+async function distillDao(): Promise<void> {
+  if (state.daoDistilling || state.daoThread.length < 2) return;
+  state.daoDistilling = true; state.daoChatError = '';
+  render();
+  try {
+    const result = await api.daoDistill({ persona: state.daoPersona, messages: daoMessagesForApi() });
+    const draft = result.draft;
+    state.daoDraft = { id: '', kind: draft.kind, title: draft.title, body: draft.body, tags: draft.tags, pinned: false };
+    state.daoNotice = '草稿已填入上方编辑区：改一改再入库，别直接存模型的措辞。';
+    toast('已提炼成草稿，确认后入库。', 'success');
+  } catch (error) {
+    state.daoChatError = errorMessage(error);
+  } finally {
+    state.daoDistilling = false;
+    render();
+  }
+}
+
+function clearDaoThread(): void {
+  if (!state.daoThread.length) return;
+  if (!confirm('清空这段对话？已入库的条目不受影响。')) return;
+  state.daoThread = [];
+  state.daoChatError = '';
+  persistDaoThread(state.daoPersona, state.daoThread);
+  render();
+}
+
 function navigate(view: WorkbenchView): void {
   state.view = view; state.sidebarOpen = false; render();
+  if (view === 'dao' && !state.daoStats && !state.daoLoading) void loadDao();
   if (view === 'tasks') {
     if (!state.templates.length && !state.templatesLoading) void loadTemplates();
     void loadJobs();
@@ -2454,6 +2594,29 @@ document.addEventListener('click', (event) => {
     }
   }
   else if (action === 'ask-suggest-add') addAskSuggestion();
+  // ===== 悟道（v0.78.0）=====
+  else if (action === 'dao-new') startNewDaoEntry();
+  else if (action === 'dao-edit' && target.dataset.id) editDaoEntry(target.dataset.id);
+  else if (action === 'dao-cancel') { state.daoDraft = emptyDaoDraft(); state.daoNotice = ''; render(); }
+  else if (action === 'dao-save') void saveDaoEntry();
+  else if (action === 'dao-delete' && target.dataset.id) void removeDaoEntry(target.dataset.id);
+  else if (action === 'dao-kind' && target.dataset.kind) {
+    state.daoDraft.kind = target.dataset.kind as typeof state.daoDraft.kind;
+    render();
+  }
+  else if (action === 'dao-tag' && target.dataset.tag) toggleDaoTag(target.dataset.tag);
+  else if (action === 'dao-pin') { state.daoDraft.pinned = !state.daoDraft.pinned; render(); }
+  else if (action === 'dao-filter-kind' && target.dataset.kind) {
+    state.daoKindFilter = target.dataset.kind as typeof state.daoKindFilter;
+    render();
+  }
+  else if (action === 'dao-filter-role' && target.dataset.role) {
+    state.daoRoleFilter = target.dataset.role as typeof state.daoRoleFilter;
+    render();
+  }
+  else if (action === 'dao-send') void sendDaoMessage();
+  else if (action === 'dao-distill') void distillDao();
+  else if (action === 'dao-clear-thread') clearDaoThread();
   else if (action === 'ask-suggest-reset') {
     state.askSuggestions = [...DEFAULT_ASK_SUGGESTIONS];
     persistAskSuggestionList();
@@ -2580,6 +2743,15 @@ document.addEventListener('input', (event) => {
   else if (target.dataset.field === 'run-query') { state.runQuery = target.value; render(); }
   else if (target.dataset.field === 'ask-query') { state.askQuery = target.value; render(); }
   else if (target.dataset.field === 'ask-input') { state.askDraft = target.value; }
+  else if (target.dataset.field === 'dao-query') { state.daoQuery = target.value; render(); }
+  else if (target.dataset.field === 'dao-title') { state.daoDraft.title = target.value; }
+  else if (target.dataset.field === 'dao-body') {
+    state.daoDraft.body = target.value;
+    // 字数提示就地更新：body 每次输入都整页重绘会把光标顶掉，这里只改计数节点
+    const counter = viewElement.querySelector<HTMLElement>('[data-dao-body-count]');
+    if (counter) counter.textContent = `${target.value.length} / 4000 字；进提示词只取前 160 字摘要`;
+  }
+  else if (target.dataset.field === 'dao-chat') { state.daoChatDraft = target.value; }
   else if (target.dataset.field === 'compare-question') { state.compareQuestion = target.value; }
   else if (target.dataset.field === 'compare-follow') { state.compareFollowDraft = target.value; }
   if (target.dataset.templateId && target.dataset.draft) {
@@ -2651,6 +2823,13 @@ document.addEventListener('change', (event) => {
   // 判断质量：本机标识改名——失焦提交（回车在 keydown 里处理）
   if (target instanceof HTMLInputElement && target.dataset.instanceName !== undefined) {
     if (state.backtest?.localInstance?.name !== target.value) void saveInstanceName(target.value);
+    return;
+  }
+  // 悟道：人格切换只影响下一轮，历史对话保留
+  if (target instanceof HTMLSelectElement && target.dataset.field === 'dao-persona') {
+    state.daoPersona = target.value;
+    persistDaoThread(state.daoPersona, state.daoThread);
+    render();
     return;
   }
   if (target instanceof HTMLInputElement && target.dataset.holdingsFile) {
@@ -2761,6 +2940,13 @@ document.addEventListener('keydown', (event) => {
       event.preventDefault();
       state.compareFollowDraft = followInput.value;
       void sendCompareFollow();
+      return;
+    }
+    const daoChatInput = event.target instanceof HTMLElement ? event.target.closest<HTMLTextAreaElement>('[data-field="dao-chat"]') : null;
+    if (daoChatInput) {
+      event.preventDefault();
+      state.daoChatDraft = daoChatInput.value;
+      void sendDaoMessage();
       return;
     }
     const compareQuestion = event.target instanceof HTMLElement ? event.target.closest<HTMLTextAreaElement>('[data-field="compare-question"]') : null;

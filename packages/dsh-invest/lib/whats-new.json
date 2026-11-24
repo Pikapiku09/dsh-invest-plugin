@@ -1,7 +1,18 @@
 {
-  "latest": "0.77.0",
-  "generatedAt": "2026-11-24T09:17:33.482Z",
+  "latest": "0.78.0",
+  "generatedAt": "2026-11-24T13:46:00.180Z",
   "releases": [
+    {
+      "version": "0.78.0",
+      "date": "2026-11-24",
+      "title": "交易心得不再只是硬盘里的一份 Markdown——它会被带进每一次分析",
+      "items": [
+        "**新增「悟道」页**：纪律 / 反思 / 复盘 / 心得四类条目，存在本机 JSON 里；可置顶、可按角色打标签（选股 / 消息 / 深度 / 总判断 / 波段，留空即通用）。",
+        "**打完标签就自动生效**：跑投研流水线时，每个角色阶段自动带上自己的条目摘要（最多 8 条、合计 1200 字，单条只取 160 字），二次总结另带总判断条目；报告头会写明「悟道注入：深度=3 条」这样的痕迹。",
+        "**对话能沉淀成条目**：默认「悟道教练」人格，也可切任一分析师；它会先复述你的判断，再挑矛盾，最后给一条今天能执行的动作。点「提炼成条目」只生成草稿填进编辑区，改完确认才入库。",
+        "**不会悄悄改你的东西**：删除是硬删，但每次写盘前先备份 dao.bak.json；dao.json 损坏时按空库处理，页面照常能开。"
+      ]
+    },
     {
       "version": "0.77.0",
       "date": "2026-11-24",
@@ -69,19 +80,6 @@
         "测试：新增 test/job-cancel.test.js（排队取消 / 运行中中断 / 重复取消 409 / 未知任务 404）。",
         "取消不归档本次结果（不写报告、不进结论库），已产生的中间内容不保留；",
         "取消后专用执行 Agent 仍会正常 dispose()，不会泄漏。"
-      ]
-    },
-    {
-      "version": "0.75.5",
-      "date": "2026-11-23",
-      "title": "修复：一键任务「任务进度中断：TypeError: Cannot read properties of undefined (reading 'id')」——子代理激活 spec 形状不合 0.2.x 契约",
-      "items": [
-        "标的档案点「个股体检」，几秒内中断，toast 报上面那句 TypeError；",
-        "runs.jsonl 里三个角色阶段（市场消息 / 深度分析 / 总判断）在 15ms 内全部同句失败、ms: 0，模型和行情接口根本没走到——说明炸在「创建子代理」这一步，不是分析逻辑。",
-        "新增模块级 activationSpecFor(spec, text, delivery)，按 0.2.x 契约产出 { provider, label, prompt:[{type:\"text\",text}], parent, agentOptions?, cwd?, signal?, delivery }，**parent 在顶层**；…",
-        "startStage（一键任务阶段）与 runPromptSubagent（辅助子代理）统一走它，保留 caller → parent 的 delivery 回退；",
-        "src/host.js（dist 生成源，code.host 形态）同步同一处改动，node tools/build.js 产物与源码一致；",
-        "新增 test/subagent-activation-contract.test.js：假宿主**只有** startActivation 且照抄 spec.parent.id 语义，含「旧形状必须复现那句 TypeError」的回归锚点，以及一条真跑 tool.execute({mode:'个股'}) 的端到端用例。"
       ]
     }
   ]

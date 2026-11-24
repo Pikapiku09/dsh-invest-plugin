@@ -474,7 +474,7 @@ export interface RealPerformanceResponse {
   } | null;
 }
 
-export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health';
+export type WorkbenchView = 'overview' | 'archive' | 'runs' | 'tasks' | 'ask' | 'dao' | 'model-settings' | 'holdings' | 'backtest' | 'strategy-health';
 
 // ===== 策略健康（v0.59.0）=====
 // 只读消费 LihuQuantify 导出的模拟盘契约（outputs/strategy_health.json，schema_version=1）。
@@ -1399,4 +1399,60 @@ export interface CompareLogItem {
   question: string;
   answer: string | null;
   answer_error: string | null;
+}
+
+// ===== 悟道（v0.78.0）=====
+// 用户自己写的交易纪律/反思/复盘/心得，按角色标签在流水线开跑时自动注入对应分析师。
+// 存储在后端 .dsh-invest/store/dao.json，页面不持有写入权，一切改动走接口。
+export type DaoKind = '纪律' | '反思' | '复盘' | '心得';
+/** 角色标签；空数组等价于「通用」——所有角色都会带上 */
+export type DaoRole = '选股' | '消息' | '深度' | '总判断' | '波段';
+
+export interface DaoEntry {
+  id: string;
+  kind: DaoKind;
+  title: string;
+  body: string;
+  tags: DaoRole[];
+  pinned: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DaoStats {
+  total: number;
+  pinned: number;
+  byRole: Record<string, number>;
+  byKind: Record<string, number>;
+}
+
+export interface DaoPayload {
+  ok: true;
+  items: DaoEntry[];
+  stats: DaoStats;
+  updated_at: string;
+}
+
+/** 页面编辑中的条目草稿；id 为空表示新建 */
+export interface DaoDraft {
+  id: string;
+  kind: DaoKind;
+  title: string;
+  body: string;
+  tags: DaoRole[];
+  pinned: boolean;
+}
+
+export interface DaoTurn { role: 'user' | 'assistant'; text: string; ts: number }
+
+export interface DaoChatResponse {
+  ok: true;
+  answer: string;
+  elapsedMs: number;
+  persona: { name: string; role: string };
+}
+
+export interface DaoDistillResponse {
+  ok: true;
+  draft: { title: string; body: string; kind: DaoKind; tags: DaoRole[] };
 }
