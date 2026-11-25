@@ -213,6 +213,25 @@ export interface EffectiveModel {
   resolved: string;
 }
 
+/** 悟道对话的模型设置 */
+export interface DaoModelSettings {
+  /** provider/model 或 inherit */
+  model: string;
+  /** default = 不下发 reasoningEffort */
+  effort: string;
+  maxTokens: number;
+  distillMaxTokens: number;
+  timeoutMs: number;
+  /** 固定提示词实际读取的路径 */
+  promptPath: string;
+  /** override = 工作区里有自定义副本；bundled = 用包内默认；none = 都没有 */
+  promptSource: 'override' | 'bundled' | 'none';
+  /** 快档参数被宿主拒绝、当前已退回继承 */
+  fallbackActive?: boolean;
+  effortOptions?: { value: string; label: string }[];
+  description?: string;
+}
+
 export interface ModelSettingsResponse {
   /** 当前生效宿主模型（模型设置里的覆盖优先，缺省为会话模型） */
   hostModel?: HostModelInfo | null;
@@ -220,6 +239,8 @@ export interface ModelSettingsResponse {
   sessionModel?: HostModelInfo | null;
   /** 个股知识库二次整理使用的模型 */
   stockKb?: { model: string; default: string; auto?: boolean; concurrency?: number; description: string };
+  /** 悟道对话与条目沉淀的模型 */
+  dao?: DaoModelSettings;
   roles: ModelRoleSetting[];
   templates: ModelTemplateSetting[];
   presets: ModelPresetDefinition[];
@@ -230,7 +251,8 @@ export type ModelSettingsSaveInput =
   | { scope: 'role'; role: string; route: string }
   | { scope: 'template'; templateId: string; preset: string }
   | { scope: 'host'; value: string }
-  | { scope: 'stockKb'; model: string; auto?: boolean; concurrency?: number };
+  | { scope: 'stockKb'; model: string; auto?: boolean; concurrency?: number }
+  | { scope: 'dao'; model?: string; effort?: string; maxTokens?: number; timeoutMs?: number; resetPrompt?: boolean };
 
 export interface TaskTemplate {
   id: string;

@@ -61,7 +61,12 @@ export function modelSettingsDirtyCount(state: AppState): number {
   const stockKbModel = modelStockKb(state) !== (state.modelSettings.stockKb?.model || '') ? 1 : 0;
   const stockKbAuto = modelStockKbAuto(state) !== (state.modelSettings.stockKb?.auto !== false) ? 1 : 0;
   const stockKbConcurrency = modelStockKbConcurrency(state) !== (state.modelSettings.stockKb?.concurrency || 3) ? 1 : 0;
-  return roles + templates + host + stockKbModel + stockKbAuto + stockKbConcurrency;
+  const daoModel = modelDaoModel(state) !== (state.modelSettings.dao?.model || 'inherit') ? 1 : 0;
+  const daoEffort = modelDaoEffort(state) !== (state.modelSettings.dao?.effort || 'default') ? 1 : 0;
+  const daoMaxTokens = modelDaoMaxTokens(state) !== (state.modelSettings.dao?.maxTokens || 2000) ? 1 : 0;
+  const daoTimeout = modelDaoTimeout(state) !== (state.modelSettings.dao?.timeoutMs || 90000) ? 1 : 0;
+  return roles + templates + host + stockKbModel + stockKbAuto + stockKbConcurrency
+    + daoModel + daoEffort + daoMaxTokens + daoTimeout;
 }
 
 /** 知识库整理模型草稿：没改过就用服务器值 */
@@ -202,6 +207,83 @@ function stockKbCard(state: AppState): string {
   </section>`;
 }
 
+/** 悟道模型草稿：没改过就用服务器值 */
+export function modelDaoModel(state: AppState): string {
+  const draft = (state.modelDaoModelDraft || '').trim();
+  return draft || (state.modelSettings?.dao?.model || 'inherit');
+}
+
+/** 悟道思考程度草稿 */
+export function modelDaoEffort(state: AppState): string {
+  return state.modelDaoEffortDraft || (state.modelSettings?.dao?.effort || 'default');
+}
+
+/** 悟道输出上限草稿 */
+export function modelDaoMaxTokens(state: AppState): number {
+  if (state.modelDaoMaxTokensDraft !== null) return state.modelDaoMaxTokensDraft;
+  return state.modelSettings?.dao?.maxTokens || 2000;
+}
+
+/** 悟道超时草稿（毫秒） */
+export function modelDaoTimeout(state: AppState): number {
+  if (state.modelDaoTimeoutDraft !== null) return state.modelDaoTimeoutDraft;
+  return state.modelSettings?.dao?.timeoutMs || 90000;
+}
+
+function daoCard(state: AppState): string {
+  const settings = state.modelSettings!;
+  const info = settings.dao;
+  const currentModel = info?.model || 'inherit';
+  const model = modelDaoModel(state);
+  const effort = modelDaoEffort(state);
+  const maxTokens = modelDaoMaxTokens(state);
+  const timeout = modelDaoTimeout(state);
+  const dirty = model !== currentModel
+    || effort !== (info?.effort || 'default')
+    || maxTokens !== (info?.maxTokens || 2000)
+    || timeout !== (info?.timeoutMs || 90000);
+  const options = [...(settings.modelOptions || [])].filter((option) => option.value !== 'inherit');
+  if (model !== 'inherit' && !options.some((option) => option.value === model)) {
+    options.push({ value: model, label: '当前自定义 / ' + model });
+  }
+  options.unshift({ value: 'inherit', label: '继承宿主模型（默认）' });
+  const effortOptions = info?.effortOptions || [
+    { value: 'default', label: '跟随模型默认（不下发）' },
+    { value: 'off', label: '关闭思考（最快）' },
+    { value: 'low', label: '低' },
+    { value: 'medium', label: '中' },
+    { value: 'high', label: '高' },
+    { value: 'max', label: '极高' },
+  ];
+  const modelSelect = `<select id="dao-model" class="model-route-input" data-dao-model aria-label="悟道对话模型">${options.map((option) => `<option value="${escapeHtml(option.value)}" ${model === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`;
+  const effortSelect = `<select id="dao-effort" class="model-effort-input" data-dao-effort aria-label="悟道思考程度">${effortOptions.map((option) => `<option value="${escapeHtml(option.value)}" ${effort === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`;
+  const sourceLabel = info?.promptSource === 'override'
+    ? '工作区自定义副本'
+    : info?.promptSource === 'bundled' ? '插件内置' : '内置兜底（未找到文件）';
+  const resetButton = info?.promptSource === 'override'
+    ? `<button class="text-button" data-action="dao-reset-prompt">${icon('refresh', 12)}恢复默认提示词</button>`
+    : '';
+  const fallbackNote = info?.fallbackActive
+    ? `<p class="field-help">${icon('alert', 12)} 快档参数被宿主拒绝过一次，当前已退回继承宿主；改完这里会重新尝试。</p>`
+    : '';
+  return `<section class="panel host-model-card ${dirty ? 'is-dirty' : ''}">
+    <div class="model-card-head"><span class="model-role-icon">${icon('sparkles', 18)}</span>
+      <div><h3>悟道对话</h3><span class="mono">dao chat &amp; distill</span></div>
+      <span class="config-badge ${dirty ? 'dirty' : 'custom'}">${dirty ? '未保存' : '已生效'}</span></div>
+    <p class="host-model-current">当前对话模型 <code>${escapeHtml(currentModel === 'inherit' ? '继承宿主' : currentModel)}</code>；思考程度 <code>${escapeHtml(info?.effort || 'default')}</code></p>
+    <div class="model-route-row">
+      <label class="model-route-label" for="dao-model">模型${modelSelect}</label>
+      <label class="model-route-label" for="dao-effort">思考程度${effortSelect}</label>
+      <label class="model-route-label" for="dao-max-tokens">输出上限<input id="dao-max-tokens" class="model-route-input" type="number" min="200" max="32000" step="100" data-dao-max-tokens value="${maxTokens}" aria-label="悟道输出上限 token" /></label>
+      <label class="model-route-label" for="dao-timeout">超时（秒）<input id="dao-timeout" class="model-route-input" type="number" min="15" max="600" step="5" data-dao-timeout value="${Math.round(timeout / 1000)}" aria-label="悟道对话超时秒数" /></label>
+    </div>
+    ${fallbackNote}
+    <p class="field-help">${escapeHtml(info?.description || '悟道对话与条目沉淀使用的模型')}。思考程度选「关闭/低」回答最快；选「跟随模型默认」则完全由模型决定。</p>
+    <div class="effective-config"><span>固定提示词</span><code title="${escapeHtml(info?.promptPath || '')}">${escapeHtml(info?.promptPath || '未找到')}</code>${resetButton}</div>
+    <p class="field-help">${escapeHtml(sourceLabel)}。在工作区 <code>.dsh-invest/dao-coach.md</code> 放一份同名文件即可覆盖它，改完刷新页面生效。</p>
+  </section>`;
+}
+
 function templateCard(template: ModelTemplateSetting, presets: ModelPresetDefinition[], state: AppState): string {
   const selected = modelPresetFor(template, state);
   const effective = template.preset || 'inherit';
@@ -240,6 +322,7 @@ export function renderModelSettings(state: AppState): string {
     + incomplete
     + hostModelCard(state)
     + stockKbCard(state)
+    + daoCard(state)
     + `<section class="settings-guide"><span>${icon('database', 19)}</span><div><strong>路由与预设分离管理</strong><p>宿主模型决定「继承宿主」与一键任务的默认执行模型；角色路由直接选择已注册模型与推理强度；推理强度默认 <code>default</code>（不下发，由模型自身决定）。模板预设提供继承宿主、经济快速、均衡、高质量、快速五档。</p></div></section>
      <section class="settings-section">${sectionHeading('分析师角色', '5 个角色均可独立设置，默认继承宿主；推理强度默认 default')}
        <div class="model-role-grid">${roles.map((role) => roleCard(role, state)).join('')}</div></section>

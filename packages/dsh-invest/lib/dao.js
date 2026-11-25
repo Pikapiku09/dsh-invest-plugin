@@ -199,6 +199,19 @@ const briefEntries = (entries, maxChars) => {
 
 const DAO_COACH_LABEL = "悟道教练"
 
+// 固定回答准则：优先用 prompts/dao-coach.md（或 .dsh-invest/dao-coach.md 覆盖），
+// 文件读不到时用这段精简版兜底——任何安装形态下，悟道都得有稳定的说话方式。
+// 没有这一段，模型会本能地把「知道的都摆出来」：小标题、要点列表、三列大表，
+// 看着全面，实际上把判断稀释掉了。
+const DEFAULT_COACH_GUIDE = [
+  "① 结论先行：第一行就是判断，加粗；不写开场白、不复述问题。",
+  "② 一条回答只讲一件事：最多三条依据，每条一句话。",
+  "③ 最后给一条今天就能执行的动作，写清动作、时点、触发条件。",
+  "④ 不罗列、不堆要点；表格只在两个以上对象需要多维度对比时用，最多 3 列、最多一张，表后必须有自己的结论。",
+  "⑤ 引用用户自己的条目原文（加引号）指出冲突，不要泛泛说「你之前也说过」。",
+  "⑥ 默认 400 字以内；不确定就说不确定，并说明还缺什么信息。",
+].join("\n")
+
 // 对话人格：不复用分析型 persona（P_DEEP 那些含取数铁律、工具约定、输出模板，
 // 拿来聊天会一直要求「先跑取数脚本」，把对话带成流水线）
 const buildCoachPrompt = (opts) => {
@@ -207,6 +220,7 @@ const buildCoachPrompt = (opts) => {
   const isCoach = personaName === DAO_COACH_LABEL
   // 角色简码与显示名不一定同形（市场重点消息获取师 / 总判断师），由调用方显式给，别靠截字符串
   const role = isCoach ? "" : (trimText(o.personaRole, 12) || personaName)
+  const guide = trimText(o.guide, 6000) || DEFAULT_COACH_GUIDE
   const history = (Array.isArray(o.messages) ? o.messages : []).slice(-8)
     .map((turn) => (turn && turn.role === "assistant" ? "助手：" : "我：") + trimText(turn && turn.text, 1200))
     .join("\n")
@@ -216,11 +230,8 @@ const buildCoachPrompt = (opts) => {
     : "你是「悟道」里的" + personaName + "，以" + role + "的视角与用户聊交易心得，只谈方法论、纪律与复盘；涉及具体标的只讲判断框架，不给点位。"
   return [
     identity,
-    "规则：① 只依据用户说的事实与下面的「我的悟道条目」，不编造行情、财报、消息；② 不确定就直说不确定，并说明需要什么信息；" +
-      "③ 先复述用户的判断（一句），再指出与既有纪律/反思的冲突，最后给一条今天就能执行的动作；④ 不调用任何工具；" +
-      // 输出越短越快，也越好读：长回答在窄气泡里会变成一堵墙，用户看不出重点
-      "⑤ 直接给结论，不写开场白、不复述规则、不输出思考过程；Markdown，结论先行并加粗，默认 400 字以内；" +
-      "需要对比才用表格（最多 3 列），小标题最多 2 个。",
+    "硬约束：① 只依据用户说的事实与下面的「我的悟道条目」，不编造行情、财报、消息；② 不确定就直说不确定，并说明需要什么信息；③ 不调用任何工具，不联网取数。",
+    "【回答准则】（优先级高于任何默认文风）\n" + guide,
     entries ? "【我的悟道条目（用户沉淀，可引用）】\n" + entries : "",
     history ? "【对话历史】\n" + history : "",
     "【本轮问题】" + trimText(o.question, 1500),

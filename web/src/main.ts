@@ -18,7 +18,7 @@ import { NAME_INPUT_TEMPLATES, orderedTemplates, primaryJobReport, renderTasks }
 import { renderRuns } from './runs';
 import { renderBacktest } from './backtest';
 import { renderStrategyHealth } from './strategy-health';
-import { renderModelSettings, modelRouteFor, modelPresetFor, isValidModelRoute, serverHostValue, modelStockKb, modelStockKbAuto, modelStockKbConcurrency, splitStockKbRoute } from './model-settings';
+import { renderModelSettings, modelRouteFor, modelPresetFor, isValidModelRoute, serverHostValue, modelStockKb, modelStockKbAuto, modelStockKbConcurrency, splitStockKbRoute, modelDaoModel, modelDaoEffort, modelDaoMaxTokens, modelDaoTimeout } from './model-settings';
 import { ensureNotifyPermission, notifyEnabled, notifyPermission, pushAlertsToSystem, setNotifyEnabled } from './notify';
 import type { SystemNotice } from './notify';
 import { fileToBase64, positionsForConfirm, prepareScreenshotForUpload, renderHoldings, validateHoldingsDraft } from './holdings';
@@ -1168,6 +1168,21 @@ async function saveModelSettings(): Promise<void> {
     }
     updates.push({ scope: 'stockKb', model: kbModel, auto: kbAuto, concurrency: kbConcurrency });
   }
+  // 悟道对话：模型 / 思考程度 / 输出上限 / 超时
+  const daoModel = modelDaoModel(state);
+  const daoEffort = modelDaoEffort(state);
+  const daoMaxTokens = modelDaoMaxTokens(state);
+  const daoTimeout = modelDaoTimeout(state);
+  if (daoModel !== (settings.dao?.model || 'inherit')
+    || daoEffort !== (settings.dao?.effort || 'default')
+    || daoMaxTokens !== (settings.dao?.maxTokens || 2000)
+    || daoTimeout !== (settings.dao?.timeoutMs || 90000)) {
+    if (daoModel !== 'inherit' && !isValidModelRoute(daoModel)) {
+      toast('悟道模型的格式不正确（应为 provider/model，可选 @effort）。', 'error');
+      return;
+    }
+    updates.push({ scope: 'dao', model: daoModel, effort: daoEffort, maxTokens: daoMaxTokens, timeoutMs: daoTimeout });
+  }
   if (!updates.length) { toast('当前没有需要保存的修改。', 'info'); return; }
 
   state.modelSettingsSaving = true;
@@ -1189,6 +1204,12 @@ async function saveModelSettings(): Promise<void> {
         state.modelStockKbDraft = input.model;
         if (typeof input.auto === 'boolean') state.modelStockKbAutoDraft = input.auto;
         if (typeof input.concurrency === 'number') state.modelStockKbConcurrencyDraft = input.concurrency;
+        if (response.settings) state.modelSettings = response.settings;
+      } else if (input.scope === 'dao') {
+        if (input.model !== undefined) state.modelDaoModelDraft = input.model;
+        if (input.effort !== undefined) state.modelDaoEffortDraft = input.effort;
+        if (typeof input.maxTokens === 'number') state.modelDaoMaxTokensDraft = input.maxTokens;
+        if (typeof input.timeoutMs === 'number') state.modelDaoTimeoutDraft = input.timeoutMs;
         if (response.settings) state.modelSettings = response.settings;
       } else {
         const template = settings.templates.find((item) => item.id === input.templateId);
@@ -1492,6 +1513,18 @@ function openDaoThread(): void {
   scrollDaoThreadToBottom();
   // 入场动画只放一次：600ms 后撤掉标记，下一次重绘（新回复到达）就不会重放
   window.setTimeout(() => { state.daoSlideIn = false; }, 600);
+}
+
+/** 删掉工作区里的提示词覆盖副本，回到插件内置的那份 */
+async function resetDaoPrompt(): Promise<void> {
+  try {
+    const response = await api.saveModelSettings({ scope: 'dao', resetPrompt: true });
+    if (response.settings) state.modelSettings = response.settings;
+    toast('已恢复内置提示词。', 'success');
+  } catch (error) {
+    toast(`恢复失败：${errorMessage(error)}。`, 'error');
+  }
+  render();
 }
 
 async function sendDaoMessage(): Promise<void> {
@@ -2691,6 +2724,7 @@ document.addEventListener('click', (event) => {
   else if (action === 'dao-distill') void distillDao();
   else if (action === 'dao-clear-thread') clearDaoThread();
   else if (action === 'dao-dock-toggle') { state.daoDockOpen = !state.daoDockOpen; render(); }
+  else if (action === 'dao-reset-prompt') { void resetDaoPrompt(); }
   else if (action === 'ask-suggest-reset') {
     state.askSuggestions = [...DEFAULT_ASK_SUGGESTIONS];
     persistAskSuggestionList();
@@ -2934,6 +2968,19 @@ document.addEventListener('change', (event) => {
     void saveWatchDailyAt(target.value);
     return;
   }
+  // 悟道：输出上限 / 超时（秒），只改草稿
+  if (target instanceof HTMLInputElement && target.dataset.daoMaxTokens !== undefined) {
+    const value = Number(target.value);
+    state.modelDaoMaxTokensDraft = Number.isFinite(value) ? Math.round(value) : null;
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.daoTimeout !== undefined) {
+    const value = Number(target.value);
+    state.modelDaoTimeoutDraft = Number.isFinite(value) && value > 0 ? Math.round(value * 1000) : null;
+    render();
+    return;
+  }
   // 追问预设：改文字即时落盘（不重绘，避免输入框失焦；空行在「完成」时收敛掉）
   if (target instanceof HTMLInputElement && target.dataset.askSuggestion !== undefined) {
     const index = Number(target.dataset.askSuggestion);
@@ -2958,6 +3005,17 @@ document.addEventListener('change', (event) => {
   // 宿主模型选择：只改草稿，点「保存设置」才提交
   if (target.hasAttribute('data-host-model')) {
     state.modelHostDraft = target.value;
+    render();
+    return;
+  }
+  // 悟道对话模型 / 思考程度：同样只改草稿
+  if (target.hasAttribute('data-dao-model')) {
+    state.modelDaoModelDraft = target.value;
+    render();
+    return;
+  }
+  if (target.hasAttribute('data-dao-effort')) {
+    state.modelDaoEffortDraft = target.value;
     render();
     return;
   }

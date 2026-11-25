@@ -1433,7 +1433,10 @@ function apply(ctx, config) {
     } finally {
       if (timer) clearTimeout(timer)
     }
-    if (result && result.stopReason === "error") throw new Error(label + "失败（stopReason=error）")
+    if (result && result.stopReason === "error") {
+      // 把宿主的 diagnostic 带出来：只说「失败了」没法排查是模型不认参数还是上游 429
+      throw new Error(label + "失败（stopReason=error）" + (result.diagnostic ? "：" + String(result.diagnostic).slice(0, 200) : ""))
+    }
     return extractBoth(result).text
   }
   // 报告路径白名单：只允许工作区内、以 .md 结尾的绝对路径
@@ -1972,18 +1975,78 @@ function apply(ctx, config) {
     .map((turn) => ({ role: turn.role === "assistant" ? "assistant" : "user", text: String(turn.text) }))
 
   // 悟道对话要「问完就答」：默认继承宿主的推理档位，一条三百字的回答会先想十几秒，
-  // 用户体感就是「卡住」。这里把思考关掉、给输出封顶；宿主模型不认这个组合时
-  // （effort/model 一类配置错误）退回完整继承——慢一点，但别让对话直接不可用。
-  const DAO_CHAT_OPTIONS = { reasoningEffort: "off", maxTokens: 1600 }
-  const DAO_DISTILL_OPTIONS = { reasoningEffort: "off", maxTokens: 900 }
-  const runDaoPrompt = async (prompt, label, timeoutMs, agentOptions) => {
+  // 用户体感就是「卡住」。所以默认下发一套快档参数，但**必须能全身而退**：
+  // 不同 provider 对 effort 的取值、对 maxTokens 的下限要求并不一致，硬发过去会直接
+  // 把子代理打成 stopReason=error，用户看到的就是「模型暂不可用」。
+  // 这里先试快档，失败就把这套参数标记为不可用、退回完整继承再跑一次——慢一点，
+  // 但对话不能因此不可用；同一个进程内不再重试，避免每次都多花一个来回。
+  let daoOptionsBroken = false
+  const DAO_EFFORTS = ["", "off", "low", "medium", "high", "max"]
+  const DAO_DEFAULTS = { model: "", effort: "low", maxTokens: 2000, distillMaxTokens: 1200, timeoutMs: 90000 }
+  const daoConfig = async () => {
+    let raw = {}
     try {
-      return await runPromptSubagent(prompt, { label, timeoutMs, agentOptions })
-    } catch (error) {
-      const text = String((error && error.message) || error)
-      if (!/effort|reasoning|unsupported|invalid|model/i.test(text)) throw error
-      return await runPromptSubagent(prompt, { label, timeoutMs })
+      const settings = await readJsonFile(SETTINGS_FILE, {})
+      raw = (settings && typeof settings.dao === "object" && settings.dao) || {}
+    } catch (e) { raw = {} }
+    const pick = (key, fallback) => (raw[key] === void 0 || raw[key] === null || raw[key] === "" ? fallback : raw[key])
+    const effort = String(pick("effort", DAO_DEFAULTS.effort)).trim().toLowerCase()
+    const int = (value, fallback, min, max) => {
+      const n = Number(value)
+      return Number.isFinite(n) && n >= min && n <= max ? Math.floor(n) : fallback
     }
+    return {
+      model: String(pick("model", DAO_DEFAULTS.model)).trim(),
+      effort: DAO_EFFORTS.includes(effort) ? effort : DAO_DEFAULTS.effort,
+      maxTokens: int(pick("maxTokens", DAO_DEFAULTS.maxTokens), DAO_DEFAULTS.maxTokens, 200, 32000),
+      distillMaxTokens: int(pick("distillMaxTokens", DAO_DEFAULTS.distillMaxTokens), DAO_DEFAULTS.distillMaxTokens, 200, 32000),
+      timeoutMs: int(pick("timeoutMs", DAO_DEFAULTS.timeoutMs), DAO_DEFAULTS.timeoutMs, 15000, 600000),
+    }
+  }
+  // 悟道固定提示词：工作区覆盖 > 包内默认 > 空（buildCoachPrompt 自己兜底）
+  const readDaoGuide = async () => {
+    const override = BASE_DIR + "/.dsh-invest/dao-coach.md"
+    const bundled = PKG_ROOT + "/prompts/dao-coach.md"
+    for (const [path, source] of [[override, "override"], [bundled, "bundled"]]) {
+      try {
+        const text = String(await fsp.readFile(path, "utf8")).trim()
+        if (text) return { text: text.slice(0, 8000), source, path }
+      } catch (e) { /* 没有就试下一个 */ }
+    }
+    return { text: "", source: "none", path: bundled }
+  }
+  const daoAgentOptions = (cfg, kind) => {
+    const options = {}
+    if (cfg.model) {
+      const parsed = parseRoute(cfg.model)
+      if (parsed) {
+        options.provider = parsed.provider
+        options.model = parsed.model
+        if (parsed.reasoningEffort) options.reasoningEffort = parsed.reasoningEffort
+      }
+    }
+    if (!options.reasoningEffort && cfg.effort) options.reasoningEffort = cfg.effort
+    const maxTokens = kind === "distill" ? cfg.distillMaxTokens : cfg.maxTokens
+    if (maxTokens > 0) options.maxTokens = maxTokens
+    return Object.keys(options).length ? options : null
+  }
+  const runDaoPrompt = async (prompt, label, timeoutMs, agentOptions) => {
+    if (!agentOptions || daoOptionsBroken) return await runPromptSubagent(prompt, { label, timeoutMs })
+    let failure = ""
+    try {
+      const text = await runPromptSubagent(prompt, { label, timeoutMs, agentOptions })
+      if (String(text || "").trim()) return text
+      failure = "模型返回了空内容"
+    } catch (error) {
+      failure = String((error && error.message) || error)
+    }
+    // 参数被拒（effort/model 不认、直接报错、空回答）才值得退回继承再跑一次；
+    // 超时、网络中断这类失败重跑一遍只会让用户多等一倍，原样抛出更快给出提示。
+    const worthRetry = /空内容|stopReason=error|effort|reasoning|unsupported|invalid|model|unknown|400|422/i.test(failure)
+    if (!worthRetry) throw new Error(label + "失败：" + failure.slice(0, 200))
+    daoOptionsBroken = true
+    console.warn("[dsh-invest] 悟道快档参数被宿主拒绝，本次及后续改走继承：" + failure.slice(0, 200))
+    return await runPromptSubagent(prompt, { label, timeoutMs })
   }
 
   const daoChat = async (personaRaw, messagesRaw) => {
@@ -1991,14 +2054,17 @@ function apply(ctx, config) {
     const last = list[list.length - 1]
     if (!last || last.role !== "user") throw daoInputError("请先输入要聊的内容")
     const persona = daoPersona(personaRaw)
+    const cfg = await daoConfig()
     // 教练要能指出「这条纪律是你自己写的」，所以给它看全部条目（按置顶/最近取前 12 条，字数在 prompt 层再收）
     const entries = (await readDaoStore()).items.slice(0, 12)
+    const guide = await readDaoGuide()
     const prompt = buildCoachPrompt({
       personaName: persona.name, personaRole: persona.role,
       entries, messages: list.slice(0, -1), question: last.text,
+      guide: guide.text,
     })
     const started = Date.now()
-    const answer = await runDaoPrompt(prompt, "悟道对话", 90000, DAO_CHAT_OPTIONS)
+    const answer = await runDaoPrompt(prompt, "悟道对话", cfg.timeoutMs, daoAgentOptions(cfg, "chat"))
     return { answer: String(answer || "").trim(), elapsedMs: Date.now() - started, persona: persona.name }
   }
 
@@ -2006,8 +2072,9 @@ function apply(ctx, config) {
     const list = daoMessages(messagesRaw)
     if (!list.length) throw daoInputError("对话为空，没有可沉淀的内容")
     const persona = daoPersona(personaRaw)
+    const cfg = await daoConfig()
     const prompt = buildDistillPrompt({ personaName: persona.name, messages: list.slice(-6) })
-    const text = await runDaoPrompt(prompt, "悟道沉淀", 90000, DAO_DISTILL_OPTIONS)
+    const text = await runDaoPrompt(prompt, "悟道沉淀", cfg.timeoutMs, daoAgentOptions(cfg, "distill"))
     // 模型偶尔不按 JSON 交付：降级成「首行标题 + 全文正文」的草稿，用户还能改
     const draft = parseDistillJson(text) || draftFromText(text)
     if (!draft) throw daoInputError("模型没有返回可用的条目草稿，请重试或手动填写")
@@ -2181,6 +2248,30 @@ function apply(ctx, config) {
         concurrency: await kbConcurrency(),
         description: "把个股的历史分析节选整理成可读知识库时使用的模型",
       },
+      // 悟道对话：模型 / 思考程度 / 输出上限 / 超时 + 固定提示词位置
+      dao: await (async () => {
+        const cfg = await daoConfig()
+        const guide = await readDaoGuide()
+        return {
+          model: cfg.model || "inherit",
+          effort: cfg.effort || "default",
+          maxTokens: cfg.maxTokens,
+          distillMaxTokens: cfg.distillMaxTokens,
+          timeoutMs: cfg.timeoutMs,
+          promptPath: guide.path,
+          promptSource: guide.source,
+          fallbackActive: daoOptionsBroken,
+          effortOptions: [
+            { value: "default", label: "跟随模型默认（不下发）" },
+            { value: "off", label: "关闭思考（最快）" },
+            { value: "low", label: "低" },
+            { value: "medium", label: "中" },
+            { value: "high", label: "高" },
+            { value: "max", label: "极高" },
+          ],
+          description: "悟道对话与条目沉淀使用的模型；被宿主拒绝时会自动退回继承，不会让对话不可用",
+        }
+      })(),
       roles: ROLE_CODES.map((code) => ({ code, name: ROLE_MAP[code].name, route: formatRouteChain(effective[code]) })),
       templates: await Promise.all(TASK_TEMPLATES.map(async (t) => ({ id: t.id, name: t.name, preset: await resolveTemplatePreset(t.id, t.preset) }))),
       presets: Object.keys(PRESETS).map((id) => ({ id, name: presetNames[id] || id, description: descriptions[id] || id })),
@@ -5695,7 +5786,45 @@ function apply(ctx, config) {
             writeJson(res, 200, { ok: true, scope: "stockKb", model: await kbModelLabel(), auto: await kbAutoEnabled(), concurrency: await kbConcurrency(), settings: await modelSettingsPayload() })
             return
           }
-          writeJson(res, 400, { error: "scope 必须为 host / role / template / stockKb" })
+          if (body.scope === "dao") {
+            const settings = await readJsonFile(SETTINGS_FILE, {})
+            const dao = (settings.dao && typeof settings.dao === "object") ? settings.dao : {}
+            // 恢复默认提示词：删掉工作区里的覆盖文件，回到包内那份
+            if (body.resetPrompt === true) {
+              try { await fsp.unlink(BASE_DIR + "/.dsh-invest/dao-coach.md") } catch (e) { /* 本来就没有 */ }
+            }
+            if (body.model !== void 0) {
+              const value = String(body.model || "").trim()
+              if (!value || value === "inherit") delete dao.model
+              else {
+                if (!parseRoute(value)) { writeJson(res, 400, { error: "模型格式应为 provider/model（可选 @effort）" }); return }
+                dao.model = value
+              }
+            }
+            if (body.effort !== void 0) {
+              const value = String(body.effort || "").trim().toLowerCase()
+              if (value === "default" || value === "") delete dao.effort
+              else if (!DAO_EFFORTS.includes(value)) { writeJson(res, 400, { error: "思考程度只支持 default/off/low/medium/high/max" }); return }
+              else dao.effort = value
+            }
+            if (body.maxTokens !== void 0) {
+              const n = Number(body.maxTokens)
+              if (!Number.isFinite(n) || n < 200 || n > 32000) { writeJson(res, 400, { error: "输出上限应在 200-32000 之间" }); return }
+              dao.maxTokens = Math.floor(n)
+            }
+            if (body.timeoutMs !== void 0) {
+              const n = Number(body.timeoutMs)
+              if (!Number.isFinite(n) || n < 15000 || n > 600000) { writeJson(res, 400, { error: "超时应在 15000-600000 毫秒之间" }); return }
+              dao.timeoutMs = Math.floor(n)
+            }
+            settings.dao = dao
+            await writeJsonFile(SETTINGS_FILE, settings)
+            // 参数改了就重新给快档一次机会：上一次可能是旧参数把宿主顶住了
+            daoOptionsBroken = false
+            writeJson(res, 200, { ok: true, scope: "dao", settings: await modelSettingsPayload() })
+            return
+          }
+          writeJson(res, 400, { error: "scope 必须为 host / role / template / stockKb / dao" })
         } catch (e) { writeJson(res, 400, { error: String(e).slice(0, 300) }) }
       },
     },

@@ -323,6 +323,14 @@ export interface AppState {
   modelStockKbAutoDraft: boolean | null;
   /** 知识库整理并发数草稿（null = 未改过） */
   modelStockKbConcurrencyDraft: number | null;
+  /** 悟道模型草稿（'' = 未改过；'inherit' = 跟随宿主） */
+  modelDaoModelDraft: string;
+  /** 悟道思考程度草稿（'' = 未改过） */
+  modelDaoEffortDraft: string;
+  /** 悟道输出上限草稿（null = 未改过） */
+  modelDaoMaxTokensDraft: number | null;
+  /** 悟道超时草稿（null = 未改过） */
+  modelDaoTimeoutDraft: number | null;
   holdingsDraft: HoldingsDraftResponse | null;
   holdingsDraftLoading: boolean;
   holdingsImporting: string;
@@ -428,7 +436,7 @@ export const state: AppState = {
   compareThread: [], compareFollowDraft: '', compareSending: false,
   taskDrafts: {}, templateOrder: readTemplateOrder(), startingTemplates: {}, sidebarOpen: false,
   modelSettings: null, modelSettingsLoading: false, modelSettingsSaving: false,
-  modelSettingsError: '', modelRoleRoutes: {}, modelTemplatePresets: {}, modelHostDraft: '', modelStockKbDraft: '', modelStockKbAutoDraft: null, modelStockKbConcurrencyDraft: null,
+  modelSettingsError: '', modelRoleRoutes: {}, modelTemplatePresets: {}, modelHostDraft: '', modelStockKbDraft: '', modelStockKbAutoDraft: null, modelStockKbConcurrencyDraft: null, modelDaoModelDraft: '', modelDaoEffortDraft: '', modelDaoMaxTokensDraft: null, modelDaoTimeoutDraft: null,
   holdingsDraft: null, holdingsDraftLoading: false, holdingsImporting: '',
   holdingsConfirming: false, holdingsQuotesLoading: false, refreshing: false, lastRefreshAt: '', holdingsQuotesInfo: '', holdingsActionError: '',
   manualPosition: emptyManualPosition(),

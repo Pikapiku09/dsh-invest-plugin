@@ -90,12 +90,16 @@ test('悟道对话：显式下发快档 agentOptions（关思考 + 输出封顶�
   assert.equal(calls.length, 1, '一次对话只该起一个子代理')
   const spec = calls[0]
   assert.ok(spec.agentOptions, '必须显式给 agentOptions，不能静默继承宿主的推理档位')
-  assert.equal(spec.agentOptions.reasoningEffort, 'off')
+  // 默认低思考：比 off 兼容性好，比继承宿主快得多；具体值可在模型设置里改
+  assert.equal(spec.agentOptions.reasoningEffort, 'low')
   assert.ok(spec.agentOptions.maxTokens > 0 && spec.agentOptions.maxTokens <= 2000, '输出要封顶，否则慢在生成上')
   // prompt 里的字数上限同样是速度开关：600 字比 400 字多一半的生成时间
   const promptText = spec.prompt.map((block) => block.text).join('\n')
   assert.match(promptText, /400 字以内/)
   assert.doesNotMatch(promptText, /600 字以内/)
+  // 固定提示词（回答准则）必须真的进了 prompt，否则「不要罗列表格」只是写在文件里没人看
+  assert.match(promptText, /回答准则/)
+  assert.match(promptText, /表格是最后手段/)
 })
 
 test('沉淀条目同样走快档，且不继承宿主推理档位', async () => {
@@ -103,7 +107,7 @@ test('沉淀条目同样走快档，且不继承宿主推理档位', async () =>
   const r = await post('/dsh-invest/api/dao/distill', { persona: '教练', messages: [{ role: 'assistant', text: '仓位别一次打满' }] })
   assert.equal(r.status, 200, JSON.stringify(r.json))
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].agentOptions.reasoningEffort, 'off')
+  assert.equal(calls[0].agentOptions.reasoningEffort, 'low')
   assert.equal(calls[0].label, '悟道沉淀')
 })
 
