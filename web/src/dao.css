@@ -132,6 +132,63 @@
 /* 抽屉占了半屏时，页脚那句话纯属占地方：收起它，对话区多两行 */
 .dao-stage.dock-open .dao-stage-foot { display: none; }
 
+/* ── 对话态：对话框落到底部 ─────────────────────────────
+   收起态两个 1fr 把对话框夹在正中；一开口就换成本条：上 1fr 全给对话区，
+   输入条和页脚各占自己那一行高。行数不变（还是三行），
+   所以切换时位置是「滑」过去的，不是「跳」过去的。 */
+.dao-stage.is-conversing .dao-stage-main {
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  padding-top: 10px;
+  padding-bottom: 12px;
+  gap: 10px;
+}
+
+/* 聊起来了就不需要那句自我介绍，把高度让给对话 */
+.dao-stage.is-conversing .dao-stage-foot { display: none; }
+
+/* 对话区从「贴底往上长」改成「占满整行」：撑满了自己滚，不会把输入条顶下去 */
+.dao-stage.is-conversing .dao-thread { align-self: stretch; }
+
+/* 只在切换的那一刻挂一次入场动画；之后的重绘（新回复到达）不再重放 */
+.dao-stage.slide-in .dao-thread {
+  animation: dao-thread-in 460ms cubic-bezier(.22, .9, .24, 1) both;
+}
+
+@keyframes dao-thread-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 「查看上次内容」：灰色文字按钮。它是个入口，不是主按钮——
+   有历史但不想看的时候，它应该安静地待在那儿。 */
+.dao-reveal {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+  padding: 6px 14px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .025);
+  color: rgba(255, 255, 255, .44);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color .18s ease, border-color .18s ease, background .18s ease;
+}
+
+.dao-reveal:hover {
+  color: rgba(255, 255, 255, .84);
+  border-color: rgba(255, 255, 255, .24);
+  background: rgba(255, 255, 255, .06);
+}
+
+.dao-reveal-count {
+  color: rgba(255, 255, 255, .3);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── 条目库组件基底 ───────────────────────────────────
    v0.79.0 重写时这组规则被整体删掉过一次，结果卡片退化成 inline：
    「类型 / 纪律 / 反思」全挤在一行里。结构规则必须留着，

@@ -72,17 +72,14 @@ jobs:
           node-version: 22
       - name: 安装前端依赖（仅 typescript + vite，均来自公共 npm）
         run: npm --prefix web install --no-audit --no-fund
-      - name: 构建（产物落到临时目录，不污染仓库）
-        env:
-          DSH_INVEST_BASE_DIR: ${{ runner.temp }}/dsh-invest-base
-        run: |
-          mkdir -p "$DSH_INVEST_BASE_DIR"
-          npm --prefix web run build
+      - name: 构建（v0.79.0 起产物落在包内 packages/dsh-invest/web-dist/）
+        # 构建脚本末尾会跑 tools/stamp-web-build.js，把源码指纹写进 build-manifest.json，
+        # 后端测试据此判断「产物是不是这份源码建的」，不依赖文件时间戳
+        run: npm --prefix web run build
       - name: 校验构建产物存在
-        env:
-          DSH_INVEST_BASE_DIR: ${{ runner.temp }}/dsh-invest-base
         run: |
-          test -f "$DSH_INVEST_BASE_DIR/.dsh-invest/web/dist/index.html"
-          test -f "$DSH_INVEST_BASE_DIR/.dsh-invest/web/dist/workbench.js"
-          test -f "$DSH_INVEST_BASE_DIR/.dsh-invest/web/dist/workbench.css"
-          du -sh "$DSH_INVEST_BASE_DIR/.dsh-invest/web/dist"
+          test -f packages/dsh-invest/web-dist/index.html
+          test -f packages/dsh-invest/web-dist/workbench.js
+          test -f packages/dsh-invest/web-dist/workbench.css
+          test -f packages/dsh-invest/web-dist/build-manifest.json
+          du -sh packages/dsh-invest/web-dist

@@ -99,6 +99,27 @@ test('等待回复时有占位气泡（慢可以接受，看不出在不在干�
   assert.match(css, /\.dao-wait[^{]*\{[^}]*tabular-nums/s, '秒表要用等宽数字，不然宽度会抖')
 })
 
+test('对话态：输入条落到底部，对话区占满上方', () => {
+  // 用户要求："点击进入悟道之后，对话框居中，不显示上次的对话内容；
+  // 用户一旦发出对话内容，对话框优雅地滑下到最底部，对话区随之下滑。"
+  // 收起态是 1fr / auto / 1fr（对话框居中）；对话态把下面那个 1fr 收成 auto，
+  // 行数不变才能过渡得平滑。
+  const conversing = block('.dao-stage.is-conversing .dao-stage-main')
+  assert.match(conversing, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/, '对话态要收掉下半个 1fr，输入条才落到底')
+  assert.match(block('.dao-stage.is-conversing .dao-thread'), /align-self:\s*stretch/, '对话区要占满整行')
+  assert.match(css, /\.dao-stage\.is-conversing \.dao-stage-foot\s*\{[^}]*display:\s*none/s, '对话态不用再挂那句自我介绍')
+  // 入场动画只挂在 .slide-in 上：不然每来一条回复，整段历史都重新淡入一次
+  assert.match(css, /\.dao-stage\.slide-in \.dao-thread\s*\{[^}]*animation:/s, '切换那一刻给对话区挂一次入场动画')
+  assert.match(css, /@keyframes dao-thread-in/, '入场动画要有 keyframes')
+})
+
+test('收起态留一个灰色的「查看上次内容」入口', () => {
+  const reveal = block('.dao-reveal')
+  assert.match(reveal, /display:\s*inline-flex/, '入口是文字按钮，不能是主按钮')
+  assert.match(reveal, /color:\s*rgba\(255,\s*255,\s*255,\s*\.4/, '灰色：不想看的时候它应该安静待着')
+  assert.match(css, /\.dao-reveal:hover/, 'hover 才提亮')
+})
+
 test('产物里能查到这条链（改了 CSS 记得重建前端）', () => {
   const dist = process.env.DSH_INVEST_WEB_DIST || path.join(root, 'packages', 'dsh-invest', 'web-dist')
   const bundle = path.join(dist, 'workbench.css')
@@ -108,4 +129,6 @@ test('产物里能查到这条链（改了 CSS 记得重建前端）', () => {
   assert.match(built, /\.dao-thread-inner/, '产物缺少对话内层容器：改完 dao.ts 要重新构建')
   assert.match(built, /\.dao-stage \.dao-bubble \.markdown-table th/, '产物缺少深色表格孤岛：改完 dao.css 要重新构建')
   assert.match(built, /\.dao-bubble\.dao-pending/, '产物缺少等待占位气泡：改完 dao.css 要重新构建')
+  assert.match(built, /\.dao-stage\.is-conversing/, '产物缺少对话态：改完 dao.css 要重新构建')
+  assert.match(built, /\.dao-reveal/, '产物缺少「查看上次内容」入口：改完 dao.css 要重新构建')
 })

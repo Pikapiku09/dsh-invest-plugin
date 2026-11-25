@@ -186,8 +186,13 @@ function draftCard(state: AppState): string {
   </div>`;
 }
 
-function composer(state: AppState): string {
+function composer(state: AppState, showReveal: boolean): string {
   const persona = DAO_PERSONAS.find((item) => item.value === state.daoPersona)?.label || '悟道教练';
+  // 上次的对话默认收起来：进来先看见星环和一条干净的输入条。
+  // 想看才点——灰色文字按钮，不抢视线。
+  const reveal = showReveal
+    ? `<button class="dao-reveal" data-action="dao-reveal-thread" title="展开上一次的对话记录">${icon('chat', 13)}查看上次内容<span class="dao-reveal-count">${state.daoThread.length} 条</span></button>`
+    : '';
   return `<div class="dao-composer-wrap">
     ${draftCard(state)}
     <div class="dao-bar">
@@ -205,25 +210,39 @@ function composer(state: AppState): string {
       <button class="text-button" data-action="dao-distill"${state.daoThread.length < 2 || state.daoDistilling ? ' disabled' : ''}>${state.daoDistilling ? '提炼中…' : '沉淀为条目'}</button>
       <button class="text-button" data-action="dao-clear-thread"${state.daoThread.length ? '' : ' disabled'}>${icon('trash', 12)}清空</button>
     </div>
+    ${reveal}
     ${state.daoChatError ? `<p class="dao-error">${escapeHtml(state.daoChatError)}</p>` : ''}
   </div>`;
 }
 
 /**
- * 悟道页（v0.79.0 重构）
+ * 悟道页（v0.80.0 交互重做）
  *
  * 一屏三件事：背景是深空，中间一条对话框，其余全部收进底部抽屉。
- * 对话优先——条目不是填表填出来的，是聊出来、打上标签才留下的。
- * 页面只负责把话说清楚并真的存进本机，不做二次加工。
+ *
+ * 两个状态，靠「对话框自己滑下去」衔接：
+ *  - 收起态（进页面时）：对话框停在正中，上次的对话不显示，只留一个灰色文字按钮；
+ *  - 对话态：对话框滑到底部，对话区吃掉上方整块空间。
+ * 这样一进来画面是干净的，真聊起来才把屏幕让给内容。
  */
 export function renderDao(state: AppState): string {
-  const empty = state.daoThread.length === 0 && !state.daoDraft.body;
-  return `<div class="dao-stage${empty ? ' is-empty' : ''}${state.daoDockOpen ? ' dock-open' : ''}">
+  const hasThread = state.daoThread.length > 0 || state.daoChatLoading;
+  // 只有真的有对话才谈得上「展开」；没有对话时永远居中
+  const open = state.daoThreadOpen && hasThread;
+  const empty = !hasThread && !state.daoDraft.body;
+  const classes = [
+    'dao-stage',
+    empty ? 'is-empty' : '',
+    open ? 'is-conversing' : '',
+    state.daoSlideIn ? 'slide-in' : '',
+    state.daoDockOpen ? 'dock-open' : '',
+  ].filter(Boolean).join(' ');
+  return `<div class="${classes}">
     <div class="dao-stage-bg" style="background-image:url(${spaceBg})" aria-hidden="true"></div>
     <div class="dao-stage-veil" aria-hidden="true"></div>
     <main class="dao-stage-main">
-      ${state.daoThread.length ? `<div class="dao-thread" role="log" aria-live="polite">${threadHtml(state)}</div>` : ''}
-      ${composer(state)}
+      ${open ? `<div class="dao-thread" role="log" aria-live="polite">${threadHtml(state)}</div>` : ''}
+      ${composer(state, !open && state.daoThread.length > 0)}
       <footer class="dao-stage-foot">
         <h1>悟道</h1>
         <p>把判断、纪律和复盘留下来，按角色自动注进流水线。只存本机，不上传。</p>

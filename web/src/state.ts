@@ -395,6 +395,11 @@ export interface AppState {
   daoDistilling: boolean;
   /** 底部条目库抽屉：默认收起，只有一条细带，别抢对话的位置 */
   daoDockOpen: boolean;
+  /** 对话展开态：false = 对话框停在正中、上次的对话先收起来（进页面时的默认）
+   *  true = 对话框落到底部、对话区占满上方。发消息或点「查看上次内容」才切过去 */
+  daoThreadOpen: boolean;
+  /** 正在做「对话框下滑」的过渡：给对话区挂一次入场动画，过渡结束就撤掉 */
+  daoSlideIn: boolean;
 }
 
 const DAO_PERSISTED = readDaoThread();
@@ -439,4 +444,5 @@ export const state: AppState = {
   daoSaving: false, daoNotice: '',
   daoPersona: DAO_PERSISTED.persona, daoThread: DAO_PERSISTED.turns,
   daoChatDraft: '', daoChatLoading: false, daoChatError: '', daoDistilling: false, daoDockOpen: false,
+  daoThreadOpen: false, daoSlideIn: false,
 };

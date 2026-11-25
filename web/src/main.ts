@@ -1447,13 +1447,61 @@ function stopDaoWaitTimer(): void {
   if (daoWaitTimer !== null) { window.clearInterval(daoWaitTimer); daoWaitTimer = null; }
 }
 
+// ── 对话框「滑到底部」的过渡 ─────────────────────────────────
+// 用 FLIP：重绘前量一次输入条位置，重绘后先用 transform 把它拉回旧位置，
+// 再放开过渡滑到 0。全程只动 transform，不触发布局，也不会带出滚动条。
+let daoSlideFrom: number | null = null;
+
+function captureDaoComposer(): void {
+  const node = viewElement.querySelector<HTMLElement>('.dao-composer-wrap');
+  daoSlideFrom = node ? node.getBoundingClientRect().top : null;
+}
+
+function playDaoComposerSlide(): void {
+  const from = daoSlideFrom;
+  daoSlideFrom = null;
+  if (from === null) return;
+  const node = viewElement.querySelector<HTMLElement>('.dao-composer-wrap');
+  if (!node) return;
+  const delta = from - node.getBoundingClientRect().top;
+  if (Math.abs(delta) < 1) return;
+  node.style.transition = 'none';
+  node.style.transform = `translateY(${delta}px)`;
+  void node.offsetHeight;   // 强制回流，否则下面这行会被合并成一次、动画不触发
+  node.style.transition = 'transform 520ms cubic-bezier(.22, .9, .24, 1)';
+  node.style.transform = 'translateY(0)';
+  node.addEventListener('transitionend', () => {
+    node.style.transition = '';
+    node.style.transform = '';
+  }, { once: true });
+}
+
+function scrollDaoThreadToBottom(): void {
+  const thread = viewElement.querySelector<HTMLElement>('.dao-thread');
+  if (thread) thread.scrollTop = thread.scrollHeight;
+}
+
+/** 从「居中待命」切到「对话态」：对话框滑下去，对话区让出上方整块空间 */
+function openDaoThread(): void {
+  if (state.daoThreadOpen) { render(); scrollDaoThreadToBottom(); return; }
+  captureDaoComposer();
+  state.daoThreadOpen = true;
+  state.daoSlideIn = true;
+  render();
+  playDaoComposerSlide();
+  scrollDaoThreadToBottom();
+  // 入场动画只放一次：600ms 后撤掉标记，下一次重绘（新回复到达）就不会重放
+  window.setTimeout(() => { state.daoSlideIn = false; }, 600);
+}
+
 async function sendDaoMessage(): Promise<void> {
   if (state.daoChatLoading) return;
   const question = String(state.daoChatDraft || '').trim();
   if (!question) { state.daoChatError = '先输入要聊的内容。'; render(); return; }
   appendDaoTurn('user', question);
   state.daoChatDraft = ''; state.daoChatError = ''; state.daoChatLoading = true;
-  render();
+  // 发出去的那一刻就滑到底部：先让人看见自己说的话，再看它怎么接
+  openDaoThread();
   startDaoWaitTimer();
   try {
     const result = await api.daoChat({ persona: state.daoPersona, messages: daoMessagesForApi() });
@@ -1464,6 +1512,7 @@ async function sendDaoMessage(): Promise<void> {
     stopDaoWaitTimer();
     state.daoChatLoading = false;
     render();
+    scrollDaoThreadToBottom();
   }
 }
 
@@ -1490,12 +1539,17 @@ function clearDaoThread(): void {
   if (!confirm('清空这段对话？已入库的条目不受影响。')) return;
   state.daoThread = [];
   state.daoChatError = '';
+  // 对话没了就回到「居中待命」：下次开口还得再滑一次，不能直接跳到对话态
+  state.daoThreadOpen = false;
   persistDaoThread(state.daoPersona, state.daoThread);
   render();
 }
 
 function navigate(view: WorkbenchView): void {
-  state.view = view; state.sidebarOpen = false; render();
+  state.view = view; state.sidebarOpen = false;
+  // 每次进悟道都从「居中待命」开始：上次的对话收起来，画面是干净的
+  if (view === 'dao') { state.daoThreadOpen = false; state.daoSlideIn = false; }
+  render();
   if (view === 'dao' && !state.daoStats && !state.daoLoading) void loadDao();
   if (view === 'tasks') {
     if (!state.templates.length && !state.templatesLoading) void loadTemplates();
@@ -2633,6 +2687,7 @@ document.addEventListener('click', (event) => {
     render();
   }
   else if (action === 'dao-send') void sendDaoMessage();
+  else if (action === 'dao-reveal-thread') openDaoThread();
   else if (action === 'dao-distill') void distillDao();
   else if (action === 'dao-clear-thread') clearDaoThread();
   else if (action === 'dao-dock-toggle') { state.daoDockOpen = !state.daoDockOpen; render(); }
