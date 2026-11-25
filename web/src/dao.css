@@ -538,7 +538,19 @@
   resize: none;
   caret-color: #fff;
   overflow-y: auto;
+  /* 输入区就是这颗胶囊本身：不要自己的滚动条，也不要焦点描边（全局 :focus-visible 会画蓝框） */
+  scrollbar-width: none;
 }
+
+/* 全局 style.css 的 `textarea:focus-visible` 特异性比 `.dao-bar-input` 高，聚焦时会画一圈蓝框，
+   把胶囊切成「输入框 + 外套」两块。这里用同级 + 双伪类压回去，焦点感交给 .dao-bar:focus-within。 */
+.dao-bar-input:focus,
+.dao-bar-input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.dao-bar-input::-webkit-scrollbar { width: 0; height: 0; }
 
 .dao-bar-input::placeholder { color: rgba(255, 255, 255, .46); }
 

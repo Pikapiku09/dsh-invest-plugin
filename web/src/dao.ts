@@ -145,11 +145,12 @@ function dock(state: AppState): string {
 // ── 中间：对话 ────────────────────────────────────────────────
 
 function threadHtml(state: AppState): string {
-  const turns = state.daoThread.map((turn) => {
+  const turns = state.daoThread.map((turn, index) => {
     const assistant = turn.role === 'assistant';
     // 用时贴在气泡右下角：慢不丢人，糊里糊涂地慢才丢人
     const meta = assistant && turn.elapsedMs ? `<div class="dao-turn-meta">用时 ${(turn.elapsedMs / 1000).toFixed(1)}s</div>` : '';
-    return `<div class="dao-turn dao-turn-${turn.role}">
+    // data-dao-turn：回答到达后要滚到「这条回答的开头」。不能只看 :last-child，pending 气泡也在末尾
+    return `<div class="dao-turn dao-turn-${turn.role}" data-dao-turn="${index}">
         <div class="dao-bubble${assistant ? ' dao-markdown' : ''}">${assistant ? renderMarkdown(turn.text) : escapeHtml(turn.text).replace(/\n/g, '<br/>')}${meta}</div>
       </div>`;
   }).join('');

@@ -39,7 +39,7 @@ let holdingsSerial = 0;
 /** 基本面评级的请求序号（v0.58.0）：切换标的时旧响应不得覆盖新结果 */
 let fundamentalsSerial = 0;
 /** 全量重绘时需要保持滚动位置的滚动容器（标的档案左侧栏、标的索引列表、账本列设置、追问会话与报告列表） */
-const SCROLL_KEEP_SELECTOR = '.archive-browser, .code-list, .ledger-col-list, .ask-thread, .ask-report-list, .dao-list-body';
+const SCROLL_KEEP_SELECTOR = '.archive-browser, .code-list, .ledger-col-list, .ask-thread, .ask-report-list, .dao-thread, .dao-list-body';
 /** 上一次渲染的视图：同视图重绘保持滚动位置，切换视图回到顶部 */
 let lastRenderedView: WorkbenchView | null = null;
 /** 页面暂时变矮（如档案详情先显示加载态）没恢复成功的窗口滚动位置，留到下一次渲染再试 */
@@ -1448,8 +1448,18 @@ function daoMessagesForApi(): Array<{ role: 'user' | 'assistant'; text: string }
 }
 
 function appendDaoTurn(role: 'user' | 'assistant', text: string, elapsedMs?: number): void {
+  const last = state.daoThread[state.daoThread.length - 1];
+  // 上一条是同一句话、又没等到回答：那是重发，不要把同一句问话叠两遍
+  if (role === 'user' && last && last.role === 'user' && last.text.trim() === text.trim()) return;
   const turn = { role, text, ts: Date.now(), ...(elapsedMs && elapsedMs > 0 ? { elapsedMs } : {}) };
   state.daoThread = [...state.daoThread, turn].slice(-40);
+  persistDaoThread(state.daoPersona, state.daoThread);
+}
+
+/** 撤掉最后一条提问：问句没换回回答，就不该留在对话里 */
+function dropLastDaoTurn(): void {
+  if (!state.daoThread.length) return;
+  state.daoThread = state.daoThread.slice(0, -1);
   persistDaoThread(state.daoPersona, state.daoThread);
 }
 
@@ -1502,6 +1512,15 @@ function scrollDaoThreadToBottom(): void {
   if (thread) thread.scrollTop = thread.scrollHeight;
 }
 
+/** 把某一条对话滚到可视区顶部：回答来了就从上往下读，不要停在提问那一行 */
+function scrollDaoTurnToTop(index: number): void {
+  const thread = viewElement.querySelector<HTMLElement>('.dao-thread');
+  const node = viewElement.querySelector<HTMLElement>(`[data-dao-turn="${index}"]`);
+  if (!thread || !node) return;
+  const delta = node.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+  thread.scrollTop += delta - 10;
+}
+
 /** 从「居中待命」切到「对话态」：对话框滑下去，对话区让出上方整块空间 */
 function openDaoThread(): void {
   if (state.daoThreadOpen) { render(); scrollDaoThreadToBottom(); return; }
@@ -1541,11 +1560,15 @@ async function sendDaoMessage(): Promise<void> {
     appendDaoTurn('assistant', result.answer, Number(result.elapsedMs) || 0);
   } catch (error) {
     state.daoChatError = errorMessage(error);
+    // 没换回回答就把这句提问撤掉，否则重发一次对话里就多一条一模一样的问题
+    dropLastDaoTurn();
   } finally {
     stopDaoWaitTimer();
     state.daoChatLoading = false;
+    const answerIndex = state.daoThread.length - 1;
     render();
-    scrollDaoThreadToBottom();
+    // 回答抵达：把它滚到可视区顶部，让人从第一行读起
+    if (!state.daoChatError) requestAnimationFrame(() => scrollDaoTurnToTop(answerIndex));
   }
 }
 

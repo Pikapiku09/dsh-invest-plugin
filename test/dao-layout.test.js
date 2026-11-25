@@ -120,6 +120,34 @@ test('收起态留一个灰色的「查看上次内容」入口', () => {
   assert.match(css, /\.dao-reveal:hover/, 'hover 才提亮')
 })
 
+test('输入胶囊是一个整体：不要蓝框、不要自己的滚动条', () => {
+  // 用户反馈："输入框多了一个蓝色边框，感觉输入框和后面的椭圆框是割裂的。"
+  // 蓝框来自全局 style.css 的 `textarea:focus-visible`（特异性比 .dao-bar-input 高），
+  // 竖条是 textarea 自己的滚动条。两条都要在这里按死。
+  assert.match(
+    css,
+    /\.dao-bar-input:focus-visible\s*\{[^}]*outline:\s*none/s,
+    '全局 :focus-visible 会画蓝框，必须在这里显式压掉',
+  )
+  assert.match(block('.dao-bar-input {'), /scrollbar-width:\s*none/, '输入区不要自己的滚动条')
+  assert.match(css, /\.dao-bar-input::-webkit-scrollbar\s*\{[^}]*width:\s*0/s, 'webkit 下也要藏掉滚动条')
+})
+
+test('回答到达后滚到回答开头；没换回回答的提问要撤回', () => {
+  const main = fs.readFileSync(path.join(root, 'web', 'src', 'main.ts'), 'utf8')
+  // 对话区改成重绘后自己管滚动位置：进 SCROLL_KEEP 列表，别在切抽屉时跳回顶部
+  assert.match(main, /SCROLL_KEEP_SELECTOR = '[^']*\.dao-thread/, '对话区要保留滚动位置')
+  // 失败时撤回孤立的提问，否则重发一次就多一条一模一样的问题
+  assert.match(main, /function dropLastDaoTurn\(\)/, '要能撤回最后一条提问')
+  assert.match(main, /catch[\s\S]{0,400}?dropLastDaoTurn\(\)/, '对话失败时要撤回那句提问')
+  // 回答来了滚到「这条回答的开头」，不是停在提问那一行
+  assert.match(main, /function scrollDaoTurnToTop\(index: number\)/, '要有按条目定位的滚动')
+  assert.match(main, /requestAnimationFrame\(\(\) => scrollDaoTurnToTop\(answerIndex\)\)/, '回答到达后要定位到它开头')
+  // 定位靠 data-dao-turn：pending 气泡也在末尾，:last-child 会指错
+  const dao = fs.readFileSync(path.join(root, 'web', 'src', 'dao.ts'), 'utf8')
+  assert.match(dao, /data-dao-turn="\$\{index\}"/, '每条对话要有序号锚点')
+})
+
 test('产物里能查到这条链（改了 CSS 记得重建前端）', () => {
   const dist = process.env.DSH_INVEST_WEB_DIST || path.join(root, 'packages', 'dsh-invest', 'web-dist')
   const bundle = path.join(dist, 'workbench.css')
@@ -131,4 +159,5 @@ test('产物里能查到这条链（改了 CSS 记得重建前端）', () => {
   assert.match(built, /\.dao-bubble\.dao-pending/, '产物缺少等待占位气泡：改完 dao.css 要重新构建')
   assert.match(built, /\.dao-stage\.is-conversing/, '产物缺少对话态：改完 dao.css 要重新构建')
   assert.match(built, /\.dao-reveal/, '产物缺少「查看上次内容」入口：改完 dao.css 要重新构建')
+  assert.match(built, /\.dao-bar-input:focus-visible/, '产物缺少输入框焦点压制：改完 dao.css 要重新构建')
 })
