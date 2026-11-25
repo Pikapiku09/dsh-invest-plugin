@@ -24,8 +24,12 @@ const root = path.join(__dirname, '..')
 const cssPath = path.join(root, 'web', 'src', 'dao.css')
 const css = fs.readFileSync(cssPath, 'utf8')
 
-/** 取出某个选择器的声明块（只认第一处定义，够用且够松） */
+/** 取出某个选择器的声明块（只认第一处定义，够用且够松）
+ *  必须按「行首选择器 + {」定位：注释里也会提到选择器名，直接 indexOf 会串到隔壁规则。 */
 function block(selector) {
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const hit = new RegExp('^' + esc + '[ \\t]*\\{([\\s\\S]*?)\\}', 'm').exec(css)
+  if (hit) return hit[1]
   const start = css.indexOf(selector)
   assert.ok(start >= 0, `dao.css 里找不到 ${selector}`)
   const open = css.indexOf('{', start)
@@ -60,6 +64,21 @@ test('对话区靠内层 min-height 做底部对齐（直接 justify-content:fle
   assert.match(css, /\.dao-thread-inner\s*\{[^}]*justify-content:\s*flex-end/s, '.dao-thread-inner 负责底部对齐')
   assert.match(block('.dao-thread'), /overflow-y:\s*auto/, '.dao-thread 只在内容超高时才滚')
   assert.doesNotMatch(block('.dao-thread'), /max-height:\s*min\(44vh/, '对话区别再写死 44vh 上限——高度交还给填充链')
+})
+
+test('对话框钉在舞台正中（三行网格 + 补齐抽屉占掉的底边）', () => {
+  // 用户反馈："对话框应该始终保持在中间"、"现在对话框是偏中上的情况了"。
+  // 做法：舞台主区切成 1fr / auto / 1fr 三行，对话框独占中间那行，
+  // 上下两行等分剩余空间，所以聊多少轮它都不动。
+  const main = block('.dao-stage-main')
+  assert.match(main, /display:\s*grid/, '.dao-stage-main 要换成网格，靠两段 1fr 把对话框夹在中间')
+  assert.match(main, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\)/, '三行：弹性 / 对话框 / 弹性')
+  assert.match(block('.dao-composer-wrap'), /grid-row:\s*2/, '对话框要占中间那行')
+  assert.match(block('.dao-stage-foot'), /grid-row:\s*3/, '页脚要占第三行，别把对话框挤上去')
+  // 抽屉收起时占掉舞台底部一条边，若内边距对称，对话框会被整体抬起 20px（看着"偏中上"）。
+  // 这里用上下内边距之差把它补回来，差值来自 --dao-dock-rest。
+  assert.match(main, /padding:[^;]*var\(--dao-dock-rest/, '内边距要用 --dao-dock-rest 补掉抽屉占掉的那条底边')
+  assert.match(main, /calc\(22px \+ var\(--dao-dock-rest/, '上内边距 = 下内边距 + 抽屉高度，对话框才落在舞台正中')
 })
 
 test('产物里能查到这条链（改了 CSS 记得重建前端）', () => {

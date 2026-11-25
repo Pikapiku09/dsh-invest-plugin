@@ -214,11 +214,11 @@ export function renderDao(state: AppState): string {
     <main class="dao-stage-main">
       ${state.daoThread.length ? `<div class="dao-thread" role="log" aria-live="polite">${threadHtml(state)}</div>` : ''}
       ${composer(state)}
+      <footer class="dao-stage-foot">
+        <h1>悟道</h1>
+        <p>把判断、纪律和复盘留下来，按角色自动注进流水线。只存本机，不上传。</p>
+      </footer>
     </main>
-    <footer class="dao-stage-foot">
-      <h1>悟道</h1>
-      <p>把判断、纪律和复盘留下来，按角色自动注进流水线。只存本机，不上传。</p>
-    </footer>
     ${dock(state)}
   </div>`;
 }

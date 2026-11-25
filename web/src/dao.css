@@ -51,7 +51,7 @@
   inset: 0;
   z-index: 0;
   background-size: cover;
-  background-position: center 46%;
+  background-position: center 50%;
   background-repeat: no-repeat;
   opacity: .92;
   transform: scale(1.02);
@@ -71,10 +71,16 @@
 
 /* 标题与说明沉到页面底部，和抽屉把手挨在一起：
    上方留给星环和对话，不抢视线。 */
+/* 标题与说明沉在舞台最底部，占网格第 3 行。
+   它必须待在 .dao-stage-main 里面（而不是舞台的兄弟节点）：
+   放在外面的话，中间的对话框只会在「页脚以上的那块区域」居中，
+   视觉上就偏上了一大截——用户原话：「现在对话框是偏中上的情况了」。 */
 .dao-stage-foot {
   position: relative;
   z-index: 2;
-  flex: none;
+  grid-row: 3;
+  align-self: end;
+  width: 100%;
   padding: 4px 26px 14px;
   text-align: center;
 }
@@ -96,24 +102,35 @@
   color: rgba(255, 255, 255, .58);
 }
 
+/* 三行网格：上「1fr」放对话、中间 auto 放对话框、下「1fr」留白。
+   两个 1fr 等分剩余空间，于是对话框永远停在正中——
+   不管是刚打开（没有对话），还是聊了二十轮（对话从中间往上长）。
+   之前用 flex + justify-content:flex-end，一有消息就把输入条压到底部。 */
 .dao-stage-main {
   position: relative;
   z-index: 2;
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  justify-items: center;
+  align-items: end;
   gap: 14px;
-  padding: 16px 24px 22px;
+  /* 上下内边距之差 = 收起时抽屉把手的高度（41px）。
+     抽屉在底部占掉一条边，若内边距对称，对话框会被整体抬起 20px，看着「偏中上」。
+     把差值补回去，它才落在整块舞台的正中——也就是星环的中心。 */
+  padding: calc(22px + var(--dao-dock-rest, 41px)) 24px 22px;
 }
 
-/* 空态：对话框正落星环中心，像把话递给那个环 */
-.dao-stage.is-empty .dao-stage-main {
-  justify-content: center;
-  padding-bottom: 8%;
+/* 抽屉展开时舞台变矮，收一收内边距和行距，把高度让给对话区 */
+.dao-stage.dock-open .dao-stage-main {
+  padding-top: 10px;
+  padding-bottom: 12px;
+  gap: 10px;
 }
+
+/* 抽屉占了半屏时，页脚那句话纯属占地方：收起它，对话区多两行 */
+.dao-stage.dock-open .dao-stage-foot { display: none; }
 
 /* ── 条目库组件基底 ───────────────────────────────────
    v0.79.0 重写时这组规则被整体删掉过一次，结果卡片退化成 inline：
@@ -159,8 +176,12 @@
 /* ── 对话 ───────────────────────────────────────────── */
 
 .dao-thread {
+  /* 对话占第 1 行，贴着自己那一行的底边往上长；
+     max-height:100% 让它撑到行高就停，再高就自己滚，绝不把对话框顶下去 */
+  grid-row: 1;
+  align-self: end;
   width: min(720px, 100%);
-  flex: 1 1 auto;
+  max-height: 100%;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -202,7 +223,7 @@
 .dao-turn-assistant .dao-bubble {
   max-width: 96%;
   border-radius: 16px 16px 16px 4px;
-  background: rgba(12, 12, 15, .62);
+  background: rgba(10, 10, 13, .82);
   border-color: rgba(255, 255, 255, .1);
   color: #e9e9ee;
   backdrop-filter: blur(16px) saturate(120%);
@@ -218,24 +239,29 @@
 
 .dao-composer-wrap {
   position: relative;
+  /* 对话框钉在网格第 2 行 —— 也就是整块舞台的垂直正中，聊多少轮都不动 */
+  grid-row: 2;
   width: min(720px, 100%);
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-/* 环内那点微光：让输入条像浮在星环中央，而不是贴上去 */
+/* 输入条脚下压一层暗晕：星环中心是全画面最亮的地方，白字直接压上去会看不清。
+   这层从中心往外淡出的黑，把输入条和下面那行按钮托起来，同时像「浮在环里」。 */
 .dao-composer-wrap::before {
   content: "";
   position: absolute;
   left: 50%;
   top: 46%;
-  width: 132%;
-  height: 220%;
+  width: 150%;
+  height: 240%;
   transform: translate(-50%, -50%);
   z-index: -1;
   pointer-events: none;
-  background: radial-gradient(closest-side, rgba(255, 255, 255, .09), rgba(255, 255, 255, .02) 46%, transparent 72%);
+  background:
+    radial-gradient(closest-side, rgba(3, 4, 6, .76), rgba(3, 4, 6, .42) 44%, rgba(3, 4, 6, 0) 78%);
+  filter: blur(14px);
 }
 
 .dao-bar {
@@ -245,8 +271,8 @@
   padding: 9px 9px 9px 18px;
   border: 1px solid rgba(255, 255, 255, .18);
   border-radius: 26px;
-  background: rgba(255, 255, 255, .07);
-  backdrop-filter: blur(20px) saturate(130%);
+  background: rgba(10, 12, 16, .62);
+  backdrop-filter: blur(22px) saturate(120%);
   box-shadow:
     0 22px 52px -20px rgba(0, 0, 0, .95),
     0 0 0 1px rgba(255, 255, 255, .04) inset;
@@ -255,7 +281,7 @@
 
 .dao-bar:focus-within {
   border-color: rgba(255, 255, 255, .4);
-  background: rgba(255, 255, 255, .1);
+  background: rgba(10, 12, 16, .74);
   box-shadow:
     0 22px 64px -18px rgba(0, 0, 0, .95),
     0 0 34px -6px rgba(255, 255, 255, .16),
@@ -279,7 +305,7 @@
   overflow-y: auto;
 }
 
-.dao-bar-input::placeholder { color: rgba(255, 255, 255, .38); }
+.dao-bar-input::placeholder { color: rgba(255, 255, 255, .46); }
 
 .dao-send {
   flex: none;
@@ -330,7 +356,7 @@
   padding: 3px 8px;
   border: 1px solid rgba(255, 255, 255, .14);
   border-radius: 999px;
-  background: rgba(255, 255, 255, .06);
+  background: rgba(10, 12, 16, .58);
   color: #e8e8ee;
   font: inherit;
   font-size: 12px;
@@ -353,7 +379,7 @@
   cursor: pointer;
   transition: color .15s ease;
   /* 这行字压在星环上，纯白也要一道暗影才稳 */
-  text-shadow: 0 1px 3px rgba(0, 0, 0, .75);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .9);
 }
 
 .dao-under .text-button:hover:not(:disabled) { color: #fff; }
