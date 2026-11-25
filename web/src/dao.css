@@ -203,6 +203,12 @@
   padding: 4px 2px;
 }
 
+/* 宽屏给对话多一点横向空间：带表格的回答在 720px 里会挤成三行，
+   放大屏上还按手机宽度排版，就是「没有自适应」 */
+@media (min-width: 1400px) {
+  .dao-thread { width: min(860px, 100%); }
+}
+
 .dao-turn { display: flex; }
 
 .dao-turn-user { justify-content: flex-end; }
@@ -234,6 +240,178 @@
 .dao-turn-assistant .dao-bubble p:last-child { margin-bottom: 0; }
 .dao-bubble code { padding: 1px 5px; border-radius: 5px; background: rgba(255, 255, 255, .12); font-size: 12px; }
 .dao-bubble strong { color: #fff; }
+
+/* 气泡右下角的用时 */
+.dao-turn-meta {
+  margin-top: 6px;
+  color: rgba(255, 255, 255, .34);
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-align: right;
+}
+
+/* 等模型的占位气泡：三个跳动的点 + 走的秒表 */
+.dao-bubble.dao-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 15px;
+  white-space: normal;
+}
+
+.dao-typing { display: inline-flex; align-items: center; gap: 4px; }
+
+.dao-typing i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .72);
+  animation: dao-typing 1.05s ease-in-out infinite;
+}
+
+.dao-typing i:nth-child(2) { animation-delay: .16s; }
+.dao-typing i:nth-child(3) { animation-delay: .32s; }
+
+.dao-wait {
+  color: rgba(255, 255, 255, .45);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+}
+
+@keyframes dao-typing {
+  0%, 100% { opacity: .28; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* ── 气泡内的 markdown ──────────────────────────────────
+   舞台是固定深色，而应用主题可能是浅色（.theme-light）。
+   浅色主题的 .markdown-table th/td 覆盖会漏进这块深色背景，表头变成
+   #eef2f7 白底黑字。这里按 .dao-stage 作用域把整套排版压回深色，
+   选择器都带 3 个类，才稳得住 .theme-light 的 2 类覆盖。 */
+.dao-stage .dao-bubble h2,
+.dao-stage .dao-bubble h3,
+.dao-stage .dao-bubble h4,
+.dao-stage .dao-bubble h5,
+.dao-stage .dao-bubble h6 {
+  margin: 16px 0 7px;
+  color: #fff;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: .01em;
+}
+
+.dao-stage .dao-bubble h2 { font-size: 15px; }
+.dao-stage .dao-bubble h3 { font-size: 14px; }
+.dao-stage .dao-bubble h4,
+.dao-stage .dao-bubble h5,
+.dao-stage .dao-bubble h6 { font-size: 13px; color: rgba(255, 255, 255, .93); }
+
+.dao-stage .dao-bubble h2:first-child,
+.dao-stage .dao-bubble h3:first-child,
+.dao-stage .dao-bubble h4:first-child { margin-top: 0; }
+
+.dao-stage .dao-bubble p { margin: 0 0 9px; }
+.dao-stage .dao-bubble p:last-child { margin-bottom: 0; }
+
+.dao-stage .dao-bubble ul,
+.dao-stage .dao-bubble ol { margin: 0 0 9px; padding-left: 20px; }
+.dao-stage .dao-bubble li { margin: 3px 0; }
+.dao-stage .dao-bubble li::marker { color: rgba(255, 255, 255, .42); }
+
+.dao-stage .dao-bubble a {
+  color: #9dc0ff;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(157, 192, 255, .34);
+}
+
+.dao-stage .dao-bubble code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .1);
+  color: #f0d3a0;
+  font-size: 12px;
+}
+
+.dao-stage .dao-bubble pre {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, .46);
+  overflow-x: auto;
+}
+
+.dao-stage .dao-bubble pre code {
+  padding: 0;
+  background: none;
+  color: rgba(255, 255, 255, .86);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.dao-stage .dao-bubble blockquote {
+  margin: 10px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid rgba(255, 255, 255, .22);
+  color: rgba(255, 255, 255, .7);
+}
+
+.dao-stage .dao-bubble hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, .12);
+}
+
+/* 表格：深色表头、细边、容器横向滚动；窄屏自动收字号与内边距，
+   不再出现「表头一块白板」和「表格顶出气泡」 */
+.dao-stage .dao-bubble .table-scroll {
+  width: 100%;
+  margin: 11px 0;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .022);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.dao-stage .dao-bubble .markdown-table {
+  width: 100%;
+  min-width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.dao-stage .dao-bubble .markdown-table th,
+.dao-stage .dao-bubble .markdown-table td {
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, .075);
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.6;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.dao-stage .dao-bubble .markdown-table th {
+  background: rgba(255, 255, 255, .055);
+  color: rgba(255, 255, 255, .92);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dao-stage .dao-bubble .markdown-table td { background: transparent; color: rgba(255, 255, 255, .78); }
+.dao-stage .dao-bubble .markdown-table tbody tr:nth-child(even) td { background: rgba(255, 255, 255, .022); }
+.dao-stage .dao-bubble .markdown-table tbody tr:last-child td { border-bottom: 0; }
+
+@media (max-width: 720px) {
+  .dao-stage .dao-bubble .markdown-table { font-size: 11.5px; }
+  .dao-stage .dao-bubble .markdown-table th,
+  .dao-stage .dao-bubble .markdown-table td { padding: 6px 8px; }
+  .dao-stage .dao-bubble .markdown-table th { white-space: normal; }
+}
 
 /* ── 输入条 ─────────────────────────────────────────── */
 

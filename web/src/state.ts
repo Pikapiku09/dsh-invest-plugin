@@ -48,7 +48,15 @@ export function readDaoThread(): { persona: string; turns: DaoTurn[] } {
     const turns = Array.isArray(parsed?.turns)
       ? (parsed.turns as DaoTurn[])
         .filter((turn) => turn && typeof turn.text === 'string')
-        .map((turn) => ({ role: turn.role === 'assistant' ? 'assistant' as const : 'user' as const, text: String(turn.text).slice(0, 20000), ts: Number(turn.ts) || Date.now() }))
+        .map((turn) => {
+          const elapsed = Number(turn.elapsedMs);
+          return {
+            role: turn.role === 'assistant' ? 'assistant' as const : 'user' as const,
+            text: String(turn.text).slice(0, 20000),
+            ts: Number(turn.ts) || Date.now(),
+            ...(Number.isFinite(elapsed) && elapsed > 0 ? { elapsedMs: elapsed } : {}),
+          };
+        })
         .slice(-40)
       : [];
     return { persona, turns };

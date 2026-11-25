@@ -1443,7 +1443,13 @@ export interface DaoDraft {
   pinned: boolean;
 }
 
-export interface DaoTurn { role: 'user' | 'assistant'; text: string; ts: number }
+export interface DaoTurn {
+  role: 'user' | 'assistant';
+  text: string;
+  ts: number;
+  /** 助手回合的耗时（毫秒）：让「慢」变成可见的数字，而不是模糊的体感 */
+  elapsedMs?: number;
+}
 
 export interface DaoChatResponse {
   ok: true;

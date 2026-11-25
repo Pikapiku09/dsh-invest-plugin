@@ -145,10 +145,20 @@ function dock(state: AppState): string {
 // ── 中间：对话 ────────────────────────────────────────────────
 
 function threadHtml(state: AppState): string {
-  const turns = state.daoThread.map((turn) => `<div class="dao-turn dao-turn-${turn.role}">
-      <div class="dao-bubble${turn.role === 'assistant' ? ' dao-markdown' : ''}">${turn.role === 'assistant' ? renderMarkdown(turn.text) : escapeHtml(turn.text).replace(/\n/g, '<br/>')}</div>
-    </div>`).join('');
-  return `<div class="dao-thread-inner">${turns}</div>`;
+  const turns = state.daoThread.map((turn) => {
+    const assistant = turn.role === 'assistant';
+    // 用时贴在气泡右下角：慢不丢人，糊里糊涂地慢才丢人
+    const meta = assistant && turn.elapsedMs ? `<div class="dao-turn-meta">用时 ${(turn.elapsedMs / 1000).toFixed(1)}s</div>` : '';
+    return `<div class="dao-turn dao-turn-${turn.role}">
+        <div class="dao-bubble${assistant ? ' dao-markdown' : ''}">${assistant ? renderMarkdown(turn.text) : escapeHtml(turn.text).replace(/\n/g, '<br/>')}${meta}</div>
+      </div>`;
+  }).join('');
+  const pending = state.daoChatLoading
+    ? `<div class="dao-turn dao-turn-assistant">
+        <div class="dao-bubble dao-pending"><span class="dao-typing"><i></i><i></i><i></i></span><span class="dao-wait" data-dao-wait>0.0s</span></div>
+      </div>`
+    : '';
+  return `<div class="dao-thread-inner">${turns}${pending}</div>`;
 }
 
 /** 从对话里提炼出来的草稿：在对话框上方以「可打标签的卡片」出现，确认才入库 */

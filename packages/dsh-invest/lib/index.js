@@ -1971,6 +1971,21 @@ function apply(ctx, config) {
     .slice(-12)
     .map((turn) => ({ role: turn.role === "assistant" ? "assistant" : "user", text: String(turn.text) }))
 
+  // 悟道对话要「问完就答」：默认继承宿主的推理档位，一条三百字的回答会先想十几秒，
+  // 用户体感就是「卡住」。这里把思考关掉、给输出封顶；宿主模型不认这个组合时
+  // （effort/model 一类配置错误）退回完整继承——慢一点，但别让对话直接不可用。
+  const DAO_CHAT_OPTIONS = { reasoningEffort: "off", maxTokens: 1600 }
+  const DAO_DISTILL_OPTIONS = { reasoningEffort: "off", maxTokens: 900 }
+  const runDaoPrompt = async (prompt, label, timeoutMs, agentOptions) => {
+    try {
+      return await runPromptSubagent(prompt, { label, timeoutMs, agentOptions })
+    } catch (error) {
+      const text = String((error && error.message) || error)
+      if (!/effort|reasoning|unsupported|invalid|model/i.test(text)) throw error
+      return await runPromptSubagent(prompt, { label, timeoutMs })
+    }
+  }
+
   const daoChat = async (personaRaw, messagesRaw) => {
     const list = daoMessages(messagesRaw)
     const last = list[list.length - 1]
@@ -1983,7 +1998,7 @@ function apply(ctx, config) {
       entries, messages: list.slice(0, -1), question: last.text,
     })
     const started = Date.now()
-    const answer = await runPromptSubagent(prompt, { label: "悟道对话", timeoutMs: 180000 })
+    const answer = await runDaoPrompt(prompt, "悟道对话", 90000, DAO_CHAT_OPTIONS)
     return { answer: String(answer || "").trim(), elapsedMs: Date.now() - started, persona: persona.name }
   }
 
@@ -1992,7 +2007,7 @@ function apply(ctx, config) {
     if (!list.length) throw daoInputError("对话为空，没有可沉淀的内容")
     const persona = daoPersona(personaRaw)
     const prompt = buildDistillPrompt({ personaName: persona.name, messages: list.slice(-6) })
-    const text = await runPromptSubagent(prompt, { label: "悟道沉淀", timeoutMs: 120000 })
+    const text = await runDaoPrompt(prompt, "悟道沉淀", 90000, DAO_DISTILL_OPTIONS)
     // 模型偶尔不按 JSON 交付：降级成「首行标题 + 全文正文」的草稿，用户还能改
     const draft = parseDistillJson(text) || draftFromText(text)
     if (!draft) throw daoInputError("模型没有返回可用的条目草稿，请重试或手动填写")

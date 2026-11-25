@@ -1426,9 +1426,25 @@ function daoMessagesForApi(): Array<{ role: 'user' | 'assistant'; text: string }
   return state.daoThread.map((turn) => ({ role: turn.role, text: turn.text }));
 }
 
-function appendDaoTurn(role: 'user' | 'assistant', text: string): void {
-  state.daoThread = [...state.daoThread, { role, text, ts: Date.now() }].slice(-40);
+function appendDaoTurn(role: 'user' | 'assistant', text: string, elapsedMs?: number): void {
+  const turn = { role, text, ts: Date.now(), ...(elapsedMs && elapsedMs > 0 ? { elapsedMs } : {}) };
+  state.daoThread = [...state.daoThread, turn].slice(-40);
   persistDaoThread(state.daoPersona, state.daoThread);
+}
+
+// 等模型时在气泡里走一个秒表：慢可以接受，「不知道它在不在干活」不可以
+let daoWaitTimer: number | null = null;
+function startDaoWaitTimer(): void {
+  stopDaoWaitTimer();
+  const started = Date.now();
+  daoWaitTimer = window.setInterval(() => {
+    const node = document.querySelector('[data-dao-wait]');
+    if (!node) return;
+    node.textContent = ((Date.now() - started) / 1000).toFixed(1) + 's';
+  }, 120);
+}
+function stopDaoWaitTimer(): void {
+  if (daoWaitTimer !== null) { window.clearInterval(daoWaitTimer); daoWaitTimer = null; }
 }
 
 async function sendDaoMessage(): Promise<void> {
@@ -1438,12 +1454,14 @@ async function sendDaoMessage(): Promise<void> {
   appendDaoTurn('user', question);
   state.daoChatDraft = ''; state.daoChatError = ''; state.daoChatLoading = true;
   render();
+  startDaoWaitTimer();
   try {
     const result = await api.daoChat({ persona: state.daoPersona, messages: daoMessagesForApi() });
-    appendDaoTurn('assistant', result.answer);
+    appendDaoTurn('assistant', result.answer, Number(result.elapsedMs) || 0);
   } catch (error) {
     state.daoChatError = errorMessage(error);
   } finally {
+    stopDaoWaitTimer();
     state.daoChatLoading = false;
     render();
   }

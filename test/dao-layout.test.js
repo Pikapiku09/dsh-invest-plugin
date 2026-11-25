@@ -81,6 +81,24 @@ test('对话框钉在舞台正中（三行网格 + 补齐抽屉占掉的底边�
   assert.match(main, /calc\(22px \+ var\(--dao-dock-rest/, '上内边距 = 下内边距 + 抽屉高度，对话框才落在舞台正中')
 })
 
+test('气泡内的 markdown 是深色孤岛（浅色主题的表格覆盖会漏进舞台）', () => {
+  // 事故（2026-11-25）：用户截图里助手回复的表格表头是白底黑字。舞台是固定深色，
+  // 但应用主题是浅色，style.css 的 `.theme-light .markdown-table th` 直接把表头刷成
+  // #eef2f7。作用域选择器必须比它更"重"——三个类压两个类，否则改不动。
+  const scoped = /\.dao-stage \.dao-bubble \.markdown-table th/
+  assert.match(css, scoped, '表格样式要挂在 .dao-stage .dao-bubble 下才压得住 .theme-light')
+  assert.match(css, /\.dao-stage \.dao-bubble \.markdown-table th \{[^}]*background:\s*rgba\(255, 255, 255, \.0/, '表头要改成半透明白，不能留浅色主题的 #eef2f7')
+  assert.doesNotMatch(css, /\.dao-stage \.dao-bubble \.markdown-table th \{[^}]*#eef2f7/, '深色孤岛里不许出现浅色表头')
+  // 窄屏自适应：字号与内边距要跟着收，别让表格把气泡顶破
+  assert.match(css, /@media \(max-width: 720px\)[\s\S]{0,400}\.dao-stage \.dao-bubble \.markdown-table \{ font-size/, '窄屏要收表格字号')
+})
+
+test('等待回复时有占位气泡（慢可以接受，看不出在不在干活不行）', () => {
+  assert.match(css, /\.dao-bubble\.dao-pending/, '等模型时要有一个占位气泡')
+  assert.match(css, /@keyframes dao-typing/, '占位气泡要有跳动动画')
+  assert.match(css, /\.dao-wait[^{]*\{[^}]*tabular-nums/s, '秒表要用等宽数字，不然宽度会抖')
+})
+
 test('产物里能查到这条链（改了 CSS 记得重建前端）', () => {
   const dist = process.env.DSH_INVEST_WEB_DIST || path.join(root, 'packages', 'dsh-invest', 'web-dist')
   const bundle = path.join(dist, 'workbench.css')
@@ -88,4 +106,6 @@ test('产物里能查到这条链（改了 CSS 记得重建前端）', () => {
   const built = fs.readFileSync(bundle, 'utf8')
   assert.match(built, /\.app-shell:has\(\.dao-stage\)/, '产物缺少填充链：改完 dao.css 要重新构建')
   assert.match(built, /\.dao-thread-inner/, '产物缺少对话内层容器：改完 dao.ts 要重新构建')
+  assert.match(built, /\.dao-stage \.dao-bubble \.markdown-table th/, '产物缺少深色表格孤岛：改完 dao.css 要重新构建')
+  assert.match(built, /\.dao-bubble\.dao-pending/, '产物缺少等待占位气泡：改完 dao.css 要重新构建')
 })
