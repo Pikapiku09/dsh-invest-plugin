@@ -3083,6 +3083,61 @@ document.addEventListener('click', (event) => {
   }
 });
 
+// ── 粘贴 ─────────────────────────────────────────────────────
+// 工作台是塞在宿主面板里的 iframe，原生粘贴在壳子里不一定到达我们（有人先 preventDefault、
+// 或者 Ctrl+V 被外层快捷键吃掉）。所以自己接管：paste 事件里手工插入，不再指望默认行为；
+// 连 paste 事件都没收到时（150ms 内没动静），退到 navigator.clipboard.readText() 读一次。
+type PasteTarget = HTMLTextAreaElement | HTMLInputElement;
+
+const PASTE_INPUT_TYPES = new Set(['text', 'search', 'url', 'tel', 'password', 'email', 'number']);
+
+function isPasteTarget(node: EventTarget | null): node is PasteTarget {
+  if (node instanceof HTMLTextAreaElement) return true;
+  if (!(node instanceof HTMLInputElement)) return false;
+  // 只接文本类输入框：勾选框、日期、文件那些交给浏览器，别自作主张
+  return PASTE_INPUT_TYPES.has((node.type || 'text').toLowerCase());
+}
+
+/** 在光标处插入文本；用 input 事件走一遍既有监听，草稿同步、自动长高都不会漏 */
+function insertTextAtCaret(target: PasteTarget, text: string): void {
+  let start = target.value.length;
+  let end = start;
+  try { start = target.selectionStart ?? start; end = target.selectionEnd ?? start; } catch { /* number 输入框没有选区 */ }
+  target.value = target.value.slice(0, start) + text + target.value.slice(end);
+  try { target.selectionStart = target.selectionEnd = start + text.length; } catch { /* 同上 */ }
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+let pasteFallbackTimer: number | null = null;
+
+document.addEventListener('paste', (event) => {
+  // 收到 paste 就撤掉兜底计时器
+  if (pasteFallbackTimer !== null) { window.clearTimeout(pasteFallbackTimer); pasteFallbackTimer = null; }
+  if (!isPasteTarget(event.target)) return;
+  const text = event.clipboardData ? event.clipboardData.getData('text/plain') : '';
+  if (!text) return;   // 读不到内容就让浏览器按默认来，别把人家的粘贴吞掉
+  // 自己插：上游万一 preventDefault 过，默认插入已经没了，这里补上；同时避免插两次
+  event.preventDefault();
+  insertTextAtCaret(event.target, text);
+}, true);
+
+document.addEventListener('keydown', (event) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+  if (String(event.key).toLowerCase() !== 'v') return;
+  if (!isPasteTarget(event.target)) return;
+  // 记下这次 Ctrl+V：150ms 内没有 paste 事件，说明按键被外层吃掉了，自己读剪贴板
+  if (pasteFallbackTimer !== null) window.clearTimeout(pasteFallbackTimer);
+  const target = event.target;
+  pasteFallbackTimer = window.setTimeout(() => {
+    pasteFallbackTimer = null;
+    void (async () => {
+      let text = '';
+      try { text = await navigator.clipboard.readText(); } catch { return; }   // 没授权就安静收工
+      if (text && document.contains(target)) insertTextAtCaret(target, text);
+    })();
+  }, 150);
+}, true);
+
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeChartLightbox();
   // 报告追问：Ctrl/⌘ + Enter 发送

@@ -91,7 +91,9 @@ window.__ModuleLoader__.load({
         ),
         React.createElement("iframe", {
           key: nonce, className: "invr-wb-frame", src: WB_URL,
-          title: "投研工作台", allow: "clipboard-write",
+          title: "投研工作台",
+          // clipboard-read：壳子吃掉 Ctrl+V 时，前端会退到 navigator.clipboard.readText() 兜底
+          allow: "clipboard-read; clipboard-write",
         }),
       );
     }
