@@ -148,6 +148,34 @@ test('回答到达后滚到回答开头；没换回回答的提问要撤回', ()
   assert.match(dao, /data-dao-turn="\$\{index\}"/, '每条对话要有序号锚点')
 })
 
+test('下滑过场要慢下来、缓起缓落（520ms 直冲到底看着像闪一下）', () => {
+  const main = fs.readFileSync(path.join(root, 'web', 'src', 'main.ts'), 'utf8')
+  const slide = main.slice(main.indexOf('function playDaoComposerSlide'))
+  assert.match(slide.slice(0, 900), /transform 760ms cubic-bezier\(\.4, 0, \.2, 1\)/, '输入条下滑要 760ms，起手要软')
+  assert.match(slide.slice(0, 900), /willChange = 'transform'/, '提前声明 willChange，避免起手掉帧')
+  // 撤标记的定时器要晚于动画本身，否则动画还没走完类就被摘了
+  assert.match(main, /setTimeout\([^,]{0,40}, 980\)/, '清 daoSlideIn 要等 760ms 的滑行走完')
+  // 对话区入场跟着一起慢下来，两个动作才像一件事
+  assert.match(block('.dao-stage.slide-in .dao-thread') || '', /animation: dao-thread-in 700ms cubic-bezier\(\.4, 0, \.2, 1\)/, '对话区入场 700ms，与输入条同一条曲线')
+  assert.match(css, /translateY\(24px\)/, '入场起点稍微拉远一点，缓起才看得出来')
+})
+
+test('悟道对话走「后端任务 + 凭 jobId 取答案」，切走不丢', () => {
+  const main = fs.readFileSync(path.join(root, 'web', 'src', 'main.ts'), 'utf8')
+  const api = fs.readFileSync(path.join(root, 'web', 'src', 'api.ts'), 'utf8')
+  // 发起时只登记任务，不把答案押在这个请求上
+  assert.match(api, /daoChatStart:/, '要有一个只回 jobId 的发起接口')
+  assert.match(api, /async: true/, '发起时要显式标记异步')
+  assert.match(main, /const started = await api\.daoChatStart\(/, '发送走异步发起')
+  assert.match(main, /saveDaoJob\(started\.jobId\)/, '任务号要落盘，页面重载后还能认回来')
+  assert.match(main, /function waitDaoJob\(/, '要轮询取答案')
+  assert.match(main, /function resumeDaoJob\(/, '重载后要能接着取')
+  assert.match(main, /void resumeDaoJob\(\)/, '启动时要试着续接')
+  assert.match(main, /'dsh-invest\.daoJob'/, '任务号存 localStorage')
+  // iframe 重载后至少回到上次那一页，而不是又掉回概览
+  assert.match(main, /'dsh-invest\.view'/, '要记住停在哪一页')
+})
+
 test('产物里能查到这条链（改了 CSS 记得重建前端）', () => {
   const dist = process.env.DSH_INVEST_WEB_DIST || path.join(root, 'packages', 'dsh-invest', 'web-dist')
   const bundle = path.join(dist, 'workbench.css')
@@ -160,4 +188,10 @@ test('产物里能查到这条链（改了 CSS 记得重建前端）', () => {
   assert.match(built, /\.dao-stage\.is-conversing/, '产物缺少对话态：改完 dao.css 要重新构建')
   assert.match(built, /\.dao-reveal/, '产物缺少「查看上次内容」入口：改完 dao.css 要重新构建')
   assert.match(built, /\.dao-bar-input:focus-visible/, '产物缺少输入框焦点压制：改完 dao.css 要重新构建')
+  const js = path.join(dist, 'workbench.js')
+  if (fs.existsSync(js)) {
+    const code = fs.readFileSync(js, 'utf8')
+    assert.match(code, /dsh-invest\.daoJob/, '产物里没有对话任务号：改完 main.ts 要重新构建')
+    assert.match(code, /dsh-invest\.view/, '产物里没有记住页面：改完 main.ts 要重新构建')
+  }
 })

@@ -1465,9 +1465,10 @@ function dropLastDaoTurn(): void {
 
 // 等模型时在气泡里走一个秒表：慢可以接受，「不知道它在不在干活」不可以
 let daoWaitTimer: number | null = null;
-function startDaoWaitTimer(): void {
+function startDaoWaitTimer(from = Date.now()): void {
   stopDaoWaitTimer();
-  const started = Date.now();
+  // 从「这句话是什么时候发出去的」算起：切走再回来，秒表接着走，不会装作刚发出去
+  const started = from;
   daoWaitTimer = window.setInterval(() => {
     const node = document.querySelector('[data-dao-wait]');
     if (!node) return;
@@ -1499,11 +1500,16 @@ function playDaoComposerSlide(): void {
   node.style.transition = 'none';
   node.style.transform = `translateY(${delta}px)`;
   void node.offsetHeight;   // 强制回流，否则下面这行会被合并成一次、动画不触发
-  node.style.transition = 'transform 520ms cubic-bezier(.22, .9, .24, 1)';
+  // 760ms + Material 标准曲线（先缓起、再走、最后长尾落定）。
+  // 早先 520ms 配偏线性的曲线，看着是「啪一下掉下去」；换成缓出曲线后前段仍然过快，
+  // 一眨眼就走掉八成的路，尾巴那点距离慢慢蹭，反而更像卡了一下。这条曲线起手是软的。
+  node.style.willChange = 'transform';
+  node.style.transition = 'transform 760ms cubic-bezier(.4, 0, .2, 1)';
   node.style.transform = 'translateY(0)';
   node.addEventListener('transitionend', () => {
     node.style.transition = '';
     node.style.transform = '';
+    node.style.willChange = '';
   }, { once: true });
 }
 
@@ -1530,8 +1536,9 @@ function openDaoThread(): void {
   render();
   playDaoComposerSlide();
   scrollDaoThreadToBottom();
-  // 入场动画只放一次：600ms 后撤掉标记，下一次重绘（新回复到达）就不会重放
-  window.setTimeout(() => { state.daoSlideIn = false; }, 600);
+  // 入场动画只放一次：等滑行（720ms）走完再撤标记，否则会中途把还没落位的对话掐断
+  // 等 760ms 的滑行彻底走完再摘标记，否则动画中途换类会把元素拽回终点
+  window.setTimeout(() => { state.daoSlideIn = false; }, 980);
 }
 
 /** 删掉工作区里的提示词覆盖副本，回到插件内置的那份 */
@@ -1546,6 +1553,78 @@ async function resetDaoPrompt(): Promise<void> {
   render();
 }
 
+// ── 悟道对话任务：切走再回来，答案还在 ───────────────────────
+// 工作台是宿主主面板里的 iframe：切到 DSH 对话时这块会被卸载，在途请求随之断掉，
+// 而模型那头其实还在算。所以对话改成「后端登记任务 + 前端轮询」：
+// 任务号存 localStorage，页面重载或切回来之后接着取答案，聊到一半不会白聊。
+const DAO_JOB_KEY = 'dsh-invest.daoJob';
+const DAO_JOB_MAX_AGE_MS = 10 * 60 * 1000;
+
+function saveDaoJob(jobId: string): void {
+  try { window.localStorage.setItem(DAO_JOB_KEY, JSON.stringify({ id: jobId, at: Date.now() })); } catch { /* 隐私模式写不进，就当没存 */ }
+}
+
+function clearDaoJob(): void {
+  try { window.localStorage.removeItem(DAO_JOB_KEY); } catch { /* 同上 */ }
+}
+
+function readDaoJob(): { id: string; startedAt: number } | null {
+  try {
+    const raw = window.localStorage.getItem(DAO_JOB_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { id?: unknown; at?: unknown };
+    const id = typeof parsed?.id === 'string' ? parsed.id : '';
+    const startedAt = Number(parsed?.at) || 0;
+    // 太老的任务不必再追：后端只保留 30 分钟，追回来也没意义
+    if (!id || !startedAt || Date.now() - startedAt > DAO_JOB_MAX_AGE_MS) { clearDaoJob(); return null; }
+    return { id, startedAt };
+  } catch {
+    clearDaoJob();
+    return null;
+  }
+}
+
+function daoJobSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => { window.setTimeout(resolve, ms); });
+}
+
+/** 盯住一个对话任务直到出结果：600ms 一问，最长 6 分钟 */
+async function waitDaoJob(jobId: string): Promise<{ answer: string; elapsedMs: number }> {
+  const deadline = Date.now() + 6 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await daoJobSleep(600);
+    const job = await api.daoChatJob(jobId);
+    if (job.status === 'done') return { answer: String(job.answer || ''), elapsedMs: Number(job.elapsedMs) || 0 };
+    if (job.status === 'error') throw new Error(job.error || '对话失败');
+  }
+  throw new Error('等太久了：答案可能还在算，过一会儿刷新页面再看。');
+}
+
+/** 页面重新载入后，把上次没跑完的对话接回来（切走/刷新都不再丢答案） */
+async function resumeDaoJob(): Promise<void> {
+  if (state.daoChatLoading) return;
+  const job = readDaoJob();
+  if (!job) return;
+  state.daoChatLoading = true;
+  state.daoThreadOpen = true;   // 上次正聊到一半，回来直接把对话展开
+  startDaoWaitTimer(job.startedAt);
+  render();
+  try {
+    const result = await waitDaoJob(job.id);
+    clearDaoJob();
+    appendDaoTurn('assistant', result.answer, result.elapsedMs);
+  } catch (error) {
+    clearDaoJob();
+    state.daoChatError = errorMessage(error);
+  } finally {
+    stopDaoWaitTimer();
+    state.daoChatLoading = false;
+    const answerIndex = state.daoThread.length - 1;
+    render();
+    if (!state.daoChatError) requestAnimationFrame(() => scrollDaoTurnToTop(answerIndex));
+  }
+}
+
 async function sendDaoMessage(): Promise<void> {
   if (state.daoChatLoading) return;
   const question = String(state.daoChatDraft || '').trim();
@@ -1556,9 +1635,14 @@ async function sendDaoMessage(): Promise<void> {
   openDaoThread();
   startDaoWaitTimer();
   try {
-    const result = await api.daoChat({ persona: state.daoPersona, messages: daoMessagesForApi() });
-    appendDaoTurn('assistant', result.answer, Number(result.elapsedMs) || 0);
+    // 只登记任务、不等答案：这样切走被卸载也不会把请求连同答案一起丢掉
+    const started = await api.daoChatStart({ persona: state.daoPersona, messages: daoMessagesForApi() });
+    saveDaoJob(started.jobId);
+    const result = await waitDaoJob(started.jobId);
+    clearDaoJob();
+    appendDaoTurn('assistant', result.answer, result.elapsedMs);
   } catch (error) {
+    clearDaoJob();
     state.daoChatError = errorMessage(error);
     // 没换回回答就把这句提问撤掉，否则重发一次对话里就多一条一模一样的问题
     dropLastDaoTurn();
@@ -1603,6 +1687,8 @@ function clearDaoThread(): void {
 
 function navigate(view: WorkbenchView): void {
   state.view = view; state.sidebarOpen = false;
+  // 记住停在哪一页：切到 DSH 对话再切回来，iframe 会重载，至少别让人从「概览」重新找一遍
+  try { window.localStorage.setItem('dsh-invest.view', view); } catch { /* 隐私模式写不进就算了 */ }
   // 每次进悟道都从「居中待命」开始：上次的对话收起来，画面是干净的
   if (view === 'dao') { state.daoThreadOpen = false; state.daoSlideIn = false; }
   render();
@@ -3213,15 +3299,27 @@ hydrateStaticIcons();
 initialiseTheme();
 initialiseReader();
 state.lastRefreshAt = readLastRefreshAt();
+// 恢复上次停留的页面：切到 DSH 对话再切回来，iframe 会重载，别让人又从「概览」找一遍
+(() => {
+  let saved = '';
+  try { saved = window.localStorage.getItem('dsh-invest.view') || ''; } catch { saved = ''; }
+  const views: WorkbenchView[] = ['overview', 'archive', 'runs', 'tasks', 'ask', 'dao', 'model-settings', 'holdings', 'backtest', 'strategy-health'];
+  if (saved && (views as string[]).includes(saved)) state.view = saved as WorkbenchView;
+})();
 render();
+if (state.view === 'dao' && !state.daoStats && !state.daoLoading) void loadDao();
 const bootLoaded = Promise.all([loadIndex(), loadHoldings(), loadJobs(), loadWatchlist(), loadWatchDaily(), loadAskStocks(), loadLiveWatch(true)]);
 // 更新检测（v0.51.0）：启动时静默查一次，有新版只在左上角挂红点；
 // 首次见到某个新版本会弹一次询问，之后交给用户自己点「检测更新」。
 void bootUpdateCheck();
 // 「本次更新」弹层（v0.50.0）：只在版本变化时出现一次
 void loadWhatsNew();
+// 上次没跑完的悟道对话：切走/刷新后回来接着取答案（v0.81.0）
+void resumeDaoJob();
 // 每天首次打开自动刷新（含现价与信号比对）
 void bootLoaded.then(() => autoDailyRefresh());
 // 页面跨天整晚开着由定时器触发；睡眠唤醒/切回标签页由可见性变化触发
 window.setInterval(() => { void autoDailyRefresh(); }, 30 * 60 * 1000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) void autoDailyRefresh(); });
+// 后台标签页的定时器会被节流，切回来时补一次「有没有算完的回答」
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void resumeDaoJob(); });

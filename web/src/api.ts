@@ -209,6 +209,17 @@ export const api = {
   /** 悟道对话：教练或某个分析师人格，继承宿主模型 */
   daoChat: (input: { persona: string; messages: Array<{ role: 'user' | 'assistant'; text: string }> }) =>
     postSlow<DaoChatResponse>(`${BASE}/dao/chat`, input, 180_000),
+  /**
+   * 异步发起一次悟道对话：立刻拿到 jobId。
+   * 工作台切走会被卸载、在途请求被掐断，答案留在后端，回来凭 jobId 取。
+   */
+  daoChatStart: (input: { persona: string; messages: Array<{ role: 'user' | 'assistant'; text: string }> }) =>
+    post<{ ok: boolean; jobId: string; status: string }>(`${BASE}/dao/chat`, { ...input, async: true }),
+  /** 查一次对话任务：running / done / error */
+  daoChatJob: (id: string) =>
+    request<{ id: string; status: 'running' | 'done' | 'error'; answer?: string; elapsedMs?: number; error?: string }>(
+      `${BASE}/dao/job?id=${encodeURIComponent(id)}`, undefined, 15_000,
+    ),
   /** 把一段对话沉淀成条目草稿（用户确认后再走 daoEntry 入库） */
   daoDistill: (input: { persona: string; messages: Array<{ role: 'user' | 'assistant'; text: string }> }) =>
     postSlow<DaoDistillResponse>(`${BASE}/dao/distill`, input, 120_000),

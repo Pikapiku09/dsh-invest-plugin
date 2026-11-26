@@ -2081,6 +2081,51 @@ function apply(ctx, config) {
     return { draft }
   }
 
+  // ===== 悟道对话任务（v0.81.0）=====
+  // 工作台是塞在 DSH 主面板里的 iframe：切到对话面板时这块会被卸载，在途的 fetch 随之被掐断。
+  // 可模型那头其实还在算——答案就这么丢了，用户体验上等于「切一下聊天就没了」。
+  // 所以对话改成「先登记任务、再慢慢取答案」：请求立即返回 jobId，答案留在后端等前端回来取。
+  const DAO_JOBS = new Map()
+  const DAO_JOB_KEEP_MS = 30 * 60 * 1000
+  const DAO_JOB_KEEP_MAX = 20
+
+  const pruneDaoJobs = () => {
+    const now = Date.now()
+    for (const [id, job] of DAO_JOBS) {
+      if (job.status !== "running" && now - (job.finishedAt || job.startedAt) > DAO_JOB_KEEP_MS) DAO_JOBS.delete(id)
+    }
+    if (DAO_JOBS.size <= DAO_JOB_KEEP_MAX) return
+    const done = [...DAO_JOBS.entries()]
+      .filter(([, job]) => job.status !== "running")
+      .sort((a, b) => a[1].startedAt - b[1].startedAt)
+    for (const [id] of done.slice(0, DAO_JOBS.size - DAO_JOB_KEEP_MAX)) DAO_JOBS.delete(id)
+  }
+
+  const daoJobView = (job) => (job.status === "running"
+    ? { id: job.id, status: "running", elapsedMs: Date.now() - job.startedAt }
+    : { id: job.id, status: job.status, answer: job.answer, elapsedMs: job.elapsedMs, error: job.error })
+
+  /** 起一个后台对话任务：立刻返回任务本身，答案算完后写回 job */
+  const startDaoJob = (persona, messages) => {
+    pruneDaoJobs()
+    const id = "job_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+    const job = { id, status: "running", startedAt: Date.now(), finishedAt: 0, answer: "", elapsedMs: 0, error: "" }
+    DAO_JOBS.set(id, job)
+    Promise.resolve()
+      .then(() => daoChat(persona, messages))
+      .then((result) => {
+        job.status = "done"
+        job.answer = String((result && result.answer) || "")
+        job.elapsedMs = Number((result && result.elapsedMs) || 0)
+      })
+      .catch((error) => {
+        job.status = "error"
+        job.error = String((error && error.message) || error).slice(0, 300)
+      })
+      .then(() => { job.finishedAt = Date.now() })
+    return job
+  }
+
   const stockNotesListPayload = async (data) => {
     const names = (data && data.names) || {}
     const doc = await readCurationDoc()
@@ -5071,6 +5116,7 @@ function apply(ctx, config) {
     },
     {
       // 悟道对话：教练或某个分析师人格；不传工具，只带用户自己的条目
+      // body.async === true 时立刻回 jobId（切走也不丢答案），否则维持一次性同步返回
       kind: "exact",
       path: "/dsh-invest/api/dao/chat",
       handler: async (req, res) => {
@@ -5078,12 +5124,33 @@ function apply(ctx, config) {
         if (req.method !== "POST") { writeJson(res, 405, { error: "method not allowed" }); return }
         try {
           const body = await readRequestJson(req)
+          if (body && body.async === true) {
+            // 输入错误要当场说清楚，不能塞进任务里让人等到超时才知道
+            const list = daoMessages(body.messages)
+            const last = list[list.length - 1]
+            if (!last || last.role !== "user") throw daoInputError("请先输入要聊的内容")
+            const job = startDaoJob(body.persona, body.messages)
+            writeJson(res, 200, { ok: true, jobId: job.id, status: job.status })
+            return
+          }
           writeJson(res, 200, Object.assign({ ok: true }, await daoChat(body.persona, body.messages)))
         } catch (e) {
           const message = String(e && e.message ? e.message : e).slice(0, 400)
           if (e && e.code === "DAO_INPUT") writeJson(res, 400, { error: message })
           else writeJson(res, 503, { error: "模型暂不可用：" + message.slice(0, 160) })
         }
+      },
+    },
+    {
+      // 取一次对话任务的进度：running / done / error
+      kind: "exact",
+      path: "/dsh-invest/api/dao/job",
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: "forbidden: loopback-only" }); return }
+        const id = String((req.query && req.query.id) || "")
+        const job = id ? DAO_JOBS.get(id) : undefined
+        if (!job) { writeJson(res, 404, { error: "任务不存在或已过期" }); return }
+        writeJson(res, 200, daoJobView(job))
       },
     },
     {

@@ -151,11 +151,11 @@
 
 /* 只在切换的那一刻挂一次入场动画；之后的重绘（新回复到达）不再重放 */
 .dao-stage.slide-in .dao-thread {
-  animation: dao-thread-in 460ms cubic-bezier(.22, .9, .24, 1) both;
+  animation: dao-thread-in 700ms cubic-bezier(.4, 0, .2, 1) both;
 }
 
 @keyframes dao-thread-in {
-  from { opacity: 0; transform: translateY(14px); }
+  from { opacity: 0; transform: translateY(24px); }
   to { opacity: 1; transform: none; }
 }
 
